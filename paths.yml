@@ -1,0 +1,4 @@
+# Path to where the unpreprocessed datasets are stored
+raw_datasets: "data/raw/"
+# Path to where the preprocessed sources are stored
+sources: "data/sources/"

@@ -1,0 +1,15 @@
+# Contains various information about the different sources, which can be used
+# in the preprocessing scripts.
+tc_primed:
+  # Which (sensors, satellite) pairs to include (others won't be included in the preprocessed
+  # results and thus in the experiments).
+  # See https://rammb-data.cira.colostate.edu/tcprimed/TCPRIMED_v01r00_documentation.pdf
+  # (Page 20) for a list of sensors and their swaths / frequencies.
+  # Format:
+  #   SENSORNAME_SATNAME:
+  #     S1: ['FREQ1', ..., 'FREQN']
+  #     S2:                         ---> Leave blank to indicate all bands.
+  sensor_satellite_pairs:
+    AMSR2_GCOMW1:
+      S1: ['TB_10.65H']
+      S2:
