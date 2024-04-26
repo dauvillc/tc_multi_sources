@@ -35,6 +35,19 @@ def pad_dataset(ds, max_size):
     )
 
 
+def reverse_spatially(ds):
+    """
+    Reverses the dataset ds spatially, i.e. reverses the pixel and scan dimensions
+    if the image was taken on the descending pass.
+    """
+    # The latitude variable in TC-PRIMEd is in degrees north, so it should be
+    # decreasing from the top to the bottom of the image.
+    if ds.latitude[0, 0] < ds.latitude[1, 0]:
+        return ds.isel(scan=slice(None, None, -1), pixel=slice(None, None, -1))
+    return ds
+
+
+
 def main():
     # Load the paths configuration file
     with open("paths.yml", "r") as file:
@@ -112,11 +125,10 @@ def main():
             print("Preparing operations")
 
             def _preprocess(ds):
-                """Pads the dataset ds to the size max_size.
-                Note: also pads the x, y, latitude and longitude variables."""
                 # Discard the 'ScanTime' and 'angle_bins' variables
                 ds = ds.drop_vars(["ScanTime", "angle_bins"])
-                # Set the variable 'x'
+                # Reverse the dataset spatially if the image was taken on the descending pass
+                ds = reverse_spatially(ds)
                 return pad_dataset(ds, max_size)
 
             dataset = xr.open_mfdataset(
@@ -125,7 +137,7 @@ def main():
                 combine="nested",
                 group=f"passive_microwave/{swath}",
                 preprocess=_preprocess,
-                parallel=True,
+                parallel=False,
             )
             # Normalization:
             # - Compute the mean and standard deviation of each band, without considering missing values
