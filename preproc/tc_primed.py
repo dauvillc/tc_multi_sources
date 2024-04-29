@@ -153,10 +153,10 @@ def main():
             # Reload the mean and standard deviation
             mean = xr.open_dataset(dest_swath_dir / "normalization_mean.nc")
             std = xr.open_dataset(dest_swath_dir / "normalization_std.nc")
-            # Set the missing values to 0
-            dataset = dataset.fillna(0)
             # Normalize the data
             dataset = (dataset - mean) / std
+            # Set the missing values to 0
+            dataset = dataset.fillna(0)
             # Now, load the overpass_metadata group of the files, which notably include
             # the overpass time, basin, year and storm number.
             meta = xr.concat(
@@ -205,8 +205,6 @@ def main():
                         cyc_ds = cyc_ds.sortby("time")
                         # Write the dataset to the destination file
                         cyc_ds.to_netcdf(dest_swath_dir / f"{season}" / f"{basin}" / f"{cyclone_number}.nc")
-
-            return 0
 
 
 if __name__ == "__main__":
