@@ -47,21 +47,12 @@ def reverse_spatially(ds):
     return ds
 
 
-
 def main():
     # Load the paths configuration file
     with open("paths.yml", "r") as file:
         paths_cfg = yaml.safe_load(file)
     tc_primed_path = Path(paths_cfg["raw_datasets"]) / "tc_primed"
     dest_path = Path(paths_cfg["sources"]) / "tc_primed"
-    # Load the sources configuration file
-    with open("sources.yml", "r") as file:
-        sources_cfg = yaml.safe_load(file)["tc_primed"]
-        sen_sat_pairs = sources_cfg["sensor_satellite_pairs"]
-        # The sen/sat pairs are dicts of the form
-        # SENSOR_SATELLITE: {swath1: [bands], swath2: [bands], ...}
-        # If sen_sat_pairs is None, process all sensor/satellite pairs
-    # The sources configuration contains the list of pairs (sensor, satellite) to include.
     # The raw dataset has the structure tc_primed/{year}/{basin}/{number}/{filename}.nc
     # Retrieve all filenames for all years
     all_files = []
@@ -76,31 +67,17 @@ def main():
     # Isolate the overpass files:
     overpass_files = [file for file in all_files if "era5" not in file.stem]
     # Deduce the list of strings {sensor}_{satellite} from the filenames
-    available_sen_sat = set()
+    sen_sat_pairs = set()
     for file in overpass_files:
-        available_sen_sat.add("_".join(file.stem.split("_")[3:5]))
-    # If the list of pairs is not specified, process all available pairs
-    # and for each pair, process all swaths and bands
-    if sen_sat_pairs is None:
-        sen_sat_pairs = {sensat: None for sensat in available_sen_sat}
-    # Otherwise, check that the pairs in the configuration file are in the dataset
-    else:
-        for pair in sen_sat_pairs.keys():
-            if pair not in available_sen_sat:
-                raise ValueError(f"Sensor/Satellite pair {pair} not found in the dataset.")
+        sen_sat_pairs.add("_".join(file.stem.split("_")[3:5]))
     # For each sensor/satellite pair, preprocess the data
-    for sensat in sen_sat_pairs.keys():
+    for sensat in sen_sat_pairs:
         print(f"Processing sensor/satellite pair {sensat}")
         # Retrieve the list of files whose stem contains the sensor/satellite pair
         files = [file for file in overpass_files if sensat in file.stem]
-        # If the list of swaths is not specified, we need to open a file with netCDF4 to
-        # retrieve the list of swaths
-        if sen_sat_pairs[sensat] is None:
-            with nc.Dataset(files[0], "r") as ds:
-                swaths = [swath for swath in ds["passive_microwave"].groups.keys()]
-        # Otherwise, use the list of swaths in the configuration file
-        else:
-            swaths = list(sen_sat_pairs[sensat].keys())
+        # We need to open a file with netCDF4 to retrieve the list of swaths
+        with nc.Dataset(files[0], "r") as ds:
+            swaths = [swath for swath in ds["passive_microwave"].groups.keys()]
         # For each swath, preprocess the data
         for swath in swaths:
             print(f"Processing swath {swath}")
@@ -137,7 +114,7 @@ def main():
                 combine="nested",
                 group=f"passive_microwave/{swath}",
                 preprocess=_preprocess,
-                parallel=False,
+                parallel=True,
             )
             # Normalization:
             # - Compute the mean and standard deviation of each band, without considering missing values
@@ -159,10 +136,15 @@ def main():
             dataset = dataset.fillna(0)
             # Now, load the overpass_metadata group of the files, which notably include
             # the overpass time, basin, year and storm number.
-            meta = xr.concat(
-                [xr.open_dataset(file, group="overpass_metadata") for file in files],
-                dim="time",
-            ).rename_dims({"time": "sample"}).reset_index("time").reset_coords()
+            meta = (
+                xr.concat(
+                    [xr.open_dataset(file, group="overpass_metadata") for file in files],
+                    dim="time",
+                )
+                .rename_dims({"time": "sample"})
+                .reset_index("time")
+                .reset_coords()
+            )
             meta = meta.set_coords(["season", "basin", "cyclone_number", "time"])
             # Add the time, basin, cyclone_number, season, instrument_name, platform_name,
             # coverage_fraction and ERA5_time variables to the dataset
@@ -173,11 +155,19 @@ def main():
                 "season",
                 "instrument_name",
                 "platform_name",
-                "coverage_fraction",
                 "ERA5_time",
+                "coverage_fraction",
             ]
             dataset = dataset.assign({var: meta[var] for var in meta_vars})
             # Note: the previous line also sets meta's coordinates as coordinates for dataset.
+
+            # Transform the "intstrument_name" and "platform_name" variables into a single
+            # "sensor_satellite" variable
+            dataset["sensor_satellite"] = np.repeat(
+                dataset["instrument_name"][0].item() + "_" + dataset["platform_name"][0].item(),
+                dataset["time"].size,
+            )
+            dataset = dataset.drop_vars(["instrument_name", "platform_name"])
 
             # The results will be stored under
             # dest_path/microwave/SENSOR_SATELLITE/swath/YEAR/BASIN/NUMBER.nc
@@ -198,13 +188,17 @@ def main():
                     basin_ds = season_ds.where(season_ds["basin"] == basin, drop=True)
                     cyclone_numbers = np.unique(basin_ds["cyclone_number"].data)
                     for cyclone_number in tqdm(cyclone_numbers):
-                        cyc_ds = basin_ds.where(basin_ds["cyclone_number"] == cyclone_number, drop=True)
+                        cyc_ds = basin_ds.where(
+                            basin_ds["cyclone_number"] == cyclone_number, drop=True
+                        )
                         if cyc_ds["sample"].size == 0:
                             continue
                         # Sort the dataset by the "time" coordinate
                         cyc_ds = cyc_ds.sortby("time")
                         # Write the dataset to the destination file
-                        cyc_ds.to_netcdf(dest_swath_dir / f"{season}" / f"{basin}" / f"{cyclone_number}.nc")
+                        cyc_ds.to_netcdf(
+                            dest_swath_dir / f"{season}" / f"{basin}" / f"{cyclone_number}.nc"
+                        )
 
 
 if __name__ == "__main__":
