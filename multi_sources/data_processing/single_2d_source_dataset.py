@@ -30,13 +30,16 @@ class Single2DSourceDataset(Dataset):
         print(f'Found {len(self.data_files)} storm data files.')
         # Lazy-load the files in parallel. All timesteps from all storms are concatenated along the
         # 'sample' dimension.
-        self.data = xr.open_mfdataset(self.data_files, combine='nested', concat_dim="sample", parallel=True)
+        self.data = xr.open_mfdataset(self.data_files, combine='nested', concat_dim="sample", parallel=False)
 
     def __getitem__(self, idx):
         # Isolate the data for the given sample
         data = self.data.isel(sample=idx)
-        # 
-        return data
+        # Retrieve the list of variables from the source
+        variables = self.source.variables
+        # Select the variables from the data and convert them to a tensor
+        data = data[variables].to_array().load().data
+        return torch.tensor(data)
 
     def __len__(self):
         return len(self.data.time)
