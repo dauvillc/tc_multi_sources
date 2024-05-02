@@ -169,6 +169,12 @@ def main():
             )
             dataset = dataset.drop_vars(["instrument_name", "platform_name"])
 
+            # Compute the "dist_to_storm_center" variable from x and y
+            # where x is the east-west distance from the storm center. Note: this results in an about
+            # 0.5% error compared to using the ellipsoidal distance
+            # (see https://geopy.readthedocs.io/en/stable/#module-geopy.distance)
+            dataset["dist_to_storm_center"] = (dataset['x'] ** 2 + dataset['y'] ** 2) ** 0.5
+
             # The results will be stored under
             # dest_path/microwave/SENSOR_SATELLITE/swath/YEAR/BASIN/NUMBER.nc
             # Where NUMBER.nc is the concatenation of all images from the same storm,
