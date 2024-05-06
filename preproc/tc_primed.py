@@ -87,7 +87,7 @@ def process_sensat_pair(sensat, overpass_files, dest_path):
             combine="nested",
             group=f"passive_microwave/{swath}",
             preprocess=_preprocess,
-            parallel=True,
+            parallel=False,
         )
         # Normalization:
         # - Compute the mean and standard deviation of each band, without considering missing values
@@ -208,6 +208,7 @@ def main():
     sen_sat_pairs = set()
     for file in overpass_files:
         sen_sat_pairs.add("_".join(file.stem.split("_")[3:5]))
+    sen_sat_pairs = list(sen_sat_pairs)
     # Run the preprocessing for each sensor/satellite pair asynchronously
     with ProcessPoolExecutor(max_workers=args.workers) as executor:
         futures = [
