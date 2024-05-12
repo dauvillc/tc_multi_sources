@@ -26,7 +26,7 @@ def main():
 
     # Now, create a DataLoader from the dataset, and measure the time needed
     # to iterate over all samples
-    dataloader = DataLoader(dataset, batch_size=64, shuffle=True, num_workers=9)
+    dataloader = DataLoader(dataset, batch_size=64, shuffle=True, num_workers=0)
     start = time()
     for i, batch in zip(trange(len(dataset) // 64), dataloader):
         pass
