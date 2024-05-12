@@ -9,6 +9,7 @@ import xarray as xr
 import netCDF4 as nc
 import numpy as np
 import argparse
+from tqdm import tqdm
 from concurrent.futures import ProcessPoolExecutor
 from xarray.core.dtypes import NA
 from pathlib import Path
@@ -47,24 +48,29 @@ def reverse_spatially(ds):
     return ds
 
 
-def process_swaths(sensat, swath, files, dest_path):
+def process_swaths(sensat, swath, files, dest_path, common_size=None):
     """Preprocesses the data for a given swath."""
+    print(f"{sensat}: processing swath {swath}")
     # Create the destination directory dest_path/under microwave/SENSOR_SATELLITE/swath/
     dest_swath_dir = dest_path / "microwave" / sensat / swath
     dest_swath_dir.mkdir(parents=True, exist_ok=True)
-    # Although a swath always contains the same bands, the size of the images is not
-    # identical across the samples, due to missing values that have been removed.
-    # Therefore, we can't stack the images into a single xarray dataset just yet.
-    # To do so, we'll pad all images from the same swath to the same size. That size
-    # is the maximum size of all images from the swath.
-    # - Retrieve the maximum size of the images from the swath
-    max_size = [0, 0]
-    for file in files:
-        with nc.Dataset(file, "r") as ds:
-            dims = ds["passive_microwave"][swath].dimensions
-            size = (dims["scan"].size, dims["pixel"].size)
-            max_size[0] = max(max_size[0], size[0])
-            max_size[1] = max(max_size[1], size[1])
+    if common_size is not None:
+        max_size = common_size
+    else:
+        # Although a swath always contains the same bands, the size of the images is not
+        # identical across the samples, due to missing values that have been removed.
+        # Therefore, we can't stack the images into a single xarray dataset just yet.
+        # To do so, we'll pad all images from the same swath to the same size. That size
+        # is the maximum size of all images from the swath.
+        # - Retrieve the maximum size of the images from the swath
+        max_size = [0, 0]
+        for file in files:
+            with nc.Dataset(file, "r") as ds:
+                dims = ds["passive_microwave"][swath].dimensions
+                size = (dims["scan"].size, dims["pixel"].size)
+                max_size[0] = max(max_size[0], size[0])
+                max_size[1] = max(max_size[1], size[1])
+
     # - Load all images after padding them via the preprocessing function
     def _preprocess(ds):
         # Discard the 'ScanTime' and 'angle_bins' variables
@@ -126,9 +132,9 @@ def process_swaths(sensat, swath, files, dest_path):
 
     # Transform the "intstrument_name" and "platform_name" variables into a single
     # "sensor_satellite" variable
-    dataset["sensor_satellite"] = np.repeat(
-        dataset["instrument_name"][0].item() + "_" + dataset["platform_name"][0].item(),
-        dataset["time"].size,
+    dataset = dataset.assign_coords(
+        sample=[dataset["instrument_name"][0].item() + "_" + dataset["platform_name"][0].item()]
+        * dataset["sample"].size
     )
     dataset = dataset.drop_vars(["instrument_name", "platform_name"])
 
@@ -136,7 +142,7 @@ def process_swaths(sensat, swath, files, dest_path):
     # where x is the east-west distance from the storm center. Note: this results in an about
     # 0.5% error compared to using the ellipsoidal distance
     # (see https://geopy.readthedocs.io/en/stable/#module-geopy.distance)
-    dataset["dist_to_storm_center"] = (dataset['x'] ** 2 + dataset['y'] ** 2) ** 0.5
+    dataset["dist_to_storm_center"] = (dataset["x"] ** 2 + dataset["y"] ** 2) ** 0.5
 
     # The results will be stored under
     # dest_path/microwave/SENSOR_SATELLITE/swath/YEAR/BASIN/NUMBER.nc
@@ -145,21 +151,17 @@ def process_swaths(sensat, swath, files, dest_path):
     # - Isolate the unique seasons
     seasons = np.unique(dataset["season"].data)
     for season in seasons:
-        print("Processing season ", season)
         # - Isolate the unique basins
         season_ds = dataset.where(dataset["season"] == season, drop=True)
         basins = np.unique(season_ds["basin"].data)
         for basin in basins:
-            print("Processing basin ", basin)
             # Create the destination directory dest_path/microwave/SENSOR_SATELLITE/swath/YEAR/BASIN/
             (dest_swath_dir / f"{season}" / f"{basin}").mkdir(parents=True, exist_ok=True)
             # - Isolate the unique cyclone numbers
             basin_ds = season_ds.where(season_ds["basin"] == basin, drop=True)
             cyclone_numbers = np.unique(basin_ds["cyclone_number"].data)
             for cyclone_number in cyclone_numbers:
-                cyc_ds = basin_ds.where(
-                    basin_ds["cyclone_number"] == cyclone_number, drop=True
-                )
+                cyc_ds = basin_ds.where(basin_ds["cyclone_number"] == cyclone_number, drop=True)
                 if cyc_ds["sample"].size == 0:
                     continue
                 # Sort the dataset by the "time" coordinate
@@ -168,10 +170,10 @@ def process_swaths(sensat, swath, files, dest_path):
                 cyc_ds.to_netcdf(
                     dest_swath_dir / f"{season}" / f"{basin}" / f"{cyclone_number}.nc"
                 )
-    print(f'{sensat} {swath} done')
+    print(f"{sensat}: {swath} done")
 
 
-def process_sensat_pair(sensat, overpass_files, dest_path):
+def process_sensat_pair(sensat, overpass_files, dest_path, common_size=None):
     """Preprocesses the data for a given sensor/satellite pair."""
     print(f"Processing sensor/satellite pair {sensat}")
     # Retrieve the list of files whose stem contains the sensor/satellite pair
@@ -181,14 +183,22 @@ def process_sensat_pair(sensat, overpass_files, dest_path):
         swaths = [swath for swath in ds["passive_microwave"].groups.keys()]
     # For each swath, preprocess the data
     for swath in swaths:
-        process_swaths(files, dest_path)
+        process_swaths(sensat, swath, files, dest_path, common_size=common_size)
 
 
 def main():
     # Argument parsing
     parser = argparse.ArgumentParser(description="Preprocess the TC-Primed dataset")
-    parser.add_argument('-w', '--workers', type=int, default=2,
-                        help="Number of workers to use for the preprocessing")
+    parser.add_argument(
+        "-w",
+        "--workers",
+        type=int,
+        default=2,
+        help="Number of workers to use for the preprocessing",
+    )
+    parser.add_argument(
+        "--common_size", action="store_true", help="Pad all images to a common size"
+    )
     args = parser.parse_args()
     # Load the paths configuration file
     with open("paths.yml", "r") as file:
@@ -212,11 +222,27 @@ def main():
     sen_sat_pairs = set()
     for file in overpass_files:
         sen_sat_pairs.add("_".join(file.stem.split("_")[3:5]))
-    sen_sat_pairs = list(sen_sat_pairs)
+    sen_sat_pairs = sorted(list(sen_sat_pairs))
+    # If the common_size flag is set, we pad all images to a common size. For this, we need to
+    # retrieve the maximum size of all images from the dataset.
+    if args.common_size:
+        print("Retrieving the maximum size of all images from the dataset")
+        max_size = [0, 0]
+        for file in tqdm(overpass_files):
+            with nc.Dataset(file, "r") as ds:
+                for swath in ds["passive_microwave"].groups.keys():
+                    dims = ds["passive_microwave"][swath].dimensions
+                    size = (dims["scan"].size, dims["pixel"].size)
+                    max_size[0] = max(max_size[0], size[0])
+                    max_size[1] = max(max_size[1], size[1])
+    else:
+        max_size = None
     # Run the preprocessing for each sensor/satellite pair asynchronously
     with ProcessPoolExecutor(max_workers=args.workers) as executor:
         futures = [
-            executor.submit(process_sensat_pair, sensat, overpass_files, dest_path)
+            executor.submit(
+                process_sensat_pair, sensat, overpass_files, dest_path, common_size=max_size
+            )
             for sensat in sen_sat_pairs
         ]
         # Wait for all futures to complete
