@@ -72,10 +72,15 @@ class MultisourceMaskedAutoencoder(pl.LightningModule):
         return self.loss_fn(pred, batch)
 
     def forward(self, x):
-        # x is a dict {source_name: S, DT, C, D, V}, but the model doesn't receive
-        # D
-        x = {source: (s, dt, c, v) for source, (s, dt, c, d, v) in x.items()}
-        return self.model(x)
+        # x is a map {source_name: S, DT, C, D, V}
+        # - Fill NaN values (masked / missing) in C and V with zeros
+        # - Remove D from the input, as it shouldn't be accessible to the model
+        input_ = {}
+        for source, (s, dt, c, d, v) in x.items():
+            c[torch.isnan(c)] = 0
+            v[torch.isnan(v)] = 0
+            input_[source] = (s, dt, c, v)
+        return self.model(input_)
 
     def configure_optimizers(self):
         """Configures the optimizer for the model.

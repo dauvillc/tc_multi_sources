@@ -101,8 +101,6 @@ def process_swaths(sensat, swath, files, dest_path, common_size=None):
     std = xr.open_dataset(dest_swath_dir / "normalization_std.nc")
     # Normalize the data
     dataset = (dataset - mean) / std
-    # Set the missing values to 0
-    dataset = dataset.fillna(0)
     # Now, load the overpass_metadata group of the files, which notably include
     # the overpass time, basin, year and storm number.
     meta = (
