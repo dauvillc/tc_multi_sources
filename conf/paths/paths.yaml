@@ -1,0 +1,9 @@
+# Path to where the unpreprocessed datasets are stored
+raw_datasets: "/home/cdauvill/scratch/data/multi_sources/raw/"
+# Path to where the preprocessed sources are stored
+sources: "/home/cdauvill/scratch/data/multi_sources/sources/"
+# Path to a tmp directory for scripts
+tmp_dir: "/tmp"
+# Checkpoints directory
+checkpoints: "/home/cdauvill/scratch/checkpoints/"
+

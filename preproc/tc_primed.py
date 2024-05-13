@@ -199,7 +199,7 @@ def main():
     )
     args = parser.parse_args()
     # Load the paths configuration file
-    with open("paths.yml", "r") as file:
+    with open("conf/paths/paths.yml", "r") as file:
         paths_cfg = yaml.safe_load(file)
     tc_primed_path = Path(paths_cfg["raw_datasets"]) / "tc_primed"
     dest_path = Path(paths_cfg["sources"]) / "tc_primed"

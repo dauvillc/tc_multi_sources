@@ -1,2 +1,3 @@
 defaults:
   - sources: sources
+  - paths: paths
