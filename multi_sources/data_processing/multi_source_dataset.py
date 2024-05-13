@@ -77,11 +77,15 @@ class MultiSourceDataset(torch.utils.data.Dataset):
             # Retrieve the element from the single source dataset
             C, D, V = self.datasets[source_idx].get_sample(sid, t)
             output[self.sources[source_idx].name] = (
-                source_idx,
-                dt.total_seconds() / 3600,
+                torch.tensor(source_idx, dtype=torch.float32),
+                torch.tensor(dt.total_seconds() / 3600.0, dtype=torch.float32),
                 torch.tensor(C, dtype=torch.float32),
                 torch.tensor(D, dtype=torch.float32),
                 torch.tensor(V, dtype=torch.float32),
             )
 
         return output
+
+    def get_n_variables(self):
+        """Returns a dict {source_name: n_variables}."""
+        return {source.name: source.n_variables() for source in self.sources}
