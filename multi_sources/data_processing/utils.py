@@ -1,6 +1,5 @@
 """Implements small utility functions for data processing."""
 
-import yaml
 from multi_sources.data_processing.source import Source
 
 
@@ -37,17 +36,18 @@ def _get_leaf_subsources(source_dict, path="", previous_vars=[], previous_env_va
     return returned_dict
 
 
-def read_source_file():
-    """Reads the source cfg file and returns the content as a dictionary.
+def read_sources(sources_dict):
+    """Reads the source dictionary and returns the content as a dictionary.
+
+    Args:
+        sources_dict (:obj:`dict`): Sources configuration dictionary.
 
     Returns:
         sources (:obj:`list` of :obj:`multi_sources.data_processing.source.Source`): List of sources.
     """
-    with open("sources.yml", "r") as file:
-        cfg = yaml.safe_load(file)
     # The following function will return a dictionary with the following structure:
     # {source.subsource. ... .lastsubsource: vars, env_vars, dim}
-    sources = _get_leaf_subsources(cfg)
+    sources = _get_leaf_subsources(sources_dict)
     # Rename the starting dot at the start of the source names
     sources = {key[1:]: value for key, value in sources.items()}
     # Create a list of Source objects from the dictionary

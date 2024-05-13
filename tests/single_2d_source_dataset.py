@@ -1,15 +1,19 @@
 """Tests the Single2DSourceDataset class."""
 import matplotlib.pyplot as plt
+import hydra
+from omegaconf import DictConfig, OmegaConf
 from torch.utils.data import DataLoader
 from time import time
 from tqdm import trange
-from multi_sources.data_processing.utils import read_source_file
+from multi_sources.data_processing.utils import read_sources
 from multi_sources.data_processing.single_2d_source_dataset import Single2DSourceDataset
 
 
-def main():
+@hydra.main(version_base=None, config_path="../conf", config_name="config")
+def main(cfg: DictConfig):
+    cfg = OmegaConf.to_object(cfg)
     # Load the sources
-    sources = read_source_file()
+    sources = read_sources(cfg['sources'])
     # Create the dataset from the first source
     dataset = Single2DSourceDataset(sources[0])
     print(f"Dataset length: {len(dataset)} samples")

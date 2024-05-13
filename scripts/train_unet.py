@@ -1,15 +1,19 @@
 """Trains a UNet model on the multi-task autoencoding task."""
 import pytorch_lightning as pl
+import hydra
 from multi_sources.models.unet import UNet
 from multi_sources.structure.mae import MultisourceMaskedAutoencoder
 from torch.utils.data import DataLoader
-from multi_sources.data_processing.utils import read_source_file
+from multi_sources.data_processing.utils import read_sources
 from multi_sources.data_processing.multi_source_dataset import MultiSourceDataset
+from omegaconf import DictConfig, OmegaConf
 
 
-def main():
+@hydra.main(version_base=None, config_path="../conf", config_name="config")
+def main(cfg: DictConfig):
+    cfg = OmegaConf.to_object(cfg)
     # Load the sources
-    sources = read_source_file()
+    sources = read_sources(cfg['sources'])
     # Create the dataset
     dataset = MultiSourceDataset(sources)
     print(f"Dataset length: {len(dataset)} samples")

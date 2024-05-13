@@ -1,15 +1,19 @@
 """Tests the MultiSourceDataset class."""
 import matplotlib.pyplot as plt
+import hydra
+from omegaconf import DictConfig, OmegaConf
 from torch.utils.data import DataLoader
 from time import time
 from tqdm import trange
-from multi_sources.data_processing.utils import read_source_file
+from multi_sources.data_processing.utils import read_sources
 from multi_sources.data_processing.multi_source_dataset import MultiSourceDataset
 
 
-def main():
+@hydra.main(config_path="../conf/", config_name="config", version_base=None)
+def main(cfg: DictConfig):
+    cfg = OmegaConf.to_object(cfg)
     # Load the sources
-    sources = read_source_file()
+    sources = read_sources(cfg['sources'])
     # Create the dataset
     dataset = MultiSourceDataset(sources)
     print(f"Dataset length: {len(dataset)} samples")
