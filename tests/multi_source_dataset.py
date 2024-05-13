@@ -37,6 +37,11 @@ def main(cfg: DictConfig):
         pass
     print(f"Time to iterate over all samples: {time() - start:.2f} seconds")
 
+    # Now, create the same dataset, but exclude the years 2016 and 2017.
+    print("Now excluding the years 2016 and 2017")
+    dataset = MultiSourceDataset(sources, exclude_seasons=[2016, 2017])
+    print(f"Dataset length: {len(dataset)} samples")
+
 
 if __name__ == "__main__":
     main()

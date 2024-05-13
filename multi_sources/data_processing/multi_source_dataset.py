@@ -23,10 +23,12 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         Otherwise, return the element.
     """
 
-    def __init__(self, sources, dt_max=24):
+    def __init__(self, sources, include_seasons=None, exclude_seasons=None, dt_max=24):
         """
         Args:
             sources (list of :obj:`multi_source.data_processing.Source`): The sources to use.
+            include_seasons (list of int): The years to include in the dataset. If None, all years are included.
+            exclude_seasons (list of int): The years to exclude from the dataset. If None, no years are excluded.
             dt_max (int): The maximum time delta between the elements returned for each source,
                 in hours.
         """
@@ -43,6 +45,16 @@ class MultiSourceDataset(torch.utils.data.Dataset):
             .assign(source=[i] * len(ds))
             for i, ds in enumerate(self.datasets)
         ]
+        # Check that the included and excluded seasons are not overlapping
+        if include_seasons is not None and exclude_seasons is not None:
+            if set(include_seasons).intersection(exclude_seasons):
+                raise ValueError("The included and excluded seasons are overlapping.")
+        # Select the seasons to include
+        if include_seasons is not None:
+            self.source_dfs = [df[df["season"].isin(include_seasons)] for df in self.source_dfs]
+        # Select the seasons to exclude
+        if exclude_seasons is not None:
+            self.source_dfs = [df[~df["season"].isin(exclude_seasons)] for df in self.source_dfs]
         self.df = pd.concat(self.source_dfs)
         # Sort by 'SID', 'source', and 'time'
         self.source_dfs = [df.sort_values(["SID", "time"]) for df in self.source_dfs]
