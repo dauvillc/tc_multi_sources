@@ -13,7 +13,7 @@ from multi_sources.data_processing.multi_source_dataset import MultiSourceDatase
 def main(cfg: DictConfig):
     cfg = OmegaConf.to_object(cfg)
     # Load the sources
-    sources = read_sources(cfg['experiment']['sources'])
+    sources = read_sources(cfg['sources'])
     # Create the dataset
     dataset = MultiSourceDataset(sources)
     print(f"Dataset length: {len(dataset)} samples")
