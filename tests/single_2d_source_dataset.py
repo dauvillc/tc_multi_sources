@@ -13,7 +13,7 @@ from multi_sources.data_processing.single_2d_source_dataset import Single2DSourc
 def main(cfg: DictConfig):
     cfg = OmegaConf.to_object(cfg)
     # Load the sources
-    sources = read_sources(cfg['sources'])
+    sources = read_sources(cfg['experiment']['sources'])
     # Create the dataset from the first source
     dataset = Single2DSourceDataset(sources[0])
     print(f"Dataset length: {len(dataset)} samples")
