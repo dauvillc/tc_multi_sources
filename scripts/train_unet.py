@@ -22,7 +22,7 @@ def main(cfg: DictConfig):
     # Create the dataloader
     dataloader = DataLoader(dataset, batch_size=64)
     # Create the model
-    model = UNet(dataset.get_n_variables(), 4, 8, 3).float()
+    model = UNet(dataset.get_n_variables(), 3, 1, 3).float()
     # Create the MAE
     mae = MultisourceMaskedAutoencoder(model)
     # Create the logger
@@ -30,7 +30,7 @@ def main(cfg: DictConfig):
     # Log the configuration
     logger.log_hyperparams(cfg)
     # Create the trainer
-    trainer = pl.Trainer(max_epochs=1, logger=logger)
+    trainer = pl.Trainer(max_epochs=100, logger=logger, log_every_n_steps=5)
     # Train the model
     trainer.fit(mae, dataloader)
 

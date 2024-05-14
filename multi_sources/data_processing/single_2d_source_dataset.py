@@ -95,5 +95,13 @@ class Single2DSourceDataset(Dataset):
         data = data[variables].to_array().load().data
         return torch.tensor(data)
 
+    def get_spatial_size(self):
+        """Returns the spatial size of the data (H, W)."""
+        return (size for dim, size in self.data.sizes.items() if dim != "sample")
+
+    def get_n_variables(self):
+        """Returns the number of variables in the data."""
+        return self.source.n_variables()
+
     def __len__(self):
         return len(self.data.time)

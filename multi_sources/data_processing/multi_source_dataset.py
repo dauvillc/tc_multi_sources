@@ -8,12 +8,13 @@ from multi_sources.data_processing.single_2d_source_dataset import Single2DSourc
 class MultiSourceDataset(torch.utils.data.Dataset):
     """A dataset that yields elements from multiple sources.
 
-    The dataset yields maps {source_name: None or (S, DT, C, D, V)} where:
+    The dataset yields maps {source_name: (S, DT, C, D, V)} where:
     - S is the source index.
     - DT is the time delta between the reference time and the time of the element, in hours.
     - C is a tensor of shape (2, H, W) containing the coordinates (lat, lon) of each pixel.
     - D is a tensor of shape (H, W) containing the distance at each pixel to the center of the storm.
     - V is a tensor of shape (channels, H, W) containing the values of each pixel.
+    If the element is not available for a source, DT, C, D, and V are filled with NaNs.
     The selection of the element returned for each source is done as follows (for an index i):
     - Select the ith element, all sources and all storms included.
     - Let t0 be the time of that element:
@@ -55,7 +56,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         # Select the seasons to exclude
         if exclude_seasons is not None:
             self.source_dfs = [df[~df["season"].isin(exclude_seasons)] for df in self.source_dfs]
-        self.df = pd.concat(self.source_dfs)
+        self.df = pd.concat(self.source_dfs).reset_index(drop=True)
         # Sort by 'SID', 'source', and 'time'
         self.source_dfs = [df.sort_values(["SID", "time"]) for df in self.source_dfs]
         self.df = self.df.sort_values(["SID", "source", "time"])
@@ -71,25 +72,31 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         output = {}
         # For each source, find the element with the closest time to t0 that is before t0
         for source_idx, df in enumerate(self.source_dfs):
+            source_idx_tensor = torch.tensor(source_idx, dtype=torch.float32)
             # Identify the rows corresponding to the storm
             df_storm = df[df["SID"] == sid]
             # Keep only the rows that are before t0
             df_storm = df_storm[df_storm["time"] <= t0]
             # If there is no such element, return None for that source
-            if len(df_storm) == 0:
-                output[self.sources[source_idx].name] = None
+            if len(df_storm) == 0 or (t0 - df_storm["time"].iloc[-1]) > self.dt_max:
+                # Retrieve the height and width of the source from the single source dataset
+                H, W = self.datasets[source_idx].get_spatial_size()
+                n_channels = self.datasets[source_idx].get_n_variables()
+                output[self.sources[source_idx].name] = (
+                    source_idx_tensor,
+                    torch.tensor(0.0, dtype=torch.float32),
+                    torch.full((2, H, W), float("nan"), dtype=torch.float32),
+                    torch.full((H, W), float("nan"), dtype=torch.float32),
+                    torch.full((n_channels, H, W), float("nan"), dtype=torch.float32),
+                )
                 continue
             # Find the closest time to t0
             t = df_storm["time"].iloc[-1]
             dt = t0 - t
-            # If dt > dt_max, return None for that source
-            if dt > self.dt_max:
-                output[self.sources[source_idx].name] = None
-                continue
             # Retrieve the element from the single source dataset
             C, D, V = self.datasets[source_idx].get_sample(sid, t)
             output[self.sources[source_idx].name] = (
-                torch.tensor(source_idx, dtype=torch.float32),
+                source_idx_tensor,
                 torch.tensor(dt.total_seconds() / 3600.0, dtype=torch.float32),
                 torch.tensor(C, dtype=torch.float32),
                 torch.tensor(D, dtype=torch.float32),

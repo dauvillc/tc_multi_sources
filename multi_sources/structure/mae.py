@@ -6,7 +6,7 @@ import torch
 class MultisourceMaskedAutoencoder(pl.LightningModule):
     """Given a torch model which receives inputs from multiple sources, this class
     wraps it as a masked autoencoder, using Lightning.
-    The structure receives inputs under the form of map {source_name: S, DT, C, D, V}, where:
+    The structure receives inputs under the form of map {source_name: (S, DT, C, D, V)}, where:
     - S is a tensor of shape (batch_size,) containing the source index.
     - DT is a tensor of shape (batch_size,) containing the time delta between the element's time
         and the reference time.
@@ -41,7 +41,10 @@ class MultisourceMaskedAutoencoder(pl.LightningModule):
         loss = 0
         for source_name in y_pred:
             _, _, _, _, v = y_true[source_name]
-            loss += (y_pred[source_name] - v).pow(2).mean()
+            # Where y_true is masked (NaN), set the loss to zero
+            mask = ~torch.isnan(v)
+            loss += torch.mean((y_pred[source_name][mask] - v[mask])**2)
+
         return loss
 
     def training_step(self, batch, batch_idx):
@@ -56,7 +59,9 @@ class MultisourceMaskedAutoencoder(pl.LightningModule):
         """
         #TODO: For now, we won't apply any masking, to just debug the pipeline.
         pred = self.forward(batch)
-        return self.loss_fn(pred, batch)
+        loss = self.loss_fn(pred, batch)
+        self.log('train_loss', loss)
+        return loss
 
     def validation_step(self, batch, batch_idx):
         """Defines a validation step for the model.
@@ -77,8 +82,10 @@ class MultisourceMaskedAutoencoder(pl.LightningModule):
         # - Remove D from the input, as it shouldn't be accessible to the model
         input_ = {}
         for source, (s, dt, c, d, v) in x.items():
-            c[torch.isnan(c)] = 0
-            v[torch.isnan(v)] = 0
+            # Don't modify the tensors in-place, as we need to keep the NaN values
+            # for the loss computation
+            c = torch.nan_to_num(c, nan=0)
+            v = torch.nan_to_num(v, nan=0)
             input_[source] = (s, dt, c, v)
         return self.model(input_)
 

@@ -28,3 +28,8 @@ tc_primed:
     AMSR2_GCOMW1:
       S1:
         variables: ['TB_10.65V']
+      S4:
+        variables: ['TB_36.5V']
+    GMI_GPM:
+      S1:
+        variables: ['TB_89.0V']
