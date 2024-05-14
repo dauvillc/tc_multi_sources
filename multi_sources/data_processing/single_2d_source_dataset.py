@@ -21,19 +21,18 @@ class Single2DSourceDataset(Dataset):
         # Load in memory the normalization statistics
         self.normalization_mean = xr.open_dataset(self.data_dir / "normalization_mean.nc")
         self.normalization_std = xr.open_dataset(self.data_dir / "normalization_std.nc")
-        # Recursively find all paths to the data files
-        self.data_files = []
-        for season in self.data_dir.iterdir():
-            if not season.is_dir():
-                continue
-            for basin in season.iterdir():
-                for data_file in basin.glob("*.nc"):
-                    self.data_files.append(data_file)
+        # The data files are stored as season.nc (e.g. 2018.nc)
+        self.data_files = [
+            file
+            for file in self.data_dir.glob("*.nc")
+            if file.name != "normalization_mean.nc" and file.name != "normalization_std.nc"
+        ]
         print(f"Found {len(self.data_files)} storm data files.")
         # Lazy-load the files in parallel. All timesteps from all storms are concatenated along the
         # 'sample' dimension.
         self.data = xr.open_mfdataset(
-            self.data_files, combine="nested", concat_dim="sample", parallel=False
+            self.data_files, combine="nested", concat_dim="sample", parallel=False,
+            chunks={'sample': 1}
         )
         # Load the coordinates in memory for indexing
         self.data = self.data.assign_coords(
@@ -47,7 +46,7 @@ class Single2DSourceDataset(Dataset):
             .str.cat(self.data["basin"], self.data["cyclone_number"].astype(str), sep="")
         )
         # Set the "SID" and time as indexes
-        self.data = self.data.set_index(sample=['SID', 'time'])
+        self.data = self.data.set_index(sample=["SID", "time"])
 
     def timesteps_dataframe(self):
         """Returns a pandas DataFrame giving the times at which elements are available
@@ -83,8 +82,8 @@ class Single2DSourceDataset(Dataset):
         # Select the coordinates
         C = data[["latitude", "longitude"]].to_array().values
         # Compute the distance to the storm center from the x and y coordinates
-        D = data['x'].values ** 2 + data['y'].values ** 2
-        D = D ** 0.5
+        D = data["x"].values ** 2 + data["y"].values ** 2
+        D = D**0.5
         return C, D, V
 
     def __getitem__(self, idx):
