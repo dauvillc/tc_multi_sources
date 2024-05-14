@@ -5,10 +5,11 @@ and formatting the result into the sources tree.
 """
 
 import yaml
+import hydra
 import xarray as xr
 import netCDF4 as nc
 import numpy as np
-import argparse
+from omegaconf import OmegaConf
 from tqdm import tqdm
 from concurrent.futures import ProcessPoolExecutor
 from xarray.core.dtypes import NA
@@ -48,7 +49,7 @@ def reverse_spatially(ds):
     return ds
 
 
-def process_swaths(sensat, swath, files, dest_path, common_size=None):
+def process_swaths(sensat, swath, files, dest_path, cfg, common_size=None):
     """Preprocesses the data for a given swath."""
     print(f"{sensat}: processing swath {swath}")
     # Create the destination directory dest_path/under microwave/SENSOR_SATELLITE/swath/
@@ -87,20 +88,6 @@ def process_swaths(sensat, swath, files, dest_path, common_size=None):
         preprocess=_preprocess,
         parallel=False,
     )
-    # Normalization:
-    # - Compute the mean and standard deviation of each band, without considering missing values
-    # - Set the missing values to 0.
-    # - Normalize the data by subtracting the mean and dividing by the standard deviation
-    mean = dataset.mean(dim=["sample", "scan", "pixel"], skipna=True)
-    std = dataset.std(dim=["sample", "scan", "pixel"], skipna=True)
-    # To reinitialize the chunking, xarray advise to write the mean/std to a file and reload them.
-    mean.to_netcdf(dest_swath_dir / "normalization_mean.nc")
-    std.to_netcdf(dest_swath_dir / "normalization_std.nc")
-    # Reload the mean and standard deviation
-    mean = xr.open_dataset(dest_swath_dir / "normalization_mean.nc")
-    std = xr.open_dataset(dest_swath_dir / "normalization_std.nc")
-    # Normalize the data
-    dataset = (dataset - mean) / std
     # Now, load the overpass_metadata group of the files, which notably include
     # the overpass time, basin, year and storm number.
     meta = (
@@ -113,6 +100,25 @@ def process_swaths(sensat, swath, files, dest_path, common_size=None):
         .reset_coords()
     )
     meta = meta.set_coords(["season", "basin", "cyclone_number", "time"])
+    # Normalization:
+    # - Retrieve which seasons are used for the validation and test sets
+    # - Compute the mean and standard deviation of each band, without considering missing values,
+    #   over the seasons that are not used for validation or test
+    # - Normalize the data by subtracting the mean and dividing by the standard deviation
+    val_seasons, test_seasons = cfg['general_settings']['val_seasons'], cfg['general_settings']['test_seasons']
+    seasons = np.unique(meta["season"].values)
+    train_seasons = [season for season in seasons if season not in val_seasons + test_seasons]
+    train_ds = dataset.where(meta["season"].isin(train_seasons), drop=True)
+    mean = train_ds.mean(dim=["sample", "scan", "pixel"], skipna=True)
+    std = train_ds.std(dim=["sample", "scan", "pixel"], skipna=True)
+    # To reinitialize the chunking, xarray advises to write the mean/std to a file and reload them.
+    mean.to_netcdf(dest_swath_dir / "normalization_mean.nc")
+    std.to_netcdf(dest_swath_dir / "normalization_std.nc")
+    # Reload the mean and standard deviation
+    mean = xr.open_dataset(dest_swath_dir / "normalization_mean.nc")
+    std = xr.open_dataset(dest_swath_dir / "normalization_std.nc")
+    # Normalize the whole dataset with the mean and standard deviation from the training set
+    dataset = (dataset - mean) / std
     # Add the time, basin, cyclone_number, season, instrument_name, platform_name,
     # coverage_fraction and ERA5_time variables to the dataset
     meta_vars = [
@@ -143,35 +149,14 @@ def process_swaths(sensat, swath, files, dest_path, common_size=None):
     dataset["dist_to_storm_center"] = (dataset["x"] ** 2 + dataset["y"] ** 2) ** 0.5
 
     # The results will be stored under
-    # dest_path/microwave/SENSOR_SATELLITE/swath/YEAR/BASIN/NUMBER.nc
-    # Where NUMBER.nc is the concatenation of all images from the same storm,
-    # along the time dimension.
-    # - Isolate the unique seasons
-    seasons = np.unique(dataset["season"].data)
-    for season in seasons:
-        # - Isolate the unique basins
-        season_ds = dataset.where(dataset["season"] == season, drop=True)
-        basins = np.unique(season_ds["basin"].data)
-        for basin in basins:
-            # Create the destination directory dest_path/microwave/SENSOR_SATELLITE/swath/YEAR/BASIN/
-            (dest_swath_dir / f"{season}" / f"{basin}").mkdir(parents=True, exist_ok=True)
-            # - Isolate the unique cyclone numbers
-            basin_ds = season_ds.where(season_ds["basin"] == basin, drop=True)
-            cyclone_numbers = np.unique(basin_ds["cyclone_number"].data)
-            for cyclone_number in cyclone_numbers:
-                cyc_ds = basin_ds.where(basin_ds["cyclone_number"] == cyclone_number, drop=True)
-                if cyc_ds["sample"].size == 0:
-                    continue
-                # Sort the dataset by the "time" coordinate
-                cyc_ds = cyc_ds.sortby("time")
-                # Write the dataset to the destination file
-                cyc_ds.to_netcdf(
-                    dest_swath_dir / f"{season}" / f"{basin}" / f"{cyclone_number}.nc"
-                )
+    # dest_path/microwave/SENSOR_SATELLITE/swath/SEASON.nc
+    for season in np.unique(dataset['season'].values):
+        season_ds = dataset.sel(sample=dataset['season'] == season)
+        season_ds.to_netcdf(dest_swath_dir / f"{season}.nc")
     print(f"{sensat}: {swath} done")
 
 
-def process_sensat_pair(sensat, overpass_files, dest_path, common_size=None):
+def process_sensat_pair(sensat, overpass_files, dest_path, cfg, common_size=None):
     """Preprocesses the data for a given sensor/satellite pair."""
     print(f"Processing sensor/satellite pair {sensat}")
     # Retrieve the list of files whose stem contains the sensor/satellite pair
@@ -181,23 +166,12 @@ def process_sensat_pair(sensat, overpass_files, dest_path, common_size=None):
         swaths = [swath for swath in ds["passive_microwave"].groups.keys()]
     # For each swath, preprocess the data
     for swath in swaths:
-        process_swaths(sensat, swath, files, dest_path, common_size=common_size)
+        process_swaths(sensat, swath, files, dest_path, cfg, common_size=common_size)
 
 
-def main():
-    # Argument parsing
-    parser = argparse.ArgumentParser(description="Preprocess the TC-Primed dataset")
-    parser.add_argument(
-        "-w",
-        "--workers",
-        type=int,
-        default=2,
-        help="Number of workers to use for the preprocessing",
-    )
-    parser.add_argument(
-        "--common_size", action="store_true", help="Pad all images to a common size"
-    )
-    args = parser.parse_args()
+@hydra.main(config_path="../conf/", config_name="config", version_base=None)
+def main(cfg):
+    cfg = OmegaConf.to_container(cfg, resolve=True)
     # Load the paths configuration file
     with open("conf/paths/paths.yaml", "r") as file:
         paths_cfg = yaml.safe_load(file)
@@ -223,7 +197,7 @@ def main():
     sen_sat_pairs = sorted(list(sen_sat_pairs))
     # If the common_size flag is set, we pad all images to a common size. For this, we need to
     # retrieve the maximum size of all images from the dataset.
-    if args.common_size:
+    if 'common_size' in cfg:
         print("Retrieving the maximum size of all images from the dataset")
         max_size = [0, 0]
         for file in tqdm(overpass_files):
@@ -236,18 +210,23 @@ def main():
     else:
         max_size = None
     # Run the preprocessing for each sensor/satellite pair asynchronously
-    with ProcessPoolExecutor(max_workers=args.workers) as executor:
-        futures = [
-            executor.submit(
-                process_sensat_pair, sensat, overpass_files, dest_path, common_size=max_size
-            )
-            for sensat in sen_sat_pairs
-        ]
-        # Wait for all futures to complete
-        for future in futures:
-            future.result()
-        # Close the executor
-        executor.shutdown()
+    # if the "workers" argument is set via hydra
+    if "workers" in cfg:
+        with ProcessPoolExecutor(max_workers=cfg['workers']) as executor:
+            futures = [
+                executor.submit(
+                    process_sensat_pair, sensat, overpass_files, dest_path, cfg, common_size=max_size
+                )
+                for sensat in sen_sat_pairs
+            ]
+            # Wait for all futures to complete
+            for future in futures:
+                future.result()
+            # Close the executor
+            executor.shutdown()
+    else:
+        for sensat in sen_sat_pairs:
+            process_sensat_pair(sensat, overpass_files, dest_path, cfg, common_size=max_size)
 
 
 if __name__ == "__main__":
