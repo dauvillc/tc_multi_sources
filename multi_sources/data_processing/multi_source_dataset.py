@@ -44,6 +44,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
             .reset_index("sample")
             .to_dataframe()
             .assign(source=[i] * len(ds))
+            .assign(source_name=[ds.source.name] * len(ds))
             for i, ds in enumerate(self.datasets)
         ]
         # Check that the included and excluded seasons are not overlapping

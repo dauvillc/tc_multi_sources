@@ -27,7 +27,7 @@ class Single2DSourceDataset(Dataset):
             for file in self.data_dir.glob("*.nc")
             if file.name != "normalization_mean.nc" and file.name != "normalization_std.nc"
         ]
-        print(f"Found {len(self.data_files)} storm data files.")
+        print(f"{self.source.name}: Found {len(self.data_files)} storm data files.")
         # Lazy-load the files in parallel. All timesteps from all storms are concatenated along the
         # 'sample' dimension.
         self.data = xr.open_mfdataset(
