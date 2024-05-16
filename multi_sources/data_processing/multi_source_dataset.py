@@ -15,16 +15,19 @@ class MultiSourceDataset(torch.utils.data.Dataset):
     - D is a tensor of shape (H, W) containing the distance at each pixel to the center of the storm.
     - V is a tensor of shape (channels, H, W) containing the values of each pixel.
     If the element is not available for a source, DT, C, D, and V are filled with NaNs.
-    The selection of the element returned for each source is done as follows (for an index i):
-    - Select the ith element, all sources and all storms included.
-    - Let t0 be the time of that element:
-      - For each source, select the element with the closest time to t0 that is before t0.
-        If there is no such element, return None for that source instead.
-        If there is such an element but (t0 - t) > dt_max, return None for that source instead.
-        Otherwise, return the element.
+
+    Each element is associated with a storm and a synoptic time. For a given storm S and time t0, the dataset
+    returns the element from each source that is closest to t0 and between t0 and t0 - dt_max.
     """
 
-    def __init__(self, sources, include_seasons=None, exclude_seasons=None, dt_max=24):
+    def __init__(
+        self,
+        sources,
+        include_seasons=None,
+        exclude_seasons=None,
+        dt_max=24,
+        min_available_sources_prop=0.6,
+    ):
         """
         Args:
             sources (list of :obj:`multi_source.data_processing.Source`): The sources to use.
@@ -32,6 +35,8 @@ class MultiSourceDataset(torch.utils.data.Dataset):
             exclude_seasons (list of int): The years to exclude from the dataset. If None, no years are excluded.
             dt_max (int): The maximum time delta between the elements returned for each source,
                 in hours.
+            min_available_sources_prop (float): For a given sample (storm/time pair), the minimum proportion of
+                sources that must have an available element for the sample to be included in the dataset.
         """
         self.sources = sources
         self.dt_max = pd.Timedelta(dt_max, unit="h")
@@ -61,6 +66,23 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         # Sort by 'SID', 'source', and 'time'
         self.source_dfs = [df.sort_values(["SID", "time"]) for df in self.source_dfs]
         self.df = self.df.sort_values(["SID", "source", "time"])
+        # Compute the synoptic time that is closest and after the element's time
+        self.df["syn_time"] = self.df["time"].dt.ceil("6h")
+        # For each element, compute the list of synoptic times that are within dt_max of the element's time
+        # e.g. 06:41:00 -> [12:00:00, 18:00:00, 00:00:00 (next day), 06:00:00 (next day)]
+        self.df["syn_time"] = self.df.apply(
+            lambda row: pd.date_range(row["syn_time"], row["time"] + self.dt_max, freq="6h"),
+            axis=1,
+        )
+        # Explode the synoptic times into separate rows
+        self.df = self.df.explode("syn_time")
+        # Filtering:
+        # - Compute for each storm/time the number of available sources
+        avail = self.df.groupby(["SID", "syn_time"])["source"].nunique().rename("avail_source").reset_index()
+        avail['avail_frac'] = avail['avail_source'] / self.get_n_sources()
+        # - Keep only the storm/time pairs for which at least min_available_sources_prop sources are available
+        avail = avail[avail['avail_frac'] >= min_available_sources_prop]
+        self.df = self.df.merge(avail[['SID', 'syn_time']], on=["SID", "syn_time"], how="inner")
 
     def __len__(self):
         return len(self.df)
