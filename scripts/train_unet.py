@@ -20,7 +20,7 @@ def main(cfg: DictConfig):
     dataset = MultiSourceDataset(sources, load_in_memory=cfg['general_settings']['load_in_memory'])
     print(f"Dataset length: {len(dataset)} samples")
     # Create the dataloader
-    dataloader = DataLoader(dataset, batch_size=64)
+    dataloader = DataLoader(dataset, batch_size=64, workers=27)
     # Create the model
     model = UNet(dataset.get_n_variables(), 3, 1, 3).float()
     # Create the MAE

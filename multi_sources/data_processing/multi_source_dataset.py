@@ -132,7 +132,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                 # Fill with NaNs
                 output[self.sources[source_idx].name] = (
                     source_idx_tensor,
-                    torch.full((1,), float("nan")),
+                    torch.tensor(float("nan")),
                     torch.full((2, h, w), float("nan")),
                     torch.full((h, w), float("nan")),
                     torch.full((channels, h, w), float("nan")),
@@ -146,9 +146,9 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                         (t0 - sample_source["time"].iloc[0]).total_seconds() / 3600,
                         dtype=torch.float32,
                     ),
-                    c,
-                    d,
-                    v,
+                    torch.tensor(c, dtype=torch.float32),
+                    torch.tensor(d, dtype=torch.float32),
+                    torch.tensor(v, dtype=torch.float32),
                 )
 
         return output
