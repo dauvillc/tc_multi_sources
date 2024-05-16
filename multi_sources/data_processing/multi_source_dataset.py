@@ -109,3 +109,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
     def get_n_variables(self):
         """Returns a dict {source_name: n_variables}."""
         return {source.name: source.n_variables() for source in self.sources}
+
+    def get_n_sources(self):
+        """Returns the number of sources."""
+        return len(self.sources)
