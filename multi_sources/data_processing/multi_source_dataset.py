@@ -44,28 +44,32 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         self.datasets = [Single2DSourceDataset(source) for source in sources]
         # Create a DataFrame gathering all of these coordinates as well as the index of the source.
         # The DF should have the columns 'SID', 'source', 'season', 'basin', 'cyclone_number', 'time'.
-        self.source_dfs = [
-            ds.data[["SID", "time", "season", "basin", "cyclone_number"]]
-            .reset_index("sample")
-            .to_dataframe()
-            .assign(source=[i] * len(ds))
-            .assign(source_name=[ds.source.name] * len(ds))
-            for i, ds in enumerate(self.datasets)
-        ]
+        self.df = (
+            pd.concat(
+                [
+                    ds.data[["SID", "time", "season", "basin", "cyclone_number"]]
+                    .reset_index("sample")
+                    .to_dataframe()
+                    .assign(source=[i] * len(ds))
+                    .assign(source_name=[ds.source.name] * len(ds))
+                    for i, ds in enumerate(self.datasets)
+                ]
+            )
+            .reset_index(drop=True)
+            .sort_values(["SID", "source", "time"])
+        )
         # Check that the included and excluded seasons are not overlapping
         if include_seasons is not None and exclude_seasons is not None:
             if set(include_seasons).intersection(exclude_seasons):
                 raise ValueError("The included and excluded seasons are overlapping.")
         # Select the seasons to include
         if include_seasons is not None:
-            self.source_dfs = [df[df["season"].isin(include_seasons)] for df in self.source_dfs]
+            self.df = self.df[self.df["season"].isin(include_seasons)]
         # Select the seasons to exclude
         if exclude_seasons is not None:
-            self.source_dfs = [df[~df["season"].isin(exclude_seasons)] for df in self.source_dfs]
-        self.df = pd.concat(self.source_dfs).reset_index(drop=True)
-        # Sort by 'SID', 'source', and 'time'
-        self.source_dfs = [df.sort_values(["SID", "time"]) for df in self.source_dfs]
-        self.df = self.df.sort_values(["SID", "source", "time"])
+            self.df = self.df[~self.df["season"].isin(exclude_seasons)]
+        if len(self.df) == 0:
+            raise ValueError("No elements available for the selected sources and seasons.")
         # Compute the synoptic time that is closest and after the element's time
         self.df["syn_time"] = self.df["time"].dt.ceil("6h")
         # For each element, compute the list of synoptic times that are within dt_max of the element's time
@@ -78,53 +82,67 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         self.df = self.df.explode("syn_time")
         # Filtering:
         # - Compute for each storm/time the number of available sources
-        avail = self.df.groupby(["SID", "syn_time"])["source"].nunique().rename("avail_source").reset_index()
-        avail['avail_frac'] = avail['avail_source'] / self.get_n_sources()
+        avail = (
+            self.df.groupby(["SID", "syn_time"])["source"]
+            .nunique()
+            .rename("avail_source")
+            .reset_index()
+        )
+        avail["avail_frac"] = avail["avail_source"] / self.get_n_sources()
         # - Keep only the storm/time pairs for which at least min_available_sources_prop sources are available
-        avail = avail[avail['avail_frac'] >= min_available_sources_prop]
-        self.df = self.df.merge(avail[['SID', 'syn_time']], on=["SID", "syn_time"], how="inner")
+        avail = avail[avail["avail_frac"] >= min_available_sources_prop]
+        self.df = self.df.merge(avail[["SID", "syn_time"]], on=["SID", "syn_time"], how="inner")
+        # - Sort by SID,source,time and for every (SID,syn_time,source) triplet, keep only the last one
+        #   (i.e. the one with the latest time)
+        self.df = self.df.sort_values(["SID", "source", "time"]).drop_duplicates(
+            ["SID", "syn_time", "source"], keep="last"
+        )
+        # Finally, compute the list of unique (SID,syn_time) pairs. Each row of this final dataframe will
+        # constitute a sample of the dataset, while self.df can be used to retrieve the corresponding elements.
+        self.samples_df = self.df[["SID", "syn_time"]].drop_duplicates().reset_index(drop=True)
 
     def __len__(self):
-        return len(self.df)
+        return len(self.samples_df)
 
     def __getitem__(self, idx):
         # Retrieve the storm/time pair corresponding to that index
-        t0 = self.df.loc[idx]["time"]
-        sid = self.df.loc[idx]["SID"]
+        sid = self.samples_df["SID"].iloc[idx]
+        t0 = self.samples_df["syn_time"].iloc[idx]
+        # Retrieve all elements from all sources that correspond to that storm/time pair
+        sample = self.df[(self.df["SID"] == sid) & (self.df["syn_time"] == t0)]
         # Initialize the output dictionary
         output = {}
         # For each source, find the element with the closest time to t0 that is before t0
-        for source_idx, df in enumerate(self.source_dfs):
+        for source_idx in range(self.get_n_sources()):
             source_idx_tensor = torch.tensor(source_idx, dtype=torch.float32)
-            # Identify the rows corresponding to the storm
-            df_storm = df[df["SID"] == sid]
-            # Keep only the rows that are before t0
-            df_storm = df_storm[df_storm["time"] <= t0]
-            # If there is no such element, return None for that source
-            if len(df_storm) == 0 or (t0 - df_storm["time"].iloc[-1]) > self.dt_max:
-                # Retrieve the height and width of the source from the single source dataset
-                H, W = self.datasets[source_idx].get_spatial_size()
-                n_channels = self.datasets[source_idx].get_n_variables()
+            # Isolate the elements from that source
+            sample_source = sample[sample["source"] == source_idx]
+            # If there is no element for that source, fill with NaNs
+            if len(sample_source) == 0:
+                # Retrieve the height and width of the source
+                h, w = self.datasets[source_idx].get_spatial_size()
+                channels = self.datasets[source_idx].get_n_variables()
+                # Fill with NaNs
                 output[self.sources[source_idx].name] = (
                     source_idx_tensor,
-                    torch.tensor(0.0, dtype=torch.float32),
-                    torch.full((2, H, W), float("nan"), dtype=torch.float32),
-                    torch.full((H, W), float("nan"), dtype=torch.float32),
-                    torch.full((n_channels, H, W), float("nan"), dtype=torch.float32),
+                    torch.full((1,), float("nan")),
+                    torch.full((2, h, w), float("nan")),
+                    torch.full((h, w), float("nan")),
+                    torch.full((channels, h, w), float("nan")),
                 )
-                continue
-            # Find the closest time to t0
-            t = df_storm["time"].iloc[-1]
-            dt = t0 - t
-            # Retrieve the element from the single source dataset
-            C, D, V = self.datasets[source_idx].get_sample(sid, t)
-            output[self.sources[source_idx].name] = (
-                source_idx_tensor,
-                torch.tensor(dt.total_seconds() / 3600.0, dtype=torch.float32),
-                torch.tensor(C, dtype=torch.float32),
-                torch.tensor(D, dtype=torch.float32),
-                torch.tensor(V, dtype=torch.float32),
-            )
+            else:
+                # Retrieve the element from the single source dataset
+                c, d, v = self.datasets[source_idx].get_sample(sid, sample_source["time"].iloc[0])
+                output[self.sources[source_idx].name] = (
+                    source_idx_tensor,
+                    torch.tensor(
+                        (t0 - sample_source["time"].iloc[0]).total_seconds() / 3600,
+                        dtype=torch.float32,
+                    ),
+                    c,
+                    d,
+                    v,
+                )
 
         return output
 

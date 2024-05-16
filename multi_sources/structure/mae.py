@@ -78,12 +78,13 @@ class MultisourceMaskedAutoencoder(pl.LightningModule):
 
     def forward(self, x):
         # x is a map {source_name: S, DT, C, D, V}
-        # - Fill NaN values (masked / missing) in C and V with zeros
+        # - Fill NaN values (masked / missing) in DT, C and V with zeros
         # - Remove D from the input, as it shouldn't be accessible to the model
         input_ = {}
         for source, (s, dt, c, d, v) in x.items():
             # Don't modify the tensors in-place, as we need to keep the NaN values
             # for the loss computation
+            dt = torch.nan_to_num(dt, nan=0)
             c = torch.nan_to_num(c, nan=0)
             v = torch.nan_to_num(v, nan=0)
             input_[source] = (s, dt, c, v)
