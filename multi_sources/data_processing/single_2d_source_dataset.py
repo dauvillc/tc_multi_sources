@@ -11,10 +11,12 @@ class Single2DSourceDataset(Dataset):
     observations).
     """
 
-    def __init__(self, source):
+    def __init__(self, source, load_in_memory=False):
         """
         Args:
             source: multi_sources.data_processing.source.Source object
+            load_in_memory (bool): If True, the data is loaded in memory. Otherwise, the images
+                are loaded on-the-fly.
         """
         self.source = source
         self.data_dir = Path(self.source.get_path())
@@ -34,6 +36,8 @@ class Single2DSourceDataset(Dataset):
             self.data_files, combine="nested", concat_dim="sample", parallel=False,
             chunks={'sample': 1}
         )
+        if load_in_memory:
+            self.data = self.data.load()
         # Load the coordinates in memory for indexing
         self.data = self.data.assign_coords(
             {coord: self.data[coord].load() for coord in self.data.coords}

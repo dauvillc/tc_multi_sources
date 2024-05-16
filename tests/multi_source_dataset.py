@@ -15,7 +15,7 @@ def main(cfg: DictConfig):
     # Load the sources
     sources = read_sources(cfg['sources'])
     # Create the dataset
-    dataset = MultiSourceDataset(sources)
+    dataset = MultiSourceDataset(sources, load_in_memory=cfg['general_settings']['load_in_memory'])
     print(f"Dataset length: {len(dataset)} samples")
     # Try loading one sample
     sample = dataset[0]

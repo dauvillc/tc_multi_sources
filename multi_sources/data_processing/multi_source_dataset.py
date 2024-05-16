@@ -27,6 +27,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         exclude_seasons=None,
         dt_max=24,
         min_available_sources_prop=0.6,
+        load_in_memory=False,
     ):
         """
         Args:
@@ -37,11 +38,17 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                 in hours.
             min_available_sources_prop (float): For a given sample (storm/time pair), the minimum proportion of
                 sources that must have an available element for the sample to be included in the dataset.
+            load_in_memory (bool): If True, the dataset is loaded in memory. Otherwise, the dataset is loaded
+                on-the-fly.
         """
         self.sources = sources
         self.dt_max = pd.Timedelta(dt_max, unit="h")
+        if load_in_memory:
+            print("\033[91m" + "Loading the dataset in memory, which may overload the RAM." + "\033[0m")
         # Create a Single2DSourceDataset for each source
-        self.datasets = [Single2DSourceDataset(source) for source in sources]
+        self.datasets = [
+            Single2DSourceDataset(source, load_in_memory=load_in_memory) for source in sources
+        ]
         # Create a DataFrame gathering all of these coordinates as well as the index of the source.
         # The DF should have the columns 'SID', 'source', 'season', 'basin', 'cyclone_number', 'time'.
         self.df = (

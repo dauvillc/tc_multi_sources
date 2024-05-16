@@ -1,3 +1,6 @@
 val_seasons: []
 test_seasons: [2017]
+# Whether to load the whole dataset in RAM. This will allow to iterate much faster,
+# but may overload the memory.
+load_in_memory: true
 
