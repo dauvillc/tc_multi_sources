@@ -82,7 +82,7 @@ class Single2DSourceDataset(Dataset):
         # Retrieve the list of variables from the source
         variables = self.source.variables
         # Select the variables from the data
-        V = data[variables].to_array().load().values
+        V = data[variables].to_array().values
         # Select the coordinates
         C = data[["latitude", "longitude"]].to_array().values
         # Compute the distance to the storm center from the x and y coordinates

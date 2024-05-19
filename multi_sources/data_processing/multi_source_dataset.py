@@ -4,6 +4,7 @@ import xarray as xr
 import torch
 import pandas as pd
 import netCDF4 as nc
+from xarray.backends import NetCDF4DataStore
 from pathlib import Path
 
 
@@ -56,7 +57,8 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         self.df["source"] = self.df["source_name"].map(self.source_indices)
         # We'll need to know the names of the variables in each source to access them and
         # to know the number of channels in the tensors.
-        self.source_variables = {}
+        # We'll also store the shape of the variables to create the tensors.
+        self.source_variables, self.source_shapes = {}, {}
         for source_name in self.source_names:
             # Isolate the first element for each source
             first_element = self.df[self.df["source_name"] == source_name].iloc[0]
@@ -75,6 +77,10 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                     var
                     for var in sample.data_vars
                     if var not in ["dist_to_center", "latitude", "longitude"]
+                ]
+                # Store the shape of the variables
+                self.source_shapes[source_name] = [
+                    size for dim, size in sample.sizes.items() if dim != "sample"
                 ]
         # Create a DataFrame gathering all of these coordinates as well as the index of the source.
         # The DF should have the columns 'sid', 'source', 'season', 'basin', 'cyclone_number', 'time'.
@@ -122,15 +128,82 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         self.samples_df = self.df[["sid", "syn_time"]].drop_duplicates().reset_index(drop=True)
 
     def __getitem__(self, idx):
-        """Returns the element at the given index."""
-        pass
+        """Returns the element at the given index.
+
+        Args:
+            idx (int): The index of the element to retrieve.
+
+        Returns:
+            dict: A dictionary {source_name: (S, DT, C, D, V)}. If the element is not available for a source,
+                DT, C, D, and V are filled with NaNs.
+        """
+        sample = self.samples_df.iloc[idx]
+        sid = sample["sid"]
+        syn_time = sample["syn_time"]
+        output = {}
+        # Isolate the rows of self.df corresponding to the given sid and syn_time
+        sample_df = self.df[(self.df["sid"] == sid) & (self.df["syn_time"] == syn_time)]
+        season, basin = sample_df["season"].iloc[0], sample_df["basin"].iloc[0]
+        # Open the netcdf file corresponding to the given sid, which contains the elements for each source
+        # as groups.
+        # Load the Dataset in memory
+        with nc.Dataset(self.dataset_dir / f"{season}/{basin}/{sid}.nc") as root:
+            # For each source, try to load the element at the given time
+            for source_name in self.source_names:
+                source_tensor = torch.tensor(self.source_indices[source_name], dtype=torch.float32)
+                # Try to find an element for the given source, sid and syn_time
+                df = sample_df[sample_df["source_name"] == source_name]
+                if len(df) == 0 or syn_time - df["time"].iloc[0] > self.dt_max:
+                    # No element available for this source
+                    # Create a tensor of the appropriate shape filled with NaNs
+                    source_shape = self.source_shapes[source_name]
+                    source_channels = len(self.source_variables[source_name])
+                    output[source_name] = (
+                        source_tensor,  # S
+                        torch.tensor(float("nan"), dtype=torch.float32),  # DT
+                        torch.full(
+                            (2, *source_shape), fill_value=float("nan"), dtype=torch.float32
+                        ),  # C
+                        torch.full(
+                            source_shape, fill_value=float("nan"), dtype=torch.float32
+                        ),  # D
+                        torch.full(
+                            (source_channels, *source_shape),
+                            fill_value=float("nan"),
+                            dtype=torch.float32,
+                        ),
+                    )
+                else:
+                    # Load the element as the netcdf group corresponding to the source name
+                    sample = xr.open_dataset(NetCDF4DataStore(root, group=source_name))
+                    sample = sample.set_index(sample="time").sel(sample=df["time"].iloc[0])
+                    dt = df["time"].iloc[0] - syn_time
+                    output[source_name] = (
+                        source_tensor,  # S
+                        torch.tensor(dt.total_seconds() / 3600, dtype=torch.float32),  # DT
+                        torch.stack(
+                            [
+                                torch.tensor(sample["latitude"].values, dtype=torch.float32),
+                                torch.tensor(sample["longitude"].values, dtype=torch.float32),
+                            ],
+                            dim=0,
+                        ),  # C
+                        torch.tensor(sample["dist_to_center"].values, dtype=torch.float32),  # D
+                        torch.stack([
+                            torch.tensor(sample[var].values, dtype=torch.float32)
+                            for var in self.source_variables[source_name]
+                        ], dim=0),
+                    )
+        return output
 
     def __len__(self):
         return len(self.samples_df)
 
     def get_n_variables(self):
         """Returns a dict {source_name: n_variables}."""
-        return {source_name: len(variables) for source_name, variables in self.source_variables.items()}
+        return {
+            source_name: len(variables) for source_name, variables in self.source_variables.items()
+        }
 
     def get_n_sources(self):
         """Returns the number of sources."""
