@@ -1,8 +1,10 @@
 """Implements the MultiSourceDataset class."""
 
+import xarray as xr
 import torch
 import pandas as pd
-from multi_sources.data_processing.single_2d_source_dataset import Single2DSourceDataset
+import netCDF4 as nc
+from pathlib import Path
 
 
 class MultiSourceDataset(torch.utils.data.Dataset):
@@ -22,49 +24,60 @@ class MultiSourceDataset(torch.utils.data.Dataset):
 
     def __init__(
         self,
-        sources,
+        metadata_path,
+        dataset_dir,
         include_seasons=None,
         exclude_seasons=None,
         dt_max=24,
         min_available_sources_prop=0.6,
-        load_in_memory=False,
     ):
         """
         Args:
-            sources (list of :obj:`multi_source.data_processing.Source`): The sources to use.
+            metadata_path (str): The path to the metadata file. The metadata file should be a CSV file with the
+                columns 'sid', 'source_name', 'season', 'basin', 'cyclone_number', 'time'.
+            dataset_dir (str): The directory containing the preprocessed dataset. The structure should be
+                dataset_dir/season/basin/sid.nc.
             include_seasons (list of int): The years to include in the dataset. If None, all years are included.
             exclude_seasons (list of int): The years to exclude from the dataset. If None, no years are excluded.
             dt_max (int): The maximum time delta between the elements returned for each source,
                 in hours.
             min_available_sources_prop (float): For a given sample (storm/time pair), the minimum proportion of
                 sources that must have an available element for the sample to be included in the dataset.
-            load_in_memory (bool): If True, the dataset is loaded in memory. Otherwise, the dataset is loaded
-                on-the-fly.
         """
-        self.sources = sources
         self.dt_max = pd.Timedelta(dt_max, unit="h")
-        if load_in_memory:
-            print("\033[91m" + "Loading the dataset in memory, which may overload the RAM." + "\033[0m")
-        # Create a Single2DSourceDataset for each source
-        self.datasets = [
-            Single2DSourceDataset(source, load_in_memory=load_in_memory) for source in sources
-        ]
-        # Create a DataFrame gathering all of these coordinates as well as the index of the source.
-        # The DF should have the columns 'SID', 'source', 'season', 'basin', 'cyclone_number', 'time'.
-        self.df = (
-            pd.concat(
-                [
-                    ds.data[["SID", "time", "season", "basin", "cyclone_number"]]
-                    .reset_index("sample")
-                    .to_dataframe()
-                    .assign(source=[i] * len(ds))
-                    .assign(source_name=[ds.source.name] * len(ds))
-                    for i, ds in enumerate(self.datasets)
+        self.dataset_dir = Path(dataset_dir)
+        # Load the metadata file
+        self.df = pd.read_csv(metadata_path, parse_dates=["time"])
+        # Associate each source name with an index
+        self.source_names = self.df["source_name"].unique()
+        self.source_indices = {
+            source_name: idx for idx, source_name in enumerate(self.source_names)
+        }
+        self.df["source"] = self.df["source_name"].map(self.source_indices)
+        # We'll need to know the names of the variables in each source to access them and
+        # to know the number of channels in the tensors.
+        self.source_variables = {}
+        for source_name in self.source_names:
+            # Isolate the first element for each source
+            first_element = self.df[self.df["source_name"] == source_name].iloc[0]
+            # Open the file and count the number of variables
+            # The files are stored under dataset_dir/season/basin/sid.nc
+            with xr.open_dataset(
+                self.dataset_dir
+                / str(first_element["season"])
+                / first_element["basin"]
+                / f"{first_element['sid']}.nc",
+                group=source_name,
+            ) as sample:
+                # Only include the variables that are not coordinates and are not
+                # 'dist_to_center', 'latitude', 'longitude'.
+                self.source_variables[source_name] = [
+                    var
+                    for var in sample.data_vars
+                    if var not in ["dist_to_center", "latitude", "longitude"]
                 ]
-            )
-            .reset_index(drop=True)
-            .sort_values(["SID", "source", "time"])
-        )
+        # Create a DataFrame gathering all of these coordinates as well as the index of the source.
+        # The DF should have the columns 'sid', 'source', 'season', 'basin', 'cyclone_number', 'time'.
         # Check that the included and excluded seasons are not overlapping
         if include_seasons is not None and exclude_seasons is not None:
             if set(include_seasons).intersection(exclude_seasons):
@@ -90,7 +103,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         # Filtering:
         # - Compute for each storm/time the number of available sources
         avail = (
-            self.df.groupby(["SID", "syn_time"])["source"]
+            self.df.groupby(["sid", "syn_time"])["source"]
             .nunique()
             .rename("avail_source")
             .reset_index()
@@ -98,65 +111,27 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         avail["avail_frac"] = avail["avail_source"] / self.get_n_sources()
         # - Keep only the storm/time pairs for which at least min_available_sources_prop sources are available
         avail = avail[avail["avail_frac"] >= min_available_sources_prop]
-        self.df = self.df.merge(avail[["SID", "syn_time"]], on=["SID", "syn_time"], how="inner")
-        # - Sort by SID,source,time and for every (SID,syn_time,source) triplet, keep only the last one
+        self.df = self.df.merge(avail[["sid", "syn_time"]], on=["sid", "syn_time"], how="inner")
+        # - Sort by sid,source,time and for every (sid,syn_time,source) triplet, keep only the last one
         #   (i.e. the one with the latest time)
-        self.df = self.df.sort_values(["SID", "source", "time"]).drop_duplicates(
-            ["SID", "syn_time", "source"], keep="last"
+        self.df = self.df.sort_values(["sid", "source", "time"]).drop_duplicates(
+            ["sid", "syn_time", "source"], keep="last"
         )
-        # Finally, compute the list of unique (SID,syn_time) pairs. Each row of this final dataframe will
+        # Finally, compute the list of unique (sid,syn_time) pairs. Each row of this final dataframe will
         # constitute a sample of the dataset, while self.df can be used to retrieve the corresponding elements.
-        self.samples_df = self.df[["SID", "syn_time"]].drop_duplicates().reset_index(drop=True)
+        self.samples_df = self.df[["sid", "syn_time"]].drop_duplicates().reset_index(drop=True)
+
+    def __getitem__(self, idx):
+        """Returns the element at the given index."""
+        pass
 
     def __len__(self):
         return len(self.samples_df)
 
-    def __getitem__(self, idx):
-        # Retrieve the storm/time pair corresponding to that index
-        sid = self.samples_df["SID"].iloc[idx]
-        t0 = self.samples_df["syn_time"].iloc[idx]
-        # Retrieve all elements from all sources that correspond to that storm/time pair
-        sample = self.df[(self.df["SID"] == sid) & (self.df["syn_time"] == t0)]
-        # Initialize the output dictionary
-        output = {}
-        # For each source, find the element with the closest time to t0 that is before t0
-        for source_idx in range(self.get_n_sources()):
-            source_idx_tensor = torch.tensor(source_idx, dtype=torch.float32)
-            # Isolate the elements from that source
-            sample_source = sample[sample["source"] == source_idx]
-            # If there is no element for that source, fill with NaNs
-            if len(sample_source) == 0:
-                # Retrieve the height and width of the source
-                h, w = self.datasets[source_idx].get_spatial_size()
-                channels = self.datasets[source_idx].get_n_variables()
-                # Fill with NaNs
-                output[self.sources[source_idx].name] = (
-                    source_idx_tensor,
-                    torch.tensor(float("nan")),
-                    torch.full((2, h, w), float("nan")),
-                    torch.full((h, w), float("nan")),
-                    torch.full((channels, h, w), float("nan")),
-                )
-            else:
-                # Retrieve the element from the single source dataset
-                c, d, v = self.datasets[source_idx].get_sample(sid, sample_source["time"].iloc[0])
-                output[self.sources[source_idx].name] = (
-                    source_idx_tensor,
-                    torch.tensor(
-                        (t0 - sample_source["time"].iloc[0]).total_seconds() / 3600,
-                        dtype=torch.float32,
-                    ),
-                    torch.tensor(c, dtype=torch.float32),
-                    torch.tensor(d, dtype=torch.float32),
-                    torch.tensor(v, dtype=torch.float32),
-                )
-
-        return output
-
     def get_n_variables(self):
         """Returns a dict {source_name: n_variables}."""
-        return {source.name: source.n_variables() for source in self.sources}
+        return {source_name: len(variables) for source_name, variables in self.source_variables.items()}
 
     def get_n_sources(self):
         """Returns the number of sources."""
-        return len(self.sources)
+        return len(self.source_names)

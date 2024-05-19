@@ -4,16 +4,17 @@ Preprocesses the TC-Primed dataset by normalizing the data, treating missing val
 and formatting the result into the sources tree.
 """
 
-import yaml
 import hydra
 import xarray as xr
 import netCDF4 as nc
 import numpy as np
+from dask.diagnostics import ProgressBar
 from omegaconf import OmegaConf
 from tqdm import tqdm
 from concurrent.futures import ProcessPoolExecutor
 from xarray.core.dtypes import NA
 from pathlib import Path
+from preproc.utils import list_tc_primed_sources, list_tc_primed_storm_files
 
 
 def pad_dataset(ds, max_size):
@@ -49,184 +50,275 @@ def reverse_spatially(ds):
     return ds
 
 
-def process_swaths(sensat, swath, files, dest_path, cfg, common_size=None):
-    """Preprocesses the data for a given swath."""
+def preprocess_source_files(ds, max_size):
+    # Discard the 'ScanTime' and 'angle_bins' variables
+    ds = ds.drop_vars(["ScanTime", "angle_bins"])
+    # Reverse the dataset spatially if the image was taken on the descending pass
+    ds = reverse_spatially(ds)
+    return pad_dataset(ds, max_size)
+
+
+def process_swath(sensat, swath, files, dest_path, cfg, use_cache=True, verbose=True):
+    """Computes the normalization constants and spatial size for a given swath.
+
+    Returns:
+        mean (xarray.Dataset): the mean of the training set for each band
+        std (xarray.Dataset): the standard deviation of the training set for each band
+        max_size (tuple): the maximum size of the images from the swath
+    """
     print(f"{sensat}: processing swath {swath}")
     # Create the destination directory dest_path/under microwave/SENSOR_SATELLITE/swath/
     dest_swath_dir = dest_path / "microwave" / sensat / swath
     dest_swath_dir.mkdir(parents=True, exist_ok=True)
-    if common_size is not None:
-        max_size = common_size
-    else:
-        # Although a swath always contains the same bands, the size of the images is not
-        # identical across the samples, due to missing values that have been removed.
-        # Therefore, we can't stack the images into a single xarray dataset just yet.
-        # To do so, we'll pad all images from the same swath to the same size. That size
-        # is the maximum size of all images from the swath.
+    # Although a swath always contains the same bands, the size of the images is not
+    # identical across the samples, due to missing values that have been removed.
+    # Therefore, we can't stack the images into a single xarray dataset just yet.
+    # To do so, we'll pad all images from the same swath to the same size. That size
+    # is the maximum size of all images from the swath.
+    if not use_cache or not (dest_swath_dir / "max_size.txt").exists():
         # - Retrieve the maximum size of the images from the swath
         max_size = [0, 0]
-        for file in files:
+        if verbose:
+            print("Retrieving the maximum size of the images")
+        iterator = tqdm(files) if verbose else files
+        for file in iterator:
             with nc.Dataset(file, "r") as ds:
                 dims = ds["passive_microwave"][swath].dimensions
                 size = (dims["scan"].size, dims["pixel"].size)
                 max_size[0] = max(max_size[0], size[0])
                 max_size[1] = max(max_size[1], size[1])
+        # Write the max_size to a dest_swath_dir/max_size.txt file
+        with open(dest_swath_dir / "max_size.txt", "w") as f:
+            f.write(f"{max_size[0]},{max_size[1]}")
+    else:
+        with open(dest_swath_dir / "max_size.txt", "r") as f:
+            max_size = list(map(int, f.read().split(",")))
 
-    # - Load all images after padding them via the preprocessing function
-    def _preprocess(ds):
-        # Discard the 'ScanTime' and 'angle_bins' variables
-        ds = ds.drop_vars(["ScanTime", "angle_bins"])
-        # Reverse the dataset spatially if the image was taken on the descending pass
-        ds = reverse_spatially(ds)
-        return pad_dataset(ds, max_size)
-
-    dataset = xr.open_mfdataset(
-        files,
-        concat_dim="sample",
-        combine="nested",
-        group=f"passive_microwave/{swath}",
-        preprocess=_preprocess,
-        parallel=False,
-    )
-    # Now, load the overpass_metadata group of the files, which notably include
-    # the overpass time, basin, year and storm number.
-    meta = (
-        xr.concat(
-            [xr.open_dataset(file, group="overpass_metadata") for file in files],
-            dim="time",
+    # Try to load previous normalization values if they exist
+    if not use_cache or not (dest_swath_dir / "normalization_mean.nc").exists():
+        dataset = xr.open_mfdataset(
+            files,
+            concat_dim="sample",
+            combine="nested",
+            group=f"passive_microwave/{swath}",
+            preprocess=lambda ds: preprocess_source_files(ds, max_size),
+            parallel=True,
         )
-        .rename_dims({"time": "sample"})
-        .reset_index("time")
-        .reset_coords()
-    )
-    meta = meta.set_coords(["season", "basin", "cyclone_number", "time"])
-    # Normalization:
-    # - Retrieve which seasons are used for the validation and test sets
-    # - Compute the mean and standard deviation of each band, without considering missing values,
-    #   over the seasons that are not used for validation or test
-    # - Normalize the data by subtracting the mean and dividing by the standard deviation
-    val_seasons, test_seasons = cfg['general_settings']['val_seasons'], cfg['general_settings']['test_seasons']
-    seasons = np.unique(meta["season"].values)
-    train_seasons = [season for season in seasons if season not in val_seasons + test_seasons]
-    train_ds = dataset.where(meta["season"].isin(train_seasons), drop=True)
-    mean = train_ds.mean(dim=["sample", "scan", "pixel"], skipna=True)
-    std = train_ds.std(dim=["sample", "scan", "pixel"], skipna=True)
-    # To reinitialize the chunking, xarray advises to write the mean/std to a file and reload them.
-    mean.to_netcdf(dest_swath_dir / "normalization_mean.nc")
-    std.to_netcdf(dest_swath_dir / "normalization_std.nc")
-    # Reload the mean and standard deviation
+        # Now, load the overpass_metadata group of the files, which notably include
+        # the overpass time, basin, year and storm number.
+        meta = (
+            xr.open_mfdataset(
+                files,
+                concat_dim="time",
+                combine="nested",
+                group="overpass_metadata",
+                parallel=False,
+            )
+            .rename_dims({"time": "sample"})
+            .reset_index("time")
+            .reset_coords()
+            .load()
+        )
+        meta = meta.set_coords(["season", "basin", "cyclone_number", "time"])
+        # Normalization:
+        # - Retrieve which seasons are used for the validation and test sets
+        # - Compute the mean and standard deviation of each band, without considering missing values,
+        #   over the seasons that are not used for validation or test
+        # - Normalize the data by subtracting the mean and dividing by the standard deviation
+        val_seasons, test_seasons = (
+            cfg["general_settings"]["val_seasons"],
+            cfg["general_settings"]["test_seasons"],
+        )
+        seasons = np.unique(meta["season"].values)
+        train_seasons = [season for season in seasons if season not in val_seasons + test_seasons]
+        train_ds = dataset.where(meta["season"].isin(train_seasons), drop=True)
+        mean = train_ds.mean(dim=["sample", "scan", "pixel"], skipna=True)
+        std = train_ds.std(dim=["sample", "scan", "pixel"], skipna=True)
+        # To reinitialize the chunking, xarray advises to write the mean/std to a file and reload them.
+        # Use the dask diagnostics progress bar to monitor the progress of the computation
+        if verbose:
+            print("Computing normalization values")
+            with ProgressBar():
+                mean = mean.compute()
+                std = std.compute()
+        mean.to_netcdf(dest_swath_dir / "normalization_mean.nc")
+        std.to_netcdf(dest_swath_dir / "normalization_std.nc")
+        dataset.close()
+        meta.close()
+    # (Re)load the mean and standard deviation
     mean = xr.open_dataset(dest_swath_dir / "normalization_mean.nc")
     std = xr.open_dataset(dest_swath_dir / "normalization_std.nc")
-    # Normalize the whole dataset with the mean and standard deviation from the training set
-    dataset = (dataset - mean) / std
-    # Add the time, basin, cyclone_number, season, instrument_name, platform_name,
-    # coverage_fraction and ERA5_time variables to the dataset
-    meta_vars = [
-        "time",
-        "basin",
-        "cyclone_number",
-        "season",
-        "instrument_name",
-        "platform_name",
-        "ERA5_time",
-        "coverage_fraction",
-    ]
-    dataset = dataset.assign({var: meta[var] for var in meta_vars})
-    # Note: the previous line also sets meta's coordinates as coordinates for dataset.
-
-    # Transform the "intstrument_name" and "platform_name" variables into a single
-    # "sensor_satellite" variable
-    dataset = dataset.assign_coords(
-        sample=[dataset["instrument_name"][0].item() + "_" + dataset["platform_name"][0].item()]
-        * dataset["sample"].size
-    )
-    dataset = dataset.drop_vars(["instrument_name", "platform_name"])
-
-    # Compute the "dist_to_storm_center" variable from x and y
-    # where x is the east-west distance from the storm center. Note: this results in an about
-    # 0.5% error compared to using the ellipsoidal distance
-    # (see https://geopy.readthedocs.io/en/stable/#module-geopy.distance)
-    dataset["dist_to_storm_center"] = (dataset["x"] ** 2 + dataset["y"] ** 2) ** 0.5
-
-    # The results will be stored under
-    # dest_path/microwave/SENSOR_SATELLITE/swath/SEASON.nc
-    for season in np.unique(dataset['season'].values):
-        season_ds = dataset.sel(sample=dataset['season'] == season)
-        season_ds.to_netcdf(dest_swath_dir / f"{season}.nc")
-    print(f"{sensat}: {swath} done")
+    return mean, std, max_size
 
 
-def process_sensat_pair(sensat, overpass_files, dest_path, cfg, common_size=None):
-    """Preprocesses the data for a given sensor/satellite pair."""
-    print(f"Processing sensor/satellite pair {sensat}")
-    # Retrieve the list of files whose stem contains the sensor/satellite pair
-    files = [file for file in overpass_files if sensat in file.stem]
-    # We need to open a file with netCDF4 to retrieve the list of swaths
-    with nc.Dataset(files[0], "r") as ds:
-        swaths = [swath for swath in ds["passive_microwave"].groups.keys()]
-    # For each swath, preprocess the data
-    for swath in swaths:
-        process_swaths(sensat, swath, files, dest_path, cfg, common_size=common_size)
+def process_storm(
+    season,
+    basin,
+    number,
+    files,
+    sen_sat_pairs,
+    sen_sat_swaths,
+    means,
+    stds,
+    max_sizes,
+    dest_path,
+    metadata_path,
+    verbose=True,
+):
+    """For a given storm, loads all files related to it, normalizes all sources, applies
+    some preprocessing, and saves the result."""
+    sid = f"{season}{basin}{number}"
+    if verbose:
+        print(f"Processing storm {sid}")
+    # Save the storm's data to the directory dest_path/season/basin/sid.nc
+    # Each source will be stored in the netcdf group 'SENSOR_SATELLITE_swath'
+    storm_dest_dir = dest_path / str(season) / str(basin)
+    storm_dest_dir.mkdir(parents=True, exist_ok=True)
+    storm_dest_path = storm_dest_dir / f"{sid}.nc"
+    # We'll write into the result file in append mode. To make sure we start from scratch,
+    # we'll delete the file if it already exists.
+    if storm_dest_path.exists():
+        storm_dest_path.unlink()
+    # We'll process the storm source by source
+    for sensat in sen_sat_pairs:
+        # Isolate the files corresponding to the sensor-satellite pair
+        sen_sat_files = [file for file in files if sensat in file.stem]
+        if len(sen_sat_files) == 0:
+            continue
+        for swath in sen_sat_swaths[sensat]:
+            # if not (sensat == "GMI_GPM" and swath == "S2"):
+            #   continue
+            # Load the files
+            dataset = xr.concat(
+                [
+                    preprocess_source_files(
+                        xr.open_dataset(
+                            file,
+                            group=f"passive_microwave/{swath}",
+                        ),
+                        max_sizes[sensat, swath],
+                    )
+                    for file in sen_sat_files
+                ],
+                dim="sample",
+            ).load()
+            # Load the storm's metadata
+            storm_meta = (
+                xr.concat(
+                    [
+                        xr.open_dataset(
+                            file,
+                            group="overpass_metadata",
+                        )
+                        for file in sen_sat_files
+                    ],
+                    dim="time",
+                )
+                .rename_dims({"time": "sample"})
+                .reset_index("time")
+                .reset_coords()
+                .load()
+            )
+            dataset = dataset.assign_coords(
+                storm_meta[["season", "basin", "cyclone_number", "time"]]
+            )
+            # Compute the distance between each pixel and the storm center as a new variable
+            # using the 'x' and 'y' variables
+            dataset["dist_to_center"] = np.sqrt(dataset["x"] ** 2 + dataset["y"] ** 2)
+            dataset = dataset.drop_vars(["x", "y"])
+            # Normalize the data, only for the variables that are in means and stds
+            for var in means[sensat, swath].data_vars:
+                if var in dataset:
+                    dataset[var] = (dataset[var] - means[sensat, swath][var]) / stds[
+                        sensat, swath
+                    ][var]
+            # Save the dataset
+            dataset.to_netcdf(storm_dest_dir / f"{sid}.nc", group=f"{sensat}_{swath}", mode="a")
+            dataset.close()
+            # Append the metadata to the CSV metadata file:
+            # SID, time, season, basin, cyclone_number, sat_sensor_swath, "2D"
+            metadata = storm_meta[["time", "season", "basin", "cyclone_number"]].to_dataframe()
+            metadata["sid"] = [sid] * len(metadata)
+            metadata["source_name"] = [f"{sensat}_{swath}"] * len(metadata)
+            metadata["dim"] = ["2D"] * len(metadata)
+            metadata.to_csv(metadata_path, mode="a", header=not metadata_path.exists())
+            storm_meta.close()
 
 
 @hydra.main(config_path="../conf/", config_name="config", version_base=None)
 def main(cfg):
     cfg = OmegaConf.to_container(cfg, resolve=True)
-    # Load the paths configuration file
-    with open("conf/paths/paths.yaml", "r") as file:
-        paths_cfg = yaml.safe_load(file)
-    tc_primed_path = Path(paths_cfg["raw_datasets"]) / "tc_primed"
-    dest_path = Path(paths_cfg["sources"]) / "tc_primed"
-    # The raw dataset has the structure tc_primed/{year}/{basin}/{number}/{filename}.nc
-    # Retrieve all filenames for all years
-    all_files = []
-    for year in tc_primed_path.iterdir():
-        for basin in year.iterdir():
-            for number in basin.iterdir():
-                all_files.extend(number.glob("*.nc"))
-    # The filenames are formatted as:
-    # - TCPRIMED_VERSION_BASINNUMBERYEAR_SENSOR_SATELLITE_IMGNUMBER_YYYYMMDDHHmmSS.nc
-    #   for the overpass files;
-    # - TCPRIMED_VERSION_BASINNUMBERYEAR_era5_START_END.nc for the environmental files.
-    # Isolate the overpass files:
-    overpass_files = [file for file in all_files if "era5" not in file.stem]
-    # Deduce the list of strings {sensor}_{satellite} from the filenames
-    sen_sat_pairs = set()
-    for file in overpass_files:
-        sen_sat_pairs.add("_".join(file.stem.split("_")[3:5]))
-    sen_sat_pairs = sorted(list(sen_sat_pairs))
-    # If the common_size flag is set, we pad all images to a common size. For this, we need to
-    # retrieve the maximum size of all images from the dataset.
-    if 'common_size' in cfg:
-        print("Retrieving the maximum size of all images from the dataset")
-        max_size = [0, 0]
-        for file in tqdm(overpass_files):
-            with nc.Dataset(file, "r") as ds:
-                for swath in ds["passive_microwave"].groups.keys():
-                    dims = ds["passive_microwave"][swath].dimensions
-                    size = (dims["scan"].size, dims["pixel"].size)
-                    max_size[0] = max(max_size[0], size[0])
-                    max_size[1] = max(max_size[1], size[1])
+    # Path to the raw dataset
+    tc_primed_path = Path(cfg["paths"]["raw_datasets"]) / "tc_primed"
+    # Path to where the normalization cosntants and other intermediate results specific
+    # to each source will be stored
+    sources_path = Path(cfg["paths"]["sources"]) / "tc_primed"
+    # Path to where the preprocessed dataset will be stored (as netCDF files)
+    dest_path = Path(cfg["paths"]["preprocessed_dataset"])
+    # Path to where the metadata will be stored
+    metadata_path = Path(cfg["paths"]["metadata"])
+    use_cache = cfg["use_cache"] if "use_cache" in cfg else False
+    if not use_cache:
+        print("Not using cache. Use +use_cache=true to use cache.")
     else:
-        max_size = None
-    # Run the preprocessing for each sensor/satellite pair asynchronously
-    # if the "workers" argument is set via hydra
-    if "workers" in cfg:
-        with ProcessPoolExecutor(max_workers=cfg['workers']) as executor:
+        print("\033[91mUsing cache. Use +use_cache=false or remove arg to disable cache.\033[0m")
+    # Retrieve the list of files from the TC-Primed dataset
+    sen_sat_pairs, sen_sat_files, sen_sat_swaths = list_tc_primed_sources(tc_primed_path)
+    # Compute the normalization values for each swath
+    print("Computing normalization constants")
+    means, stds, max_sizes = {}, {}, {}
+    for sensat in sen_sat_pairs:
+        for swath in sen_sat_swaths[sensat]:
+            files = sen_sat_files[sensat]
+            mean, std, max_size = process_swath(sensat, swath, files, sources_path, cfg, use_cache)
+            means[sensat, swath] = mean
+            stds[sensat, swath] = std
+            max_sizes[sensat, swath] = max_size
+    # Erase the metadata file if it already exists
+    if metadata_path.exists():
+        metadata_path.unlink()
+    # Process the storms
+    print("Processing storms")
+    storm_files = list_tc_primed_storm_files(tc_primed_path)
+    if 'n_workers' in cfg:
+        n_workers = cfg['n_workers']
+        # Process the storms in parallel, with a progress bar
+        with ProcessPoolExecutor(max_workers=n_workers) as executor:
             futures = [
                 executor.submit(
-                    process_sensat_pair, sensat, overpass_files, dest_path, cfg, common_size=max_size
+                    process_storm,
+                    season,
+                    basin,
+                    number,
+                    files,
+                    sen_sat_pairs,
+                    sen_sat_swaths,
+                    means,
+                    stds,
+                    max_sizes,
+                    dest_path,
+                    metadata_path,
+                    verbose=False,
                 )
-                for sensat in sen_sat_pairs
+                for (season, basin, number), files in storm_files.items()
             ]
-            # Wait for all futures to complete
-            for future in futures:
+            for future in tqdm(futures):
                 future.result()
-            # Close the executor
-            executor.shutdown()
     else:
-        for sensat in sen_sat_pairs:
-            process_sensat_pair(sensat, overpass_files, dest_path, cfg, common_size=max_size)
+        for (season, basin, number), files in tqdm(storm_files.items()):
+            process_storm(
+                season,
+                basin,
+                number,
+                files,
+                sen_sat_pairs,
+                sen_sat_swaths,
+                means,
+                stds,
+                max_sizes,
+                dest_path,
+                metadata_path,
+            )
 
 
 if __name__ == "__main__":

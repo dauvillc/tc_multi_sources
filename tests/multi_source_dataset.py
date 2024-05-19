@@ -3,19 +3,20 @@ import matplotlib.pyplot as plt
 import hydra
 from omegaconf import DictConfig, OmegaConf
 from torch.utils.data import DataLoader
-from time import time
 from tqdm import trange
-from multi_sources.data_processing.utils import read_sources
 from multi_sources.data_processing.multi_source_dataset import MultiSourceDataset
+from pyinstrument import Profiler
 
 
 @hydra.main(config_path="../conf/", config_name="config", version_base=None)
 def main(cfg: DictConfig):
+    profiler = Profiler()
     cfg = OmegaConf.to_object(cfg)
-    # Load the sources
-    sources = read_sources(cfg['sources'])
     # Create the dataset
-    dataset = MultiSourceDataset(sources, load_in_memory=cfg['general_settings']['load_in_memory'])
+    metadata_path = cfg['paths']['metadata']
+    dataset_dir = cfg['paths']['preprocessed_dataset']
+    dataset = MultiSourceDataset(metadata_path, dataset_dir,
+                                 include_seasons=[2016])
     print(f"Dataset length: {len(dataset)} samples")
     # Try loading one sample
     sample = dataset[0]
@@ -30,17 +31,13 @@ def main(cfg: DictConfig):
     axs[2].set_title("First variable")
     plt.savefig('tests/figures/multi_source_dataset_sample.png')
 
-    # Measure the time to iterate over the dataset with a DataLoader
+    # Profile an iteration over the dataset
+    profiler.start()
     dataloader = DataLoader(dataset, batch_size=64, num_workers=0, shuffle=True)
-    start = time()
-    for i, batch in zip(trange(len(dataset) // 64), dataloader):
+    for i, batch in zip(trange(3), dataloader):
         pass
-    print(f"Time to iterate over all samples: {time() - start:.2f} seconds")
-
-    # Now, create the same dataset, but exclude the 2017 season.
-    print("Now excluding the years 2016 and 2017")
-    dataset = MultiSourceDataset(sources, exclude_seasons=[2017])
-    print(f"Dataset length: {len(dataset)} samples")
+    profiler.stop()
+    profiler.open_in_browser()
 
 
 if __name__ == "__main__":
