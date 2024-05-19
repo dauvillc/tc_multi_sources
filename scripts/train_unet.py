@@ -6,7 +6,6 @@ from pytorch_lightning.loggers import WandbLogger
 from multi_sources.models.unet import UNet
 from multi_sources.structure.mae import MultisourceMaskedAutoencoder
 from torch.utils.data import DataLoader
-from multi_sources.data_processing.utils import read_sources
 from multi_sources.data_processing.multi_source_dataset import MultiSourceDataset
 from omegaconf import DictConfig, OmegaConf
 
@@ -14,13 +13,14 @@ from omegaconf import DictConfig, OmegaConf
 @hydra.main(version_base=None, config_path="../conf", config_name="config")
 def main(cfg: DictConfig):
     cfg = OmegaConf.to_object(cfg)
-    # Load the sources
-    sources = read_sources(cfg["sources"])
     # Create the dataset
-    dataset = MultiSourceDataset(sources, load_in_memory=cfg['general_settings']['load_in_memory'])
+    metadata_path = cfg['paths']['metadata']
+    dataset_dir = cfg['paths']['preprocessed_dataset']
+    dataset = MultiSourceDataset(metadata_path, dataset_dir,
+                                 include_seasons=[2016])
     print(f"Dataset length: {len(dataset)} samples")
     # Create the dataloader
-    dataloader = DataLoader(dataset, batch_size=64, workers=27)
+    dataloader = DataLoader(dataset, batch_size=8, num_workers=2)
     # Create the model
     model = UNet(dataset.get_n_variables(), 3, 1, 3).float()
     # Create the MAE
