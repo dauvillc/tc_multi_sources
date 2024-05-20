@@ -66,9 +66,10 @@ def process_swath(sensat, swath, files, dest_path, cfg, use_cache=True, verbose=
         std (xarray.Dataset): the standard deviation of the training set for each band
         max_size (tuple): the maximum size of the images from the swath
     """
+    sat, sensor = sensat.split("_")
     print(f"{sensat}: processing swath {swath}")
-    # Create the destination directory dest_path/under microwave/SENSOR_SATELLITE/swath/
-    dest_swath_dir = dest_path / "microwave" / sensat / swath
+    # Create the destination directory dest_path/under microwave/SENSOR.SATELLITE/swath/
+    dest_swath_dir = dest_path / "microwave" / sat / sensor / swath
     dest_swath_dir.mkdir(parents=True, exist_ok=True)
     # Although a swath always contains the same bands, the size of the images is not
     # identical across the samples, due to missing values that have been removed.
@@ -233,13 +234,14 @@ def process_storm(
                         sensat, swath
                     ][var]
             # Save the dataset
-            dataset.to_netcdf(storm_dest_dir / f"{sid}.nc", group=f"{sensat}_{swath}", mode="a")
+            full_source_name = f'tc_primed.microwave.{sensat}.{swath}'
+            dataset.to_netcdf(storm_dest_dir / f"{sid}.nc", group=full_source_name, mode="a")
             dataset.close()
             # Append the metadata to the CSV metadata file:
             # SID, time, season, basin, cyclone_number, sat_sensor_swath, "2D"
             metadata = storm_meta[["time", "season", "basin", "cyclone_number"]].to_dataframe()
             metadata["sid"] = [sid] * len(metadata)
-            metadata["source_name"] = [f"{sensat}_{swath}"] * len(metadata)
+            metadata["source_name"] = [full_source_name] * len(metadata)
             metadata["dim"] = ["2D"] * len(metadata)
             metadata.to_csv(metadata_path, mode="a", header=not metadata_path.exists())
             storm_meta.close()

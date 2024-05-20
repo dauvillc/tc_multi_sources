@@ -7,6 +7,7 @@ from multi_sources.models.unet import UNet
 from multi_sources.structure.mae import MultisourceMaskedAutoencoder
 from torch.utils.data import DataLoader
 from multi_sources.data_processing.multi_source_dataset import MultiSourceDataset
+from multi_sources.data_processing.utils import read_sources
 from omegaconf import DictConfig, OmegaConf
 
 
@@ -16,7 +17,8 @@ def main(cfg: DictConfig):
     # Create the dataset
     metadata_path = cfg['paths']['metadata']
     dataset_dir = cfg['paths']['preprocessed_dataset']
-    dataset = MultiSourceDataset(metadata_path, dataset_dir,
+    sources = read_sources(cfg['sources'])
+    dataset = MultiSourceDataset(metadata_path, dataset_dir, sources,
                                  include_seasons=[2016])
     print(f"Dataset length: {len(dataset)} samples")
     # Create the dataloader

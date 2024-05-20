@@ -27,6 +27,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         self,
         metadata_path,
         dataset_dir,
+        sources,
         include_seasons=None,
         exclude_seasons=None,
         dt_max=24,
@@ -38,6 +39,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                 columns 'sid', 'source_name', 'season', 'basin', 'cyclone_number', 'time'.
             dataset_dir (str): The directory containing the preprocessed dataset. The structure should be
                 dataset_dir/season/basin/sid.nc.
+            sources (list of :obj:`Source`): The sources to include in the dataset.
             include_seasons (list of int): The years to include in the dataset. If None, all years are included.
             exclude_seasons (list of int): The years to exclude from the dataset. If None, no years are excluded.
             dt_max (int): The maximum time delta between the elements returned for each source,
@@ -47,22 +49,24 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         """
         self.dt_max = pd.Timedelta(dt_max, unit="h")
         self.dataset_dir = Path(dataset_dir)
+        self.sources = sources
         # Load the metadata file
         self.df = pd.read_csv(metadata_path, parse_dates=["time"])
+        # Filter the dataframe to only keep the rows where source_name is the name of a source
+        # in self.sources
+        source_names = [source.name for source in self.sources]
+        self.df = self.df[self.df["source_name"].isin(source_names)]
         # Associate each source name with an index
         self.source_names = self.df["source_name"].unique()
         self.source_indices = {
             source_name: idx for idx, source_name in enumerate(self.source_names)
         }
         self.df["source"] = self.df["source_name"].map(self.source_indices)
-        # We'll need to know the names of the variables in each source to access them and
-        # to know the number of channels in the tensors.
-        # We'll also store the shape of the variables to create the tensors.
-        self.source_variables, self.source_shapes = {}, {}
+        # We'll need to know the shape of the variables to create the tensors.
+        self.source_shapes = {}
         for source_name in self.source_names:
             # Isolate the first element for each source
             first_element = self.df[self.df["source_name"] == source_name].iloc[0]
-            # Open the file and count the number of variables
             # The files are stored under dataset_dir/season/basin/sid.nc
             with xr.open_dataset(
                 self.dataset_dir
@@ -71,13 +75,6 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                 / f"{first_element['sid']}.nc",
                 group=source_name,
             ) as sample:
-                # Only include the variables that are not coordinates and are not
-                # 'dist_to_center', 'latitude', 'longitude'.
-                self.source_variables[source_name] = [
-                    var
-                    for var in sample.data_vars
-                    if var not in ["dist_to_center", "latitude", "longitude"]
-                ]
                 # Store the shape of the variables
                 self.source_shapes[source_name] = [
                     size for dim, size in sample.sizes.items() if dim != "sample"
@@ -157,7 +154,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                     # No element available for this source
                     # Create a tensor of the appropriate shape filled with NaNs
                     source_shape = self.source_shapes[source_name]
-                    source_channels = len(self.source_variables[source_name])
+                    source_channels = self.get_n_variables()[source_name]
                     output[source_name] = (
                         source_tensor,  # S
                         torch.tensor(float("nan"), dtype=torch.float32),  # DT
@@ -191,7 +188,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                         torch.tensor(sample["dist_to_center"].values, dtype=torch.float32),  # D
                         torch.stack([
                             torch.tensor(sample[var].values, dtype=torch.float32)
-                            for var in self.source_variables[source_name]
+                            for var in self.get_source_variables()[source_name]
                         ], dim=0),
                     )
         return output
@@ -199,10 +196,16 @@ class MultiSourceDataset(torch.utils.data.Dataset):
     def __len__(self):
         return len(self.samples_df)
 
+    def get_source_variables(self):
+        """Returns a dict {source_name: [variable_name]}."""
+        return {
+            source.name: source.variables for source in self.sources
+        }
+
     def get_n_variables(self):
         """Returns a dict {source_name: n_variables}."""
         return {
-            source_name: len(variables) for source_name, variables in self.source_variables.items()
+                source.name: len(source.variables) for source in self.sources
         }
 
     def get_n_sources(self):

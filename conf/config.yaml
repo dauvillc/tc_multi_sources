@@ -1,5 +1,5 @@
 defaults:
   - paths/paths
   - sources:
-    - all_microwave
+    - selected_microwave
   - general_settings/general_settings

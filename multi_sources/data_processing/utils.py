@@ -46,7 +46,7 @@ def read_sources(sources_dict):
         sources (:obj:`list` of :obj:`multi_sources.data_processing.source.Source`): List of sources.
     """
     # The following function will return a dictionary with the following structure:
-    # {source.subsource. ... .lastsubsource: vars, env_vars, dim}
+    # {source_subsource. ... _lastsubsource: vars, env_vars, dim}
     sources = _get_leaf_subsources(sources_dict)
     # Rename the starting dot at the start of the source names
     sources = {key[1:]: value for key, value in sources.items()}
