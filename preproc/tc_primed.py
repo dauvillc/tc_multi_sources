@@ -223,6 +223,10 @@ def process_storm(
             dataset = dataset.assign_coords(
                 storm_meta[["season", "basin", "cyclone_number", "time"]]
             )
+            # Drop any encoding, to reduce the loading time of the preprocessed data
+            dataset = dataset.drop_encoding()
+            # Sort by time
+            dataset = dataset.sortby("time")
             # Compute the distance between each pixel and the storm center as a new variable
             # using the 'x' and 'y' variables
             dataset["dist_to_center"] = np.sqrt(dataset["x"] ** 2 + dataset["y"] ** 2)
