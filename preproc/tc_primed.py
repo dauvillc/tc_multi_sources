@@ -271,13 +271,39 @@ def main(cfg):
     # Compute the normalization values for each swath
     print("Computing normalization constants")
     means, stds, max_sizes = {}, {}, {}
-    for sensat in sen_sat_pairs:
-        for swath in sen_sat_swaths[sensat]:
-            files = sen_sat_files[sensat]
-            mean, std, max_size = process_swath(sensat, swath, files, sources_path, cfg, use_cache)
-            means[sensat, swath] = mean
-            stds[sensat, swath] = std
-            max_sizes[sensat, swath] = max_size
+    # Process each sensor-satellite pair in parallel
+    if 'n_workers' in cfg:
+        n_workers = cfg['n_workers']
+        futures = []
+        with ProcessPoolExecutor(max_workers=n_workers) as executor:
+            for sensat in sen_sat_pairs:
+                for swath in sen_sat_swaths[sensat]:
+                    futures.append(
+                        executor.submit(
+                            process_swath,
+                            sensat,
+                            swath,
+                            sen_sat_files[sensat],
+                            sources_path,
+                            cfg,
+                            use_cache,
+                            verbose=False,
+                        )
+                    )
+            for future in tqdm(futures):
+                mean, std, max_size = future.result()
+                means[sensat, swath] = mean
+                stds[sensat, swath] = std
+                max_sizes[sensat, swath] = max_size
+    else:
+        for sensat in sen_sat_pairs:
+            for swath in sen_sat_swaths[sensat]:
+                mean, std, max_size = process_swath(
+                    sensat, swath, sen_sat_files[sensat], sources_path, cfg, use_cache
+                )
+                means[sensat, swath] = mean
+                stds[sensat, swath] = std
+                max_sizes[sensat, swath] = max_size
     # Erase the metadata file if it already exists
     if metadata_path.exists():
         metadata_path.unlink()
