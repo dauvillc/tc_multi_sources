@@ -93,6 +93,9 @@ class MultiSourceDataset(torch.utils.data.Dataset):
             self.df = self.df[~self.df["season"].isin(exclude_seasons)]
         if len(self.df) == 0:
             raise ValueError("No elements available for the selected sources and seasons.")
+        # Create a copy of self.df which won't be modified. This dataframe will work as an exact index
+        # of the xarray Datasets and will be used to retrieve the elements using isel instead of sel.
+        self.df_index = self.df.copy().sort_values(["sid", "source", "time"]).reset_index(drop=True)
         # Compute the synoptic time that is closest and after the element's time
         self.df["syn_time"] = self.df["time"].dt.ceil("6h")
         # For each element, compute the list of synoptic times that are within dt_max of the element's time
@@ -140,6 +143,8 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         output = {}
         # Isolate the rows of self.df corresponding to the given sid and syn_time
         sample_df = self.df[(self.df["sid"] == sid) & (self.df["syn_time"] == syn_time)]
+        # Isolate the rows of self.df_index corresponding to the given sid
+        df_index = self.df_index[self.df_index["sid"] == sid]
         season, basin = sample_df["season"].iloc[0], sample_df["basin"].iloc[0]
         # Open the netcdf file corresponding to the given sid, which contains the elements for each source
         # as groups.
@@ -171,9 +176,15 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                         ),
                     )
                 else:
+                    # Isolate the rows of self.df_index corresponding to the given source
+                    df_index_source = df_index[df_index["source_name"] == source_name].reset_index()
+                    # At this point, the ith row of df_index_source corresponds to the ith element
+                    # of the source in the netcdf file.
+                    # Isolate the row of df_index_source corresponding to the element at the given time
+                    df_index_source = df_index_source[df_index_source["time"] == df["time"].iloc[0]]
                     # Load the element as the netcdf group corresponding to the source name
                     sample = xr.open_dataset(NetCDF4DataStore(root, group=source_name))
-                    sample = sample.set_index(sample="time").sel(sample=df["time"].iloc[0])
+                    sample = sample.isel(sample=df_index_source.index[0])
                     dt = df["time"].iloc[0] - syn_time
                     output[source_name] = (
                         source_tensor,  # S
