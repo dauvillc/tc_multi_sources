@@ -2,4 +2,7 @@ defaults:
   - paths/paths
   - sources:
     - selected_microwave
-  - general_settings/general_settings
+  - general_settings:
+    - general_settings
+  - dataloader:
+    - dataloader
