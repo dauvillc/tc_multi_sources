@@ -22,9 +22,9 @@ def main(cfg: DictConfig):
                                  include_seasons=[2016])
     print(f"Dataset length: {len(dataset)} samples")
     # Create the dataloader
-    dataloader = DataLoader(dataset, batch_size=8, num_workers=2)
+    dataloader = DataLoader(dataset, **cfg['dataloader'])
     # Create the model
-    model = UNet(dataset.get_n_variables(), 3, 1, 3).float()
+    model = UNet(dataset.get_n_variables(), 5, 64, 3).float()
     # Create the MAE
     mae = MultisourceMaskedAutoencoder(model)
     # Create the logger
