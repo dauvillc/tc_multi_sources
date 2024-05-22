@@ -245,16 +245,19 @@ def process_storm(
             # Add the land-sea mask as a new variable.
             # We need to convert NaN values to 0, as the land-sea mask function does not handle them.
             # Note: globe.is_land expects the longitude to be in the range [-180, 180]
+            lon = np.nan_to_num(dataset.longitude.values)
+            lon[lon > 180] -= 360
             mask = globe.is_land(
                 np.nan_to_num(dataset.latitude.values),
-                np.nan_to_num(dataset.longitude.values - 180.0)
+                lon,
             )
             # Where the latitude and longitude are NaN, set the mask to NaN
             mask[np.isnan(dataset.latitude.values)] = np.nan
             dataset['land_mask'] = (('sample', 'scan', 'pixel'), mask)
             # Normalize the data, only for the variables that are in means and stds
+            # and that are not contextual variables ('latitude', 'longitude', 'land_mask').
             for var in means[sensat, swath].data_vars:
-                if var in dataset:
+                if var in dataset.data_vars and var not in ["latitude", "longitude", "land_mask"]:
                     dataset[var] = (dataset[var] - means[sensat, swath][var]) / stds[
                         sensat, swath
                     ][var]

@@ -14,7 +14,8 @@ class MultiSourceDataset(torch.utils.data.Dataset):
     The dataset yields maps {source_name: (S, DT, C, D, V)} where:
     - S is the source index.
     - DT is the time delta between the reference time and the time of the element, in hours.
-    - C is a tensor of shape (2, H, W) containing the coordinates (lat, lon) of each pixel.
+    - C is a tensor of shape (3, H, W) containing the coordinates (lat, lon) of each pixel,
+        and the land-sea mask.
     - D is a tensor of shape (H, W) containing the distance at each pixel to the center of the storm.
     - V is a tensor of shape (channels, H, W) containing the values of each pixel.
     If the element is not available for a source, DT, C, D, and V are filled with NaNs.
@@ -164,7 +165,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                         source_tensor,  # S
                         torch.tensor(float("nan"), dtype=torch.float32),  # DT
                         torch.full(
-                            (2, *source_shape), fill_value=float("nan"), dtype=torch.float32
+                            (3, *source_shape), fill_value=float("nan"), dtype=torch.float32
                         ),  # C
                         torch.full(
                             source_shape, fill_value=float("nan"), dtype=torch.float32
@@ -193,6 +194,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                             [
                                 torch.tensor(sample["latitude"].values, dtype=torch.float32),
                                 torch.tensor(sample["longitude"].values, dtype=torch.float32),
+                                torch.tensor(sample["land_mask"].values, dtype=torch.float32),
                             ],
                             dim=0,
                         ),  # C

@@ -10,7 +10,8 @@ class MultisourceMaskedAutoencoder(pl.LightningModule):
     - S is a tensor of shape (batch_size,) containing the source index.
     - DT is a tensor of shape (batch_size,) containing the time delta between the element's time
         and the reference time.
-    - C is a tensor of shape (batch_size, 2, H, W) containing the coordinates (lat, lon) of each pixel.
+    - C is a tensor of shape (batch_size, 3, H, W) containing the coordinates (lat, lon) of each pixel,
+        and the land mask.
     - D is a tensor of shape (batch_size, H, W) containing the distance to the storm center at each pixel.
     - V is a tensor of shape (batch_size, channels, H, W) containing the values of each pixel.
     The model is expected to receive the same input map, and return a map {source_name: V'} where V'

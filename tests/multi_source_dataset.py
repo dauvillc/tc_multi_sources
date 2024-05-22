@@ -11,7 +11,6 @@ from pyinstrument import Profiler
 
 @hydra.main(config_path="../conf/", config_name="config", version_base=None)
 def main(cfg: DictConfig):
-    profiler = Profiler()
     cfg = OmegaConf.to_object(cfg)
     # Create the dataset
     metadata_path = cfg['paths']['metadata']
@@ -19,6 +18,7 @@ def main(cfg: DictConfig):
     sources = read_sources(cfg['sources'])
     dataset = MultiSourceDataset(metadata_path, dataset_dir, sources,
                                  include_seasons=[2016])
+    
     print(f"Dataset length: {len(dataset)} samples")
     # Try loading one sample
     sample = dataset[0]
@@ -34,8 +34,9 @@ def main(cfg: DictConfig):
     plt.savefig('tests/figures/multi_source_dataset_sample.png')
 
     # Profile an iteration over the dataset
+    profiler = Profiler()
     profiler.start()
-    dataloader = DataLoader(dataset, batch_size=64, num_workers=0, shuffle=True)
+    dataloader = DataLoader(dataset, batch_size=64, num_workers=2, shuffle=True)
     for i, batch in zip(trange(len(dataloader)), dataloader):
         pass
     profiler.stop()

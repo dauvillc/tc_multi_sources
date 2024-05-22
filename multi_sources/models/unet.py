@@ -12,7 +12,8 @@ class UNet(nn.Module):
     - S is a tensor of shape (batch_size,) containing the source index.
     - DT is a tensor of shape (batch_size,) containing the time delta between the element's time
         and the reference time.
-    - C is a tensor of shape (batch_size, 2, H, W) containing the coordinates (lat, lon) of each pixel.
+    - C is a tensor of shape (batch_size, 3, H, W) containing the coordinates (lat, lon) of each pixel,
+        and the land-sea mask.
     - V is a tensor of shape (batch_size, channels, H, W) containing the values of each pixel.
     The model outputs a tensor of shape (batch_size, channels, H, W) containing the predicted values.
     The model expects H and W to be the same for all sources, and to be a multiple of 2^n_blocks.
@@ -39,8 +40,9 @@ class UNet(nn.Module):
         self.kernel_size = kernel_size
         # Compute the number of input channels for the first block:
         # for each source:
-        # 2 for the source and time delta, 2 for the coordinates, and the number of variables
-        self.input_channels = sum(2 + 2 + n for n in n_variables.values())
+        # 2 for the source and time delta, 3 for the coordinates and land mask,
+        # and the number of variables
+        self.input_channels = sum(2 + 3 + n for n in n_variables.values())
         # The number of output channels is the total number of variables
         self.output_channels = sum(n for n in n_variables.values())
         # Create the UNet
