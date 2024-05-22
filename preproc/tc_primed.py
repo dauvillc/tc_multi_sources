@@ -18,6 +18,18 @@ from pathlib import Path
 from preproc.utils import list_tc_primed_sources, list_tc_primed_storm_files
 
 
+# Order of the metadata columns in the CSV file
+_METADATA_COL_ORDER_ = [
+    "sid",
+    "time",
+    "season",
+    "basin",
+    "cyclone_number",
+    "source_name",
+    "dim",
+]
+
+
 def pad_dataset(ds, max_size):
     """
     Pads the dataset ds to the size max_size, by adding missing values
@@ -230,19 +242,22 @@ def process_storm(
             # using the 'x' and 'y' variables
             dataset["dist_to_center"] = np.sqrt(dataset["x"] ** 2 + dataset["y"] ** 2)
             dataset = dataset.drop_vars(["x", "y"])
+            # Add the land-sea mask as a new variable.
+            # We need to convert NaN values to 0, as the land-sea mask function does not handle them.
+            # Note: globe.is_land expects the longitude to be in the range [-180, 180]
+            mask = globe.is_land(
+                np.nan_to_num(dataset.latitude.values),
+                np.nan_to_num(dataset.longitude.values - 180.0)
+            )
+            # Where the latitude and longitude are NaN, set the mask to NaN
+            mask[np.isnan(dataset.latitude.values)] = np.nan
+            dataset['land_mask'] = (('sample', 'scan', 'pixel'), mask)
             # Normalize the data, only for the variables that are in means and stds
             for var in means[sensat, swath].data_vars:
                 if var in dataset:
                     dataset[var] = (dataset[var] - means[sensat, swath][var]) / stds[
                         sensat, swath
                     ][var]
-            # Add the land-sea mask as a new variable.
-            # We need to convert NaN values to 0, as the land-sea mask function does not handle them.
-            mask = globe.is_land(
-                np.nan_to_num(dataset.latitude.values), np.nan_to_num(dataset.longitude.values)
-            )
-            # Where the latitude and longitude are NaN, set the mask to NaN
-            mask[np.isnan(dataset.latitude.values)] = np.nan
             # Save the dataset
             full_source_name = f"tc_primed.microwave.{sensat}.{swath}"
             dataset.to_netcdf(storm_dest_dir / f"{sid}.nc", group=full_source_name, mode="a")
@@ -253,7 +268,8 @@ def process_storm(
             metadata["sid"] = [sid] * len(metadata)
             metadata["source_name"] = [full_source_name] * len(metadata)
             metadata["dim"] = ["2D"] * len(metadata)
-            metadata.to_csv(metadata_path, mode="a", header=not metadata_path.exists())
+            metadata = metadata[_METADATA_COL_ORDER_]
+            metadata.to_csv(metadata_path, mode="a", header=False)
             storm_meta.close()
 
 
@@ -316,6 +332,9 @@ def main(cfg):
     # Erase the metadata file if it already exists
     if metadata_path.exists():
         metadata_path.unlink()
+    # Create the header of the metadata file
+    with open(metadata_path, "w") as f:
+        f.write(",".join(_METADATA_COL_ORDER_) + "\n")
     # Process the storms
     print("Processing storms")
     storm_files = list_tc_primed_storm_files(tc_primed_path)
