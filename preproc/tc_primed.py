@@ -8,6 +8,7 @@ import hydra
 import xarray as xr
 import netCDF4 as nc
 import numpy as np
+from global_land_mask import globe
 from dask.diagnostics import ProgressBar
 from omegaconf import OmegaConf
 from tqdm import tqdm
@@ -235,8 +236,15 @@ def process_storm(
                     dataset[var] = (dataset[var] - means[sensat, swath][var]) / stds[
                         sensat, swath
                     ][var]
+            # Add the land-sea mask as a new variable.
+            # We need to convert NaN values to 0, as the land-sea mask function does not handle them.
+            mask = globe.is_land(
+                np.nan_to_num(dataset.latitude.values), np.nan_to_num(dataset.longitude.values)
+            )
+            # Where the latitude and longitude are NaN, set the mask to NaN
+            mask[np.isnan(dataset.latitude.values)] = np.nan
             # Save the dataset
-            full_source_name = f'tc_primed.microwave.{sensat}.{swath}'
+            full_source_name = f"tc_primed.microwave.{sensat}.{swath}"
             dataset.to_netcdf(storm_dest_dir / f"{sid}.nc", group=full_source_name, mode="a")
             dataset.close()
             # Append the metadata to the CSV metadata file:
@@ -272,13 +280,14 @@ def main(cfg):
     print("Computing normalization constants")
     means, stds, max_sizes = {}, {}, {}
     # Process each sensor-satellite pair in parallel
-    if 'n_workers' in cfg:
-        n_workers = cfg['n_workers']
+    if "n_workers" in cfg:
+        n_workers = cfg["n_workers"]
         futures = []
         with ProcessPoolExecutor(max_workers=n_workers) as executor:
             for sensat in sen_sat_pairs:
                 for swath in sen_sat_swaths[sensat]:
-                    futures.append(
+                    futures.append((
+                        (sensat, swath),
                         executor.submit(
                             process_swath,
                             sensat,
@@ -288,9 +297,9 @@ def main(cfg):
                             cfg,
                             use_cache,
                             verbose=False,
-                        )
+                        )),
                     )
-            for future in tqdm(futures):
+            for (sensat, swath), future in tqdm(futures):
                 mean, std, max_size = future.result()
                 means[sensat, swath] = mean
                 stds[sensat, swath] = std
@@ -310,8 +319,8 @@ def main(cfg):
     # Process the storms
     print("Processing storms")
     storm_files = list_tc_primed_storm_files(tc_primed_path)
-    if 'n_workers' in cfg:
-        n_workers = cfg['n_workers']
+    if "n_workers" in cfg:
+        n_workers = cfg["n_workers"]
         # Process the storms in parallel, with a progress bar
         with ProcessPoolExecutor(max_workers=n_workers) as executor:
             futures = [
