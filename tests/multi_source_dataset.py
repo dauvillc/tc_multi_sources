@@ -40,7 +40,8 @@ def main(cfg: DictConfig):
     for i, batch in zip(trange(len(dataloader)), dataloader):
         pass
     profiler.stop()
-    profiler.open_in_browser()
+    profiler.write_html('tests/outputs/profile_multi_source_dataset.html')
+    profiler.print()
 
 
 if __name__ == "__main__":
