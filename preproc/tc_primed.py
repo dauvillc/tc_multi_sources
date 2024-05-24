@@ -110,6 +110,31 @@ def process_swath(sensat, swath, files, dest_path, cfg, use_cache=True, verbose=
 
     # Try to load previous normalization values if they exist
     if not use_cache or not (dest_swath_dir / "normalization_mean.nc").exists():
+        # Normalization:
+        # - Retrieve which seasons are used for the validation and test sets
+        val_seasons, test_seasons = (
+            cfg["general_settings"]["val_seasons"],
+            cfg["general_settings"]["test_seasons"],
+        )
+        # - Isolate the files that aren't in the validation or test sets. A file belongs to a season
+        #   if one of the directories in its path is the season's name (e.g. ../2018/..).
+        files = [
+            file
+            for file in files
+            if all(str(season) not in file.parts for season in val_seasons + test_seasons)
+        ]
+        # If 'use_subsample' is set to True (or isn't specified), we'll only load a subset of the data
+        # for computing the normalization values. Note that the sensors' brightness temperatures are
+        # calibrated in TC-PRIMED, and the mean / std are supposedly stationnary, which means that
+        # using a subset of the data shouldn't significantly affect the normalization values.
+        if "use_subsample" not in cfg or cfg["use_subsample"]:
+            n_files = len(files)
+            # Use 5% of the files, with a minimum of 100 files
+            n_subsample = max(100, int(0.05 * n_files))
+            # If the number of files is less than 100, use all the files
+            n_subsample = min(n_files, n_subsample)
+            files = np.random.choice(files, n_subsample, replace=False)
+
         dataset = xr.open_mfdataset(
             files,
             concat_dim="sample",
@@ -126,28 +151,15 @@ def process_swath(sensat, swath, files, dest_path, cfg, use_cache=True, verbose=
                 concat_dim="time",
                 combine="nested",
                 group="overpass_metadata",
-                parallel=False,
+                parallel=True,
             )
             .rename_dims({"time": "sample"})
             .reset_index("time")
             .reset_coords()
             .load()
         )
-        meta = meta.set_coords(["season", "basin", "cyclone_number", "time"])
-        # Normalization:
-        # - Retrieve which seasons are used for the validation and test sets
-        # - Compute the mean and standard deviation of each band, without considering missing values,
-        #   over the seasons that are not used for validation or test
-        # - Normalize the data by subtracting the mean and dividing by the standard deviation
-        val_seasons, test_seasons = (
-            cfg["general_settings"]["val_seasons"],
-            cfg["general_settings"]["test_seasons"],
-        )
-        seasons = np.unique(meta["season"].values)
-        train_seasons = [season for season in seasons if season not in val_seasons + test_seasons]
-        train_ds = dataset.where(meta["season"].isin(train_seasons), drop=True)
-        mean = train_ds.mean(dim=["sample", "scan", "pixel"], skipna=True)
-        std = train_ds.std(dim=["sample", "scan", "pixel"], skipna=True)
+        mean = dataset.mean(dim=["sample", "scan", "pixel"], skipna=True)
+        std = dataset.std(dim=["sample", "scan", "pixel"], skipna=True)
         # To reinitialize the chunking, xarray advises to write the mean/std to a file and reload them.
         # Use the dask diagnostics progress bar to monitor the progress of the computation
         if verbose:
@@ -253,7 +265,7 @@ def process_storm(
             )
             # Where the latitude and longitude are NaN, set the mask to NaN
             mask[np.isnan(dataset.latitude.values)] = np.nan
-            dataset['land_mask'] = (('sample', 'scan', 'pixel'), mask)
+            dataset["land_mask"] = (("sample", "scan", "pixel"), mask)
             # Normalize the data, only for the variables that are in means and stds
             # and that are not contextual variables ('latitude', 'longitude', 'land_mask').
             for var in means[sensat, swath].data_vars:
@@ -305,18 +317,20 @@ def main(cfg):
         with ProcessPoolExecutor(max_workers=n_workers) as executor:
             for sensat in sen_sat_pairs:
                 for swath in sen_sat_swaths[sensat]:
-                    futures.append((
-                        (sensat, swath),
-                        executor.submit(
-                            process_swath,
-                            sensat,
-                            swath,
-                            sen_sat_files[sensat],
-                            sources_path,
-                            cfg,
-                            use_cache,
-                            verbose=False,
-                        )),
+                    futures.append(
+                        (
+                            (sensat, swath),
+                            executor.submit(
+                                process_swath,
+                                sensat,
+                                swath,
+                                sen_sat_files[sensat],
+                                sources_path,
+                                cfg,
+                                use_cache,
+                                verbose=False,
+                            ),
+                        ),
                     )
             for (sensat, swath), future in tqdm(futures):
                 mean, std, max_size = future.result()
