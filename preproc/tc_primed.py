@@ -136,7 +136,6 @@ def process_swath(sensat, swath, files, dest_path, cfg, use_cache=True, verbose=
             combine="nested",
             group=f"passive_microwave/{swath}",
             preprocess=lambda ds: preprocess_source_files(ds, max_size),
-            parallel=True,
         )
         # Now, load the overpass_metadata group of the files, which notably include
         # the overpass time, basin, year and storm number.
@@ -146,7 +145,6 @@ def process_swath(sensat, swath, files, dest_path, cfg, use_cache=True, verbose=
                 concat_dim="time",
                 combine="nested",
                 group="overpass_metadata",
-                parallel=True,
             )
             .rename_dims({"time": "sample"})
             .reset_index("time")
@@ -169,8 +167,8 @@ def process_swath(sensat, swath, files, dest_path, cfg, use_cache=True, verbose=
         dataset.close()
         meta.close()
     # (Re)load the mean and standard deviation
-    mean = xr.open_dataset(dest_swath_dir / "normalization_mean.nc")
-    std = xr.open_dataset(dest_swath_dir / "normalization_std.nc")
+    mean = xr.open_dataset(dest_swath_dir / "normalization_mean.nc").load()
+    std = xr.open_dataset(dest_swath_dir / "normalization_std.nc").load()
     return mean, std, max_size
 
 
