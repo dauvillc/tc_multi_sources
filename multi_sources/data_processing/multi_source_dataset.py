@@ -96,7 +96,9 @@ class MultiSourceDataset(torch.utils.data.Dataset):
             raise ValueError("No elements available for the selected sources and seasons.")
         # Create a copy of self.df which won't be modified. This dataframe will work as an exact index
         # of the xarray Datasets and will be used to retrieve the elements using isel instead of sel.
-        self.df_index = self.df.copy().sort_values(["sid", "source", "time"]).reset_index(drop=True)
+        self.df_index = (
+            self.df.copy().sort_values(["sid", "source", "time"]).reset_index(drop=True)
+        )
         # Compute the synoptic time that is closest and after the element's time
         self.df["syn_time"] = self.df["time"].dt.ceil("6h")
         # For each element, compute the list of synoptic times that are within dt_max of the element's time
@@ -178,11 +180,15 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                     )
                 else:
                     # Isolate the rows of self.df_index corresponding to the given source
-                    df_index_source = df_index[df_index["source_name"] == source_name].reset_index()
+                    df_index_source = df_index[
+                        df_index["source_name"] == source_name
+                    ].reset_index()
                     # At this point, the ith row of df_index_source corresponds to the ith element
                     # of the source in the netcdf file.
                     # Isolate the row of df_index_source corresponding to the element at the given time
-                    df_index_source = df_index_source[df_index_source["time"] == df["time"].iloc[0]]
+                    df_index_source = df_index_source[
+                        df_index_source["time"] == df["time"].iloc[0]
+                    ]
                     # Load the element as the netcdf group corresponding to the source name
                     sample = xr.open_dataset(NetCDF4DataStore(root, group=source_name))
                     sample = sample.isel(sample=df_index_source.index[0])
@@ -199,10 +205,13 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                             dim=0,
                         ),  # C
                         torch.tensor(sample["dist_to_center"].values, dtype=torch.float32),  # D
-                        torch.stack([
-                            torch.tensor(sample[var].values, dtype=torch.float32)
-                            for var in self.get_source_variables()[source_name]
-                        ], dim=0),
+                        torch.stack(
+                            [
+                                torch.tensor(sample[var].values, dtype=torch.float32)
+                                for var in self.get_source_variables()[source_name]
+                            ],
+                            dim=0,
+                        ),  # V
                     )
         return output
 
@@ -211,15 +220,11 @@ class MultiSourceDataset(torch.utils.data.Dataset):
 
     def get_source_variables(self):
         """Returns a dict {source_name: [variable_name]}."""
-        return {
-            source.name: source.variables for source in self.sources
-        }
+        return {source.name: source.variables for source in self.sources}
 
     def get_n_variables(self):
         """Returns a dict {source_name: n_variables}."""
-        return {
-                source.name: len(source.variables) for source in self.sources
-        }
+        return {source.name: len(source.variables) for source in self.sources}
 
     def get_n_sources(self):
         """Returns the number of sources."""
