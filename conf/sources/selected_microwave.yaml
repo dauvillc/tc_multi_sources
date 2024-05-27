@@ -31,7 +31,7 @@ tc_primed:
       S2:
         variables: ['TB_18.7H']
       S3:
-        variables: ['TB_23.8H']
+        variables: ['TB_23.8V']
       S4:
         variables: ['TB_36.5H']
       S5:
@@ -40,11 +40,11 @@ tc_primed:
         variables: ['TB_B89.0H']
     ATMS_NPP:
       S1:
-        variables: ['TB_23.8QH']
+        variables: ['TB_23.8QV']
       S2:
-        variables: ['TB_31.4QH']
+        variables: ['TB_31.4QV']
       S3:
-        variables: ['TB_88.2QH']
+        variables: ['TB_88.2QV']
       S4:
         variables: ['TB_165.5QH', 'TB_183.31_1.0QH', 'TB_183.31_1.8QH', 'TB_183.31_3.0QH', 'TB_183.31_4.5QH', 'TB_183.31_7.0QH']
     SSMIS_F16:
