@@ -61,7 +61,7 @@ class MultisourceMaskedAutoencoder(pl.LightningModule):
         #TODO: For now, we won't apply any masking, to just debug the pipeline.
         pred = self.forward(batch)
         loss = self.loss_fn(pred, batch)
-        self.log('train_loss', loss)
+        self.log('train_loss', loss, prog_bar=True)
         return loss
 
     def validation_step(self, batch, batch_idx):
@@ -76,7 +76,7 @@ class MultisourceMaskedAutoencoder(pl.LightningModule):
         """
         pred = self.forward(batch)
         loss = self.loss_fn(pred, batch)
-        self.log('val_loss', loss)
+        self.log('val_loss', loss, prog_bar=True)
         return loss
 
     def forward(self, x):
