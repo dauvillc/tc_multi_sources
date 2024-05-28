@@ -74,8 +74,10 @@ class MultisourceMaskedAutoencoder(pl.LightningModule):
         Returns:
             torch.Tensor: The loss of the model.
         """
-        pred = self.model(batch)
-        return self.loss_fn(pred, batch)
+        pred = self.forward(batch)
+        loss = self.loss_fn(pred, batch)
+        self.log('val_loss', loss)
+        return loss
 
     def forward(self, x):
         # x is a map {source_name: S, DT, C, D, V}
@@ -100,3 +102,6 @@ class MultisourceMaskedAutoencoder(pl.LightningModule):
         optimizer = torch.optim.AdamW(self.parameters(), lr=1e-6)
         scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer, max_lr=1e-3, steps_per_epoch=100, epochs=10)
         return [optimizer], [scheduler]
+
+    def __call__(self, x):
+        return self.forward(x)

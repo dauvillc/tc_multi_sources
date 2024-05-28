@@ -2,7 +2,8 @@ defaults:
   - paths/local
   - sources:
     - selected_microwave
-  - general_settings:
+  - experiment:
     - test
   - dataloader/local
   - trainer/local
+  - wandb/default

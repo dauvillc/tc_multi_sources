@@ -36,7 +36,7 @@ def main(cfg: DictConfig):
     # Profile an iteration over the dataset
     profiler = Profiler()
     profiler.start()
-    dataloader = DataLoader(dataset, batch_size=32, num_workers=8, shuffle=True)
+    dataloader = DataLoader(dataset, batch_size=32, num_workers=0, shuffle=True)
     for i, batch in zip(trange(len(dataloader)), dataloader):
         pass
     profiler.stop()
