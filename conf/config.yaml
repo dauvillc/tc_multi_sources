@@ -1,8 +1,8 @@
 defaults:
-  - paths/paths
+  - paths/local
   - sources:
     - selected_microwave
   - general_settings:
-    - general_settings
-  - dataloader:
-    - dataloader
+    - test
+  - dataloader/local
+  - trainer/local

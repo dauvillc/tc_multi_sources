@@ -1,6 +1,3 @@
 val_seasons: []
 test_seasons: [2017]
 
-# Processing settings
-n_workers: 3
-
