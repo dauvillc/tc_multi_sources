@@ -42,9 +42,14 @@ class MultisourceMaskedAutoencoder(pl.LightningModule):
         loss = 0
         for source_name in y_pred:
             _, _, _, _, v = y_true[source_name]
+            # Compute the MSE loss element-wise
+            element_loss = (y_pred[source_name] - v) ** 2
             # Where y_true is masked (NaN), set the loss to zero
             mask = ~torch.isnan(v)
-            loss += torch.mean((y_pred[source_name][mask] - v[mask])**2)
+            element_loss = element_loss[mask]
+            # If there is at least one element, compute the mean
+            if element_loss.numel() > 0:
+                loss += element_loss.mean()
 
         return loss
 
