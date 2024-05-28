@@ -25,14 +25,18 @@ def main(cfg: DictConfig):
     sources = read_sources(cfg["sources"])
     # Create the training dataset and dataloader
     train_dataset = MultiSourceDataset(
-        metadata_path, dataset_dir, sources, include_seasons=cfg["experiment"]["train_seasons"]
+        metadata_path, dataset_dir, sources, include_seasons=cfg["experiment"]["train_seasons"],
+        **cfg['dataset']
     )
     train_dataloader = DataLoader(train_dataset, **cfg["dataloader"])
     # Create the validation dataset and dataloader
     val_dataset = MultiSourceDataset(
-        metadata_path, dataset_dir, sources, include_seasons=cfg["experiment"]["val_seasons"]
+        metadata_path, dataset_dir, sources, include_seasons=cfg["experiment"]["val_seasons"],
+        **cfg['dataset']
     )
     val_dataloader = DataLoader(val_dataset, **cfg["dataloader"])
+    print("Train dataset size:", len(train_dataset))
+    print("Validation dataset size:", len(val_dataset))
     # Create the model
     model = UNet(train_dataset.get_n_variables(), 5, 64, 3).float()
     # Create the MAE

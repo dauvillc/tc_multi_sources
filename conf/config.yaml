@@ -2,6 +2,7 @@ defaults:
   - paths/local
   - sources:
     - selected_microwave
+  - dataset/selected_microwave
   - experiment:
     - test
   - dataloader/local
