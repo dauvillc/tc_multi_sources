@@ -141,8 +141,6 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         output = {}
         # Isolate the rows of self.df corresponding to the given sid and syn_time
         sample_df = self.df[(self.df["sid"] == sid) & (self.df["syn_time"] == syn_time)]
-        # Isolate the rows of self.df_index corresponding to the given sid
-        df_index = self.df_index[self.df_index["sid"] == sid]
         season, basin = sample_df["season"].iloc[0], sample_df["basin"].iloc[0]
         # For each source, try to load the element at the given time
         for source_name in self.source_names:
@@ -168,18 +166,13 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                     ),
                 )
             else:
-                # Isolate the rows of self.df_index corresponding to the given source
-                df_index_source = df_index[df_index["source_name"] == source_name].reset_index()
-                # At this point, the ith row of df_index_source corresponds to the ith element
-                # of the source in the netcdf file.
-                # Isolate the row of df_index_source corresponding to the element at the given time
-                df_index_source = df_index_source[df_index_source["time"] == df["time"].iloc[0]]
-                dt = df["time"].iloc[0] - syn_time
+                time = df["time"].iloc[0]
+                dt = time - syn_time
                 # Create the S and DT tensors
                 dt_tensor = torch.tensor(dt.total_seconds() / 3600, dtype=torch.float32)
                 # Load the npy file containing the data for the given storm, time, and source
                 filepath = self.get_data_filepath(
-                    season, basin, sid, df["time"].iloc[0], source_name
+                    season, basin, sid, time, source_name
                 )
                 tensor = torch.from_numpy(np.load(filepath))
                 # The tensor has shape (channels, H, W), where the channels are in the following order:
