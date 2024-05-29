@@ -8,6 +8,7 @@ import hydra
 import xarray as xr
 import netCDF4 as nc
 import numpy as np
+import pandas as pd
 from global_land_mask import globe
 from dask.diagnostics import ProgressBar
 from omegaconf import OmegaConf
@@ -27,6 +28,7 @@ _METADATA_COL_ORDER_ = [
     "cyclone_number",
     "source_name",
     "dim",
+    "data_vars"
 ]
 
 
@@ -204,96 +206,99 @@ def process_storm(
     sid = f"{season}{basin}{number}"
     if verbose:
         print(f"Processing storm {sid}")
-    # Save the storm's data to the directory dest_path/season/basin/sid.nc
-    # Each source will be stored in the netcdf group 'SENSOR_SATELLITE_swath'
-    storm_dest_dir = dest_path / str(season) / str(basin)
+    # Save the storm's data to the directory dest_path/season/basin/sid
+    # For timestep t, the data will be saved as the numpy file
+    # dest_path/season/basin/sid/t.npy
+    storm_dest_dir = dest_path / str(season) / str(basin) / str(sid)
     storm_dest_dir.mkdir(parents=True, exist_ok=True)
-    storm_dest_path = storm_dest_dir / f"{sid}.nc"
-    # We'll write into the result file in append mode. To make sure we start from scratch,
-    # we'll delete the file if it already exists.
-    if storm_dest_path.exists():
-        storm_dest_path.unlink()
     # We'll process the storm source by source
     for sensat in sen_sat_pairs:
         # Isolate the files corresponding to the sensor-satellite pair
         sen_sat_files = [file for file in files if sensat in file.stem]
         if len(sen_sat_files) == 0:
             continue
-        for swath in sen_sat_swaths[sensat]:
-            # if not (sensat == "GMI_GPM" and swath == "S2"):
-            #   continue
-            # Load the files
-            dataset = xr.concat(
-                [
-                    preprocess_source_files(
-                        xr.open_dataset(
-                            file,
-                            group=f"passive_microwave/{swath}",
-                        ),
-                        max_sizes[sensat, swath],
-                    )
-                    for file in sen_sat_files
-                ],
-                dim="sample",
-            ).load()
-            # Load the storm's metadata
+        # Process each file successively
+        for file in sen_sat_files:
+            # Load the file's metadata
             storm_meta = (
-                xr.concat(
-                    [
-                        xr.open_dataset(
-                            file,
-                            group="overpass_metadata",
-                        )
-                        for file in sen_sat_files
-                    ],
-                    dim="time",
+                xr.open_dataset(
+                    file,
+                    group="overpass_metadata",
                 )
-                .rename_dims({"time": "sample"})
-                .reset_index("time")
                 .reset_coords()
                 .load()
             )
-            # Sort by time
-            storm_meta = storm_meta.sortby("time")
-            dataset = dataset.sortby(storm_meta["time"])
-            # Drop any encoding, to reduce the loading time of the preprocessed data
-            dataset = dataset.drop_encoding()
-            # Compute the distance between each pixel and the storm center as a new variable
-            # using the 'x' and 'y' variables
-            dataset["dist_to_center"] = np.sqrt(dataset["x"] ** 2 + dataset["y"] ** 2)
-            dataset = dataset.drop_vars(["x", "y"])
-            # Add the land-sea mask as a new variable.
-            # We need to convert NaN values to 0, as the land-sea mask function does not handle them.
-            # Note: globe.is_land expects the longitude to be in the range [-180, 180]
-            lon = np.nan_to_num(dataset.longitude.values)
-            lon[lon > 180] -= 360
-            mask = globe.is_land(
-                np.nan_to_num(dataset.latitude.values),
-                lon,
-            )
-            # Where the latitude and longitude are NaN, set the mask to NaN
-            mask[np.isnan(dataset.latitude.values)] = np.nan
-            dataset["land_mask"] = (("sample", "scan", "pixel"), mask)
-            # Normalize the data, only for the variables that are in means and stds
-            # and that are not contextual variables ('latitude', 'longitude', 'land_mask').
-            for var in means[sensat, swath].data_vars:
-                if var in dataset.data_vars and var not in ["latitude", "longitude", "land_mask"]:
-                    dataset[var] = (dataset[var] - means[sensat, swath][var]) / stds[
-                        sensat, swath
-                    ][var]
-            # Save the dataset
-            full_source_name = f"tc_primed.microwave.{sensat}.{swath}"
-            dataset.to_netcdf(storm_dest_dir / f"{sid}.nc", group=full_source_name, mode="a")
-            dataset.close()
-            # Append the metadata to the CSV metadata file:
-            # SID, time, season, basin, cyclone_number, sat_sensor_swath, "2D"
-            metadata = storm_meta[["time", "season", "basin", "cyclone_number"]].to_dataframe()
-            metadata["sid"] = [sid] * len(metadata)
-            metadata["source_name"] = [full_source_name] * len(metadata)
-            metadata["dim"] = ["2D"] * len(metadata)
-            metadata = metadata[_METADATA_COL_ORDER_]
-            metadata.to_csv(metadata_path, mode="a", header=False)
-            storm_meta.close()
+            time = pd.to_datetime(storm_meta.time.values[0])
+            # Process each swath of the sensor-satellite pair for that file
+            for swath in sen_sat_swaths[sensat]:
+                dataset = preprocess_source_files(
+                    xr.open_dataset(
+                        file,
+                        group=f"passive_microwave/{swath}",
+                    ),
+                    max_sizes[sensat, swath],
+                ).load()
+                # Normalize the data, only for the variables that are in means and stds
+                # and that are not contextual variables ('latitude', 'longitude', 'land_mask',
+                # 'x', 'y'
+                data_vars = [
+                    var
+                    for var in dataset.data_vars
+                    if var
+                    not in ["latitude", "longitude", "land_mask", "dist_to_center", "x", "y"]
+                ]
+                for var in means[sensat, swath].data_vars:
+                    if var in data_vars:
+                        dataset[var] = (dataset[var] - means[sensat, swath][var]) / stds[
+                            sensat, swath
+                        ][var]
+                # Compute the distance between each pixel and the storm center as a new variable
+                # using the 'x' and 'y' variables
+                dataset["dist_to_center"] = np.sqrt(dataset["x"] ** 2 + dataset["y"] ** 2)
+                dataset = dataset.drop_vars(["x", "y"])
+                # Add the land-sea mask as a new variable.
+                # We need to convert NaN values to 0, as the land-sea mask function does not handle them.
+                # Note: globe.is_land expects the longitude to be in the range [-180, 180]
+                lon = np.nan_to_num(dataset.longitude.values)
+                lon[lon > 180] -= 360
+                mask = globe.is_land(
+                    np.nan_to_num(dataset.latitude.values),
+                    lon,
+                )
+                # Where the latitude and longitude are NaN, set the mask to NaN
+                mask[np.isnan(dataset.latitude.values)] = np.nan
+                dataset["land_mask"] = (("scan", "pixel"), mask)
+                # Save the data for the current time step, sensor-satellite pair and swath
+                # as a numpy file
+                # The numpy array should be stacked in the following order:
+                # latitude, longitude, land_mask, dist_to_center, band1, band2, ..., bandN
+                full_source_name = f"tc_primed.microwave.{sensat}.{swath}"
+                dest_file = (
+                    storm_dest_dir / f"{time.strftime('%Y%m%d%H%M%S')}-{full_source_name}.npy"
+                )
+                order = ["latitude", "longitude", "land_mask", "dist_to_center"] + data_vars
+                np.save(dest_file, dataset.to_dataarray().reindex(variable=order).values)
+                # Append the metadata to the CSV metadata file:
+                # SID, time, season, basin, cyclone_number, sat_sensor_swath, "2D"
+                metadata = pd.DataFrame(
+                    {
+                        "sid": [sid],
+                        "time": [time],
+                        "season": [season],
+                        "basin": [basin],
+                        "cyclone_number": [number],
+                        "source_name": [full_source_name],
+                        "dim": ["2D"],
+                        "data_vars": [None]
+                    }
+                )
+                # Add the list of data variables to the metadata, so that we'll be
+                # able to retrieve their order when loading the data
+                metadata.at[0, 'data_vars'] = data_vars
+                metadata = metadata[_METADATA_COL_ORDER_]
+                # Save to json and not csv, as one of the columns is a list
+                metadata.to_json(metadata_path, mode="a", orient="records", lines=True)
+                storm_meta.close()
 
 
 @hydra.main(config_path="../conf/", config_name="config", version_base=None)
@@ -315,8 +320,8 @@ def main(cfg):
         print("\033[91mUsing cache. Use +use_cache=false or remove arg to disable cache.\033[0m")
     # Retrieve the list of seaons that are used for the validation and test sets
     val_seasons, test_seasons = (
-        cfg["general_settings"]["val_seasons"],
-        cfg["general_settings"]["test_seasons"],
+        cfg["experiment"]["val_seasons"],
+        cfg["experiment"]["test_seasons"],
     )
     # Retrieve the list of files from the TC-Primed dataset, excluding the validation and test sets
     sen_sat_pairs, sen_sat_files, sen_sat_swaths = list_tc_primed_sources(
@@ -364,9 +369,6 @@ def main(cfg):
     # Erase the metadata file if it already exists
     if metadata_path.exists():
         metadata_path.unlink()
-    # Create the header of the metadata file
-    with open(metadata_path, "w") as f:
-        f.write(",".join(_METADATA_COL_ORDER_) + "\n")
     # Process the storms
     print("Processing storms")
     storm_files = list_tc_primed_storm_files(tc_primed_path)
