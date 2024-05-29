@@ -130,7 +130,8 @@ def process_swath(sensat, swath, files, dest_path, cfg, use_cache=True, verbose=
             n_subsample = max(100, int(0.05 * n_files))
             # If the number of files is less than 100, use all the files
             n_subsample = min(n_files, n_subsample)
-            files = np.random.choice(files, n_subsample, replace=False, seed=42)
+            rng = np.random.default_rng(42)
+            files = rng.choice(files, n_subsample, replace=False)
 
         dataset = xr.open_mfdataset(
             files,
