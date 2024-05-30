@@ -163,18 +163,16 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                         (source_channels, *source_shape),
                         fill_value=float("nan"),
                         dtype=torch.float32,
-                    ),
+                    ),  # V
                 )
             else:
                 time = df["time"].iloc[0]
                 dt = time - syn_time
                 # Create the S and DT tensors
-                dt_tensor = torch.tensor(dt.total_seconds() / 3600, dtype=torch.float32)
+                dt_tensor = torch.tensor(dt.total_seconds() / 3600, dtype=source_tensor.dtype)
                 # Load the npy file containing the data for the given storm, time, and source
-                filepath = self.get_data_filepath(
-                    season, basin, sid, time, source_name
-                )
-                tensor = torch.from_numpy(np.load(filepath))
+                filepath = self.get_data_filepath(season, basin, sid, time, source_name)
+                tensor = torch.from_numpy(np.load(filepath)).to(torch.float32)
                 # The tensor has shape (channels, H, W), where the channels are in the following order:
                 # - Latitude
                 # - Longitude
