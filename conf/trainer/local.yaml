@@ -1,4 +1,4 @@
 max_epochs: 10
 accelerator: 'gpu'
 devices: 1
-precision: 16
+precision: 16-mixed
