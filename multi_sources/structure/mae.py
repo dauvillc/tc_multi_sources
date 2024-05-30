@@ -116,11 +116,11 @@ class MultisourceMaskedAutoencoder(pl.LightningModule):
         source_name = None
         perm = torch.randperm(len(x))
         keys = list(x.keys())
-        while source_name is None:
-            source_name = keys[perm[0]]
-            _, _, _, _, v = x[source_name]
-            if torch.isnan(v).all():
-                source_name = None
+        for sname in [keys[i] for i in perm]:
+            _, _, _, _, v = x[sname]
+            if not torch.isnan(v).all():
+                source_name = sname
+                break
         if source_name is None:
             raise ValueError('All sources have NaN values, cannot use any of them as training target.')
         masked_x = {}

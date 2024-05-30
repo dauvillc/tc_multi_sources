@@ -13,5 +13,5 @@ tmp_dir: "/tmp"
 # Checkpoints directory
 checkpoints: "/home/cdauvill/scratch/checkpoints/"
 # Weights and Biases logs
-wandb_logs: "/home/cdauvill/scratch/wandb"
+wandb_logs: "/home/cdauvill/scratch/"
 

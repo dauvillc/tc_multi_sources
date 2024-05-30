@@ -5,7 +5,7 @@ import hydra
 import wandb
 from pathlib import Path
 from pytorch_lightning.loggers import WandbLogger
-from pytorch_lightning.callbacks import ModelCheckpoint
+from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
 from multi_sources.models.unet import UNet
 from multi_sources.structure.mae import MultisourceMaskedAutoencoder
 from torch.utils.data import DataLoader
@@ -18,21 +18,29 @@ from omegaconf import DictConfig, OmegaConf
 def main(cfg: DictConfig):
     cfg = OmegaConf.to_object(cfg)
     # Initialize Wandb and log the configuration
-    wandb.init(**cfg['wandb'], config=cfg, dir=cfg["paths"]["wandb_logs"])
+    wandb.init(**cfg["wandb"], config=cfg, dir=cfg["paths"]["wandb_logs"])
+    # Create the logs directory if it does not exist
+    Path(cfg["paths"]["wandb_logs"]).mkdir(parents=True, exist_ok=True)
     # Create the dataset
     metadata_path = cfg["paths"]["metadata"]
     dataset_dir = cfg["paths"]["preprocessed_dataset"]
     sources = read_sources(cfg["sources"])
     # Create the training dataset and dataloader
     train_dataset = MultiSourceDataset(
-        metadata_path, dataset_dir, sources, include_seasons=cfg["experiment"]["train_seasons"],
-        **cfg['dataset']
+        metadata_path,
+        dataset_dir,
+        sources,
+        include_seasons=cfg["experiment"]["train_seasons"],
+        **cfg["dataset"]
     )
     train_dataloader = DataLoader(train_dataset, **cfg["dataloader"])
     # Create the validation dataset and dataloader
     val_dataset = MultiSourceDataset(
-        metadata_path, dataset_dir, sources, include_seasons=cfg["experiment"]["val_seasons"],
-        **cfg['dataset']
+        metadata_path,
+        dataset_dir,
+        sources,
+        include_seasons=cfg["experiment"]["val_seasons"],
+        **cfg["dataset"]
     )
     val_dataloader = DataLoader(val_dataset, **cfg["dataloader"])
     print("Train dataset size:", len(train_dataset))
@@ -55,7 +63,10 @@ def main(cfg: DictConfig):
     )
     # Create the trainer
     trainer = pl.Trainer(
-        logger=logger, log_every_n_steps=5, callbacks=[checkpoint_callback], **cfg["trainer"]
+        logger=logger,
+        log_every_n_steps=5,
+        callbacks=[checkpoint_callback, LearningRateMonitor()],
+        **cfg["trainer"]
     )
     # Train the model
     trainer.fit(mae, train_dataloader, val_dataloader)
