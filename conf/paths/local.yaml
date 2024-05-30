@@ -6,8 +6,8 @@ preprocessed_dataset: "/home/cdauvill/scratch/data/multi_sources/preprocessed/"
 # as the normalization constants) 
 sources: "/home/cdauvill/scratch/data/multi_sources/sources/"
 # Path to the metadata regarding the preprocessed dataset
-# (Indicate a .csv file).
-metadata: "/home/cdauvill/scratch/data/multi_sources/preprocessed/metadata.csv"
+# Indicate a json file
+metadata: "/home/cdauvill/scratch/data/multi_sources/preprocessed/metadata.json"
 # Path to a tmp directory for scripts
 tmp_dir: "/tmp"
 # Checkpoints directory
