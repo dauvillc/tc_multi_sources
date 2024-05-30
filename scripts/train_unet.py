@@ -18,7 +18,7 @@ from omegaconf import DictConfig, OmegaConf
 def main(cfg: DictConfig):
     cfg = OmegaConf.to_object(cfg)
     # Initialize Wandb and log the configuration
-    wandb.init(**cfg['wandb'], config=cfg)
+    wandb.init(**cfg['wandb'], config=cfg, dir=cfg["paths"]["wandb_logs"])
     # Create the dataset
     metadata_path = cfg["paths"]["metadata"]
     dataset_dir = cfg["paths"]["preprocessed_dataset"]
