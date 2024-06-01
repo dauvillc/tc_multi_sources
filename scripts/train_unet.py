@@ -33,7 +33,7 @@ def main(cfg: DictConfig):
         include_seasons=cfg["experiment"]["train_seasons"],
         **cfg["dataset"]
     )
-    train_dataloader = DataLoader(train_dataset, **cfg["dataloader"])
+    train_dataloader = DataLoader(train_dataset, **cfg["dataloader"], shuffle=True)
     # Create the validation dataset and dataloader
     val_dataset = MultiSourceDataset(
         metadata_path,
@@ -46,9 +46,9 @@ def main(cfg: DictConfig):
     print("Train dataset size:", len(train_dataset))
     print("Validation dataset size:", len(val_dataset))
     # Create the model
-    model = UNet(train_dataset.get_n_variables(), 5, 64, 3).float()
+    model = UNet(train_dataset.get_n_variables(), **cfg["model"]).float()
     # Create the MAE
-    mae = MultisourceMaskedAutoencoder(model)
+    mae = MultisourceMaskedAutoencoder(model, lr_scheduler_kwargs=cfg['lr_scheduler'])
     # Create the logger
     logger = WandbLogger(dir=cfg["paths"]["wandb_logs"])
     # Log the configuration

@@ -1,6 +1,8 @@
 """Implements the MultisourceMaskedAutoencoder class"""
+
 import pytorch_lightning as pl
 import torch
+from multi_sources.utils.scheduler import CosineAnnealingWarmupRestarts
 
 
 class MultisourceMaskedAutoencoder(pl.LightningModule):
@@ -20,13 +22,16 @@ class MultisourceMaskedAutoencoder(pl.LightningModule):
     Attributes:
         model (torch.nn.Module): The model to wrap.
     """
-    def __init__(self, model):
+
+    def __init__(self, model, lr_scheduler_kwargs):
         """
         Args:
             model (torch.nn.Module): The model to wrap.
+            lr_scheduler_kwargs (dict): The keyword arguments to pass to the learning rate scheduler.
         """
         super().__init__()
         self.model = model
+        self.lr_scheduler_kwargs = lr_scheduler_kwargs
 
     def loss_fn(self, y_pred, y_true, masked_source_name):
         """Computes the reconstruction loss over the masked source.
@@ -49,10 +54,18 @@ class MultisourceMaskedAutoencoder(pl.LightningModule):
         # Compute the MSE loss element-wise
         loss = (y_pred[masked_source_name] - v) ** 2
         # Mask the loss for pixels outside the storm radius
-        loss = loss * (d.unsqueeze(1) < 1100)
-        # Set the loss to zero for NaN values in V
-        loss[torch.isnan(v)] = 0
+        # loss = loss * (d.unsqueeze(1) < 1100)
         return loss.mean()
+
+    def forward_and_compute_loss(self, x):
+        """Factorization of the forward pass and loss computation.
+        See training_step() for arguments and return values.
+        """
+        # Preprocess the input
+        x = self.preproc_input(x)
+        masked_x, masked_source_name = self.mask(x)
+        pred = self.forward(x)
+        return self.loss_fn(pred, x, masked_source_name)
 
     def training_step(self, batch, batch_idx):
         """Defines a training step for the model.
@@ -64,11 +77,8 @@ class MultisourceMaskedAutoencoder(pl.LightningModule):
         Returns:
             torch.Tensor: The loss of the model.
         """
-        # Randomly select a source and mask its values
-        masked_batch, masked_source_name = self.mask(batch)
-        pred = self.forward(masked_batch)
-        loss = self.loss_fn(pred, batch, masked_source_name)
-        self.log('train_loss', loss, prog_bar=True)
+        loss = self.forward_and_compute_loss(batch)
+        self.log("train_loss", loss, prog_bar=True)
         return loss
 
     def validation_step(self, batch, batch_idx):
@@ -81,13 +91,12 @@ class MultisourceMaskedAutoencoder(pl.LightningModule):
         Returns:
             torch.Tensor: The loss of the model.
         """
-        masked_batch, masked_source_name = self.mask(batch)
-        pred = self.forward(masked_batch)
-        loss = self.loss_fn(pred, batch, masked_source_name)
-        self.log('val_loss', loss, prog_bar=True)
+        loss = self.forward_and_compute_loss(batch)
+        self.log("val_loss", loss, prog_bar=True)
         return loss
 
-    def forward(self, x):
+    def preproc_input(self, x):
+        """Fills NaN values in the input tensors with zeros, and normalizes the coordinates."""
         # x is a map {source_name: S, DT, C, D, V}
         # - Fill NaN values (masked / missing) in DT, C and V with zeros
         #   (which is also the mean value of the data after normalization)
@@ -99,12 +108,21 @@ class MultisourceMaskedAutoencoder(pl.LightningModule):
             dt = torch.nan_to_num(dt, nan=0)
             c = torch.nan_to_num(c, nan=0)
             v = torch.nan_to_num(v, nan=0)
-            input_[source] = (s, dt, c, v)
+            # Normalize the lat/lon coordinates
+            # Note: the lon is in the range [0, 360]
+            c[:, 0] = c[:, 0] / 90
+            c[:, 1] = (c[:, 1] - 180) / 180
+            input_[source] = (s, dt, c, d, v)
+        return input_
+
+    def forward(self, x):
+        # Remove the "distance to center" tensor from the input
+        input_ = {source: (s, dt, c, v) for source, (s, dt, c, _, v) in x.items()}
         return self.model(input_)
 
     def mask(self, x):
         """Given a training batch, randomly selects a source and masks all of its values.
-        
+
         Args:
             x (dict): The input batch. See the class description for the expected format.
 
@@ -112,22 +130,14 @@ class MultisourceMaskedAutoencoder(pl.LightningModule):
             masked_x (dict): The masked input batch.
             masked_source_name (str): The name of the source that was masked.
         """
-        # Select a source to mask, until finding a source whose values are not all NaN
-        source_name = None
-        perm = torch.randperm(len(x))
-        keys = list(x.keys())
-        for sname in [keys[i] for i in perm]:
-            _, _, _, _, v = x[sname]
-            if not torch.isnan(v).all():
-                source_name = sname
-                break
-        if source_name is None:
-            raise ValueError('All sources have NaN values, cannot use any of them as training target.')
+        # For now, just select the first source
+        source_name = list(x.keys())[0]
         masked_x = {}
         for source, (s, dt, c, d, v) in x.items():
+            continue
             if source == source_name:
                 # Mask the values
-                v = torch.full_like(v, float('nan')).to(v.dtype)
+                v = torch.full_like(v, float("nan")).to(v.dtype)
             masked_x[source] = (s, dt, c, d, v)
         return masked_x, source_name
 
@@ -137,8 +147,11 @@ class MultisourceMaskedAutoencoder(pl.LightningModule):
         The learning rate goes through a linear warmup phase, then follows a cosine
         annealing schedule.
         """
-        optimizer = torch.optim.AdamW(self.parameters(), lr=1e-6)
-        scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer, max_lr=1e-3, steps_per_epoch=100, epochs=10)
+        optimizer = torch.optim.AdamW(self.model.parameters(), lr=1e-4)
+        scheduler = CosineAnnealingWarmupRestarts(
+            optimizer,
+            **self.lr_scheduler_kwargs,
+        )
         return [optimizer], [scheduler]
 
     def __call__(self, x):

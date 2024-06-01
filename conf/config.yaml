@@ -1,10 +1,14 @@
 defaults:
   - paths/local
+  - wandb/default
   - sources:
-    - selected_microwave
+    - test
   - dataset/selected_microwave
+  - dataloader/local
   - experiment:
     - test
-  - dataloader/local
+  - model:
+      - unet
   - trainer/local
-  - wandb/default
+  - lr_scheduler:
+    - test

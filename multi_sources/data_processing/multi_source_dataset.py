@@ -11,7 +11,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
 
     The dataset yields maps {source_name: (S, DT, C, D, V)} where:
     - S is the source index.
-    - DT is the time delta between the reference time and the time of the element, in hours.
+    - DT is the ratio of the time difference between the element and the synoptic time to the maximum time.
     - C is a tensor of shape (3, H, W) containing the coordinates (lat, lon) of each pixel,
         and the land-sea mask.
     - D is a tensor of shape (H, W) containing the distance at each pixel to the center of the storm.
@@ -169,7 +169,9 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                 time = df["time"].iloc[0]
                 dt = time - syn_time
                 # Create the S and DT tensors
-                dt_tensor = torch.tensor(dt.total_seconds() / 3600, dtype=source_tensor.dtype)
+                dt_tensor = torch.tensor(
+                    dt.total_seconds() / self.dt_max.total_seconds(), dtype=torch.float32
+                )
                 # Load the npy file containing the data for the given storm, time, and source
                 filepath = self.get_data_filepath(season, basin, sid, time, source_name)
                 tensor = torch.from_numpy(np.load(filepath)).to(torch.float32)

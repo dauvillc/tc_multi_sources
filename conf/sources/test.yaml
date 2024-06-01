@@ -27,7 +27,4 @@ tc_primed:
     environment_variables: ['latitude', 'longitude']
     AMSR2_GCOMW1:
       S1:
-        variables: ['TB_10.65V', 'TB_10.65H']
-    SSMIS_F16:
-      S1:
-        variables: ['TB_19.35H', 'TB_19.35V', 'TB_22.235V']
+        variables: ['TB_10.65H']

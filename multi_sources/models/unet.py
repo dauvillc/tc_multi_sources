@@ -24,7 +24,7 @@ class UNet(nn.Module):
     fed to the UNet.
     """
 
-    def __init__(self, n_variables, n_blocks, base_filters, kernel_size):
+    def __init__(self, n_variables, n_blocks=4, base_filters=32, kernel_size=3):
         """
         Args:
             n_variables (dict): dict {source: n_variables} containing the number of variables for each source.
@@ -58,16 +58,20 @@ class UNet(nn.Module):
                         nn.Conv2d(
                             in_channels, out_channels, kernel_size, padding=kernel_size // 2
                         ),
-                        nn.GELU(),
+                        nn.SiLU(),
                         nn.BatchNorm2d(out_channels),
                         nn.Conv2d(
                             out_channels, out_channels, kernel_size, padding=kernel_size // 2
                         ),
-                        nn.GELU(),
+                        nn.SiLU(),
                         nn.BatchNorm2d(out_channels),
                     ),
                     # Apply a conv layer with stride 2 to downsample the input
-                    nn.Conv2d(out_channels, out_channels * 2, 2, stride=2, padding=0),
+                    nn.Sequential(
+                        nn.Conv2d(out_channels, out_channels * 2, 2, stride=2, padding=0),
+                        nn.SiLU(),
+                        nn.BatchNorm2d(out_channels * 2),
+                    ),
                 ]
             )
             in_channels = out_channels * 2
@@ -79,13 +83,17 @@ class UNet(nn.Module):
             decoder_block = nn.ModuleList(
                 [
                     # Upsample the input
-                    nn.ConvTranspose2d(
-                        in_channels,
-                        in_channels,
-                        2,
-                        stride=2,
+                    nn.Sequential(
+                        nn.ConvTranspose2d(
+                            in_channels,
+                            in_channels,
+                            2,
+                            stride=2,
+                        ),
+                        nn.SiLU(),
+                        nn.BatchNorm2d(in_channels),
                     ),
-                    # Apply two conv layers with GELU activation and batch normalization
+                    # Apply two conv layers with SiLU activation and batch normalization
                     nn.Sequential(
                         nn.Conv2d(
                             in_channels + in_channels // 2,
@@ -93,31 +101,56 @@ class UNet(nn.Module):
                             kernel_size,
                             padding=kernel_size // 2,
                         ),
-                        nn.GELU(),
+                        nn.SiLU(),
                         nn.BatchNorm2d(out_channels),
                         nn.Conv2d(
                             out_channels, out_channels, kernel_size, padding=kernel_size // 2
                         ),
-                        nn.GELU(),
+                        nn.SiLU(),
                         nn.BatchNorm2d(out_channels),
                     ),
                 ]
             )
             in_channels = in_channels // 2
             self.decoder.append(decoder_block)
+        # Output conv layer
+        self.output_layers = nn.ModuleList(
+            [
+                nn.Conv2d(
+                    self.output_channels,
+                    self.output_channels,
+                    kernel_size,
+                    padding=kernel_size // 2,
+                ),
+                nn.SiLU(),
+                nn.BatchNorm2d(self.output_channels),
+                nn.Conv2d(
+                    self.output_channels,
+                    self.output_channels,
+                    kernel_size,
+                    padding=kernel_size // 2,
+                ),
+            ]
+        )
 
-    def forward(self, x):
+    def forward(self, batch):
         """Forward pass of the model.
         Args:
             x (dict): dict {source: S, DT, C, V} containing the input tensors.
         Returns:
             y (dict): dict {source: V'} containing the output tensors.
         """
+        # Check that the number of sources is correct
+        if len(batch) != self.n_sources:
+            raise ValueError(f"Expected {self.n_sources} sources, got {len(batch)}.")
+        # Transform the input dict into a list of tensors, ordered by source index
+        x = {int(s[0].item()): (s, dt, c, v) for s, dt, c, v in batch.values()}
+        x = [x[i] for i in range(self.n_sources)]
         # For each source, pad C and V to the next multiple of 2^n_blocks
         # Then project S and DT into a tensor of shape (batch_size, 2, H, W)
         # - First, browse all sources to find their sizes
         widths, heights = [], []
-        for source_name, (_, _, _, v) in x.items():
+        for _, _, _, v in x:
             h, w = v.shape[-2:]
             heights.append(h)
             widths.append(w)
@@ -126,25 +159,21 @@ class UNet(nn.Module):
         h = (max(heights) + power - 1) // power * power
         w = (max(widths) + power - 1) // power * power
         # - Browse all sources to pad C and V to the computed size
-        st, original_sizes = {}, {}
-        for source_name, (s, dt, c, v) in x.items():
+        st, original_sizes = [], []
+        for k, (s, dt, c, v) in enumerate(x):
             # Pad C and V
-            original_sizes[source_name] = v.shape[-2:]
+            original_sizes.append(v.shape[-2:])
             c = F.pad(c, (0, w - c.shape[-1], 0, h - c.shape[-2]))
             v = F.pad(v, (0, w - v.shape[-1], 0, h - v.shape[-2]))
-            x[source_name] = (s, dt, c, v)
+            x[k] = (s, dt, c, v)
             # Project S and DT
             sdt = torch.stack((s, dt), dim=1)
             sdt = sdt.unsqueeze(-1).unsqueeze(-1).expand(-1, -1, h, w)
-            st[int(s[0].item())] = sdt
-        # Order the sources by index
-        st = [st[i] for i in range(self.n_sources)]
+            st.append(sdt)
         # For each source, concat SDT, C and V along the channel dimension
-        inputs = {}
-        for s, dt, c, v in x.values():
-            s = int(s[0].item())
-            inputs[s] = torch.cat((st[s], c, v), dim=1)
-        inputs = [inputs[i] for i in range(self.n_sources)]
+        inputs = []
+        for k, (s, dt, c, v) in enumerate(x):
+            inputs.append(torch.cat((st[k], c, v), dim=1))
         # Concatenate the inputs along the channel dimension
         x = torch.cat(inputs, dim=1)
         # Apply the encoder
@@ -158,11 +187,14 @@ class UNet(nn.Module):
             x = upsample(x)
             x = torch.cat((x, skips[-i - 1]), dim=1)
             x = conv(x)
+        # Apply the output layers
+        for layer in self.output_layers:
+            x = layer(x)
         # Split the output by source, and remove the padding
-        y = {}
-        for source, n in self.n_variables.items():
-            pred = x[:, :n]
-            x = x[:, n:]
-            h, w = original_sizes[source]
-            y[source] = pred[..., :h, :w]
+        y, n = {}, 0
+        for k, source_name in enumerate(batch.keys()):
+            h, w = original_sizes[k]
+            n_vars = self.n_variables[source_name]
+            y[source_name] = x[:, n : n + n_vars, :h, :w]
+            n += n_vars
         return y
