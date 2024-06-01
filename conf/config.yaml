@@ -3,10 +3,10 @@ defaults:
   - wandb/default
   - sources:
     - test
-  - dataset/selected_microwave
+  - dataset/multi_sources
   - dataloader/local
-  - experiment:
-    - test
+  - lightning_module:
+    - mae
   - model:
       - unet
   - trainer/local

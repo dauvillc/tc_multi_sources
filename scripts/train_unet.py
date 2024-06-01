@@ -1,16 +1,12 @@
-"""Trains a UNet model on the multi-task autoencoding task."""
-
 import pytorch_lightning as pl
 import hydra
 import wandb
+import multi_sources
+from hydra.utils import instantiate
 from pathlib import Path
 from pytorch_lightning.loggers import WandbLogger
 from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
-from multi_sources.models.unet import UNet
-from multi_sources.structure.mae import MultisourceMaskedAutoencoder
 from torch.utils.data import DataLoader
-from multi_sources.data_processing.multi_source_dataset import MultiSourceDataset
-from multi_sources.data_processing.utils import read_sources
 from omegaconf import DictConfig, OmegaConf
 
 
@@ -21,34 +17,21 @@ def main(cfg: DictConfig):
     wandb.init(**cfg["wandb"], config=cfg, dir=cfg["paths"]["wandb_logs"])
     # Create the logs directory if it does not exist
     Path(cfg["paths"]["wandb_logs"]).mkdir(parents=True, exist_ok=True)
-    # Create the dataset
-    metadata_path = cfg["paths"]["metadata"]
-    dataset_dir = cfg["paths"]["preprocessed_dataset"]
-    sources = read_sources(cfg["sources"])
+
     # Create the training dataset and dataloader
-    train_dataset = MultiSourceDataset(
-        metadata_path,
-        dataset_dir,
-        sources,
-        include_seasons=cfg["experiment"]["train_seasons"],
-        **cfg["dataset"]
-    )
+    train_dataset = hydra.utils.instantiate(cfg['dataset']['train'], _convert_="partial")
     train_dataloader = DataLoader(train_dataset, **cfg["dataloader"], shuffle=True)
     # Create the validation dataset and dataloader
-    val_dataset = MultiSourceDataset(
-        metadata_path,
-        dataset_dir,
-        sources,
-        include_seasons=cfg["experiment"]["val_seasons"],
-        **cfg["dataset"]
-    )
+    val_dataset = hydra.utils.instantiate(cfg['dataset']['val'], _convert_="partial")
     val_dataloader = DataLoader(val_dataset, **cfg["dataloader"])
     print("Train dataset size:", len(train_dataset))
     print("Validation dataset size:", len(val_dataset))
+
     # Create the model
-    model = UNet(train_dataset.get_n_variables(), **cfg["model"]).float()
-    # Create the MAE
-    mae = MultisourceMaskedAutoencoder(model, lr_scheduler_kwargs=cfg['lr_scheduler'])
+    model = instantiate(cfg['model'], train_dataset.get_n_variables()).float()
+    # Create the lightning module
+    pl_module = instantiate(cfg['lightning_module'], model)
+
     # Create the logger
     logger = WandbLogger(dir=cfg["paths"]["wandb_logs"])
     # Log the configuration
@@ -69,7 +52,7 @@ def main(cfg: DictConfig):
         **cfg["trainer"]
     )
     # Train the model
-    trainer.fit(mae, train_dataloader, val_dataloader)
+    trainer.fit(pl_module, train_dataloader, val_dataloader)
 
 
 if __name__ == "__main__":
