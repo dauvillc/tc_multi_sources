@@ -19,18 +19,18 @@ def main(cfg: DictConfig):
     Path(cfg["paths"]["wandb_logs"]).mkdir(parents=True, exist_ok=True)
 
     # Create the training dataset and dataloader
-    train_dataset = hydra.utils.instantiate(cfg['dataset']['train'], _convert_="partial")
+    train_dataset = hydra.utils.instantiate(cfg["dataset"]["train"], _convert_="partial")
     train_dataloader = DataLoader(train_dataset, **cfg["dataloader"], shuffle=True)
     # Create the validation dataset and dataloader
-    val_dataset = hydra.utils.instantiate(cfg['dataset']['val'], _convert_="partial")
+    val_dataset = hydra.utils.instantiate(cfg["dataset"]["val"], _convert_="partial")
     val_dataloader = DataLoader(val_dataset, **cfg["dataloader"])
     print("Train dataset size:", len(train_dataset))
     print("Validation dataset size:", len(val_dataset))
 
     # Create the model
-    model = instantiate(cfg['model'], train_dataset.get_n_variables()).float()
+    model = instantiate(cfg["model"], train_dataset.get_n_variables()).float()
     # Create the lightning module
-    pl_module = instantiate(cfg['lightning_module'], model)
+    pl_module = instantiate(cfg["lightning_module"], model)
 
     # Create the logger
     logger = WandbLogger(dir=cfg["paths"]["wandb_logs"])
