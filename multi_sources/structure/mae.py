@@ -65,13 +65,22 @@ class MultisourceMaskedAutoencoder(pl.LightningModule):
         # loss = loss * (d.unsqueeze(1) < 1100)
         return loss.mean()
 
-    def mask_and_forward(self, x):
-        """Masks the input and computes the forward pass of the model."""
+    def step(self, batch, batch_idx, train_or_val):
+        """Defines a training or validation step for the model."""
         # Preprocess the input
-        x = self.preproc_input(x)
-        masked_x, masked_source_name = self.mask(x)
-        pred = self.forward(x)
-        return pred, masked_source_name
+        batch = self.preproc_input(batch)
+        # Mask the input
+        masked_batch, masked_source_name = self.mask(batch)
+        # Forward pass
+        pred = self.forward(masked_batch)
+        # Compute and log the loss
+        loss = self.loss_fn(pred, batch, masked_source_name)
+        self.log(f"{train_or_val}_loss", loss, prog_bar=True)
+        # Compute metrics
+        for metric_name, metric_fn in self.metrics.items():
+            metric_value = metric_fn(pred, batch)
+            self.log(f"{train_or_val}_{metric_name}", metric_value)
+        return loss
 
     def training_step(self, batch, batch_idx):
         """Defines a training step for the model.
@@ -83,14 +92,7 @@ class MultisourceMaskedAutoencoder(pl.LightningModule):
         Returns:
             torch.Tensor: The loss of the model.
         """
-        pred, masked_source_name = self.mask_and_forward(batch)
-        loss = self.loss_fn(pred, batch, masked_source_name)
-        self.log("train_loss", loss, prog_bar=True)
-        # Compute metrics
-        for metric_name, metric_fn in self.metrics.items():
-            metric_value = metric_fn(pred, batch)
-            self.log(f"train_{metric_name}", metric_value)
-        return loss
+        return self.step(batch, batch_idx, "train")
 
     def validation_step(self, batch, batch_idx):
         """Defines a validation step for the model.
@@ -102,14 +104,7 @@ class MultisourceMaskedAutoencoder(pl.LightningModule):
         Returns:
             torch.Tensor: The loss of the model.
         """
-        pred, masked_source_name = self.mask_and_forward(batch)
-        loss = self.loss_fn(pred, batch, masked_source_name)
-        self.log("val_loss", loss, prog_bar=True)
-        # Compute metrics
-        for metric_name, metric_fn in self.metrics.items():
-            metric_value = metric_fn(pred, batch)
-            self.log(f"val_{metric_name}", metric_value)
-        return loss
+        return self.step(batch, batch_idx, "val")
 
     def preproc_input(self, x):
         """Fills NaN values in the input tensors with zeros, and normalizes the coordinates."""
@@ -148,12 +143,12 @@ class MultisourceMaskedAutoencoder(pl.LightningModule):
         """
         # For now, just select the first source
         source_name = list(x.keys())[0]
+        return x, source_name
         masked_x = {}
         for source, (s, dt, c, d, v) in x.items():
-            continue
             if source == source_name:
                 # Mask the values
-                v = torch.full_like(v, float("nan")).to(v.dtype)
+                v = torch.zeros_like(v).to(v.dtype)
             masked_x[source] = (s, dt, c, d, v)
         return masked_x, source_name
 
