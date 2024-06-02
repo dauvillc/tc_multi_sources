@@ -1,6 +1,7 @@
 """
 Implements the Source class.
 """
+
 import yaml
 import os
 
@@ -8,7 +9,7 @@ import os
 class Source:
     """Represents a source of data, which could be 2D, 1D or 0D (scalar), not accounting for the
     channel dimension.
-    
+
     Attributes:
         name (str): The name of the source, under the format
             "source.subsource1.subsource2. ... .subsourceN".
@@ -18,6 +19,7 @@ class Source:
         env_vars (list of str): Same as variables, but for environment variables (e.g.
             latitude, longitude, month).
     """
+
     def __init__(self, name, dims, variables, env_vars):
         self.name = name
         self.dims = dims
@@ -29,9 +31,10 @@ class Source:
         # Load the paths config file to get the sources directory
         with open("conf/paths/paths.yaml", "r") as file:
             paths = yaml.safe_load(file)
-        # The path within the root dir is just the name of the source, where dots are replaced by slashes.
-        return os.path.join(paths['sources'], self.name.replace(".", "/"))
-    
+        # The path within the root dir is just the name of the source,
+        # where dots are replaced by slashes.
+        return os.path.join(paths["sources"], self.name.replace(".", "/"))
+
     def n_variables(self):
         """Returns the number of variables in the source."""
         return len(self.variables)

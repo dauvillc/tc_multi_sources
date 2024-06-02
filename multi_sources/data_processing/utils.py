@@ -11,7 +11,7 @@ def _get_leaf_subsources(source_dict, path="", previous_vars=[], previous_env_va
     subsource_keys = [
         key
         for key in source_dict.keys()
-        if not key in ["variables", "environment_variables", "n_dimensions"]
+        if key not in ["variables", "environment_variables", "n_dimensions"]
     ]
     if not subsource_keys:
         return {
@@ -43,7 +43,8 @@ def read_sources(sources_dict):
         sources_dict (:obj:`dict`): Sources configuration dictionary.
 
     Returns:
-        sources (:obj:`list` of :obj:`multi_sources.data_processing.source.Source`): List of sources.
+        sources (:obj:`list` of :obj:`multi_sources.data_processing.source.Source`):
+            List of sources.
     """
     # The following function will return a dictionary with the following structure:
     # {source_subsource. ... _lastsubsource: vars, env_vars, dim}

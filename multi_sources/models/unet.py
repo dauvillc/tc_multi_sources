@@ -12,23 +12,26 @@ class UNet(nn.Module):
     - S is a tensor of shape (batch_size,) containing the source index.
     - DT is a tensor of shape (batch_size,) containing the time delta between the element's time
         and the reference time.
-    - C is a tensor of shape (batch_size, 3, H, W) containing the coordinates (lat, lon) of each pixel,
-        and the land-sea mask.
+    - C is a tensor of shape (batch_size, 3, H, W) containing the coordinates
+        (lat, lon) of each pixel, and the land-sea mask.
     - V is a tensor of shape (batch_size, channels, H, W) containing the values of each pixel.
-    The model outputs a tensor of shape (batch_size, channels, H, W) containing the predicted values.
+    The model outputs a tensor of shape (batch_size, channels, H, W) containing
+        the predicted values.
     The model expects H and W to be the same for all sources, and to be a multiple of 2^n_blocks.
 
-    The model first projects S and DT into a tensor ST of shape (batch_size, 2, H, W). For each source, the
-    concatenation of SDT, C and V is concatenated along the channel dimension. The result of that operation
-    for all sources is again concatenated along the channel dimension. The resulting tensor is then
-    fed to the UNet.
+    The model first projects S and DT into a tensor ST of shape (batch_size, 2, H, W).
+    For each source, the concatenation of SDT, C and V is concatenated along the channel dimension.
+    The result of that operation for all sources is again concatenated along the channel dimension.
+    The resulting tensor is then fed to the UNet.
     """
 
     def __init__(self, n_variables, n_blocks=4, base_filters=32, kernel_size=3):
         """
         Args:
-            n_variables (dict): dict {source: n_variables} containing the number of variables for each source.
-            n_blocks (int): Number of blocks in the UNet. Each block downsamples the input by a factor of 2.
+            n_variables (dict): dict {source: n_variables} containing the number of variables
+                for each source.
+            n_blocks (int): Number of blocks in the UNet. Each block downsamples the input by
+                a factor of 2.
             base_filters (int): Number of filters in the output of the first block.
             kernel_size (int): Kernel size for the convolutional layers.
         """
@@ -195,6 +198,6 @@ class UNet(nn.Module):
         for k, source_name in enumerate(batch.keys()):
             h, w = original_sizes[k]
             n_vars = self.n_variables[source_name]
-            y[source_name] = x[:, n : n + n_vars, :h, :w]
+            y[source_name] = x[:, n: n + n_vars, :h, :w]
             n += n_vars
         return y

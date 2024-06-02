@@ -11,15 +11,18 @@ class MultiSourceDataset(torch.utils.data.Dataset):
 
     The dataset yields maps {source_name: (S, DT, C, D, V)} where:
     - S is the source index.
-    - DT is the ratio of the time difference between the element and the synoptic time to the maximum time.
+    - DT is the ratio of the time difference between the element and the synoptic time
+        to the maximum time.
     - C is a tensor of shape (3, H, W) containing the coordinates (lat, lon) of each pixel,
         and the land-sea mask.
-    - D is a tensor of shape (H, W) containing the distance at each pixel to the center of the storm.
+    - D is a tensor of shape (H, W) containing the distance at each pixel
+        to the center of the storm.
     - V is a tensor of shape (channels, H, W) containing the values of each pixel.
     If the element is not available for a source, DT, C, D, and V are filled with NaNs.
 
-    Each element is associated with a storm and a synoptic time. For a given storm S and time t0, the dataset
-    returns the element from each source that is closest to t0 and between t0 and t0 - dt_max.
+    Each element is associated with a storm and a synoptic time. For a given storm S and time t0,
+    the dataset returns the element from each source that is closest
+    to t0 and between t0 and t0 - dt_max.
     """
 
     def __init__(
@@ -34,17 +37,20 @@ class MultiSourceDataset(torch.utils.data.Dataset):
     ):
         """
         Args:
-            metadata_path (str): The path to the metadata file. The metadata file should be a CSV file with the
+            metadata_path (str): The path to the metadata file. The metadata file should be
+                a CSV file with the
                 columns 'sid', 'source_name', 'season', 'basin', 'cyclone_number', 'time'.
-            dataset_dir (str): The directory containing the preprocessed dataset. The structure should be
-                dataset_dir/season/basin/sid.nc.
+            dataset_dir (str): The directory containing the preprocessed dataset.
             sources (list of :obj:`Source`): The sources to include in the dataset.
-            include_seasons (list of int): The years to include in the dataset. If None, all years are included.
-            exclude_seasons (list of int): The years to exclude from the dataset. If None, no years are excluded.
+            include_seasons (list of int): The years to include in the dataset.
+                If None, all years are included.
+            exclude_seasons (list of int): The years to exclude from the dataset.
+                If None, no years are excluded.
             dt_max (int): The maximum time delta between the elements returned for each source,
                 in hours.
-            min_available_sources_prop (float): For a given sample (storm/time pair), the minimum proportion of
-                sources that must have an available element for the sample to be included in the dataset.
+            min_available_sources_prop (float): For a given sample (storm/time pair),
+                the minimum proportion of sources that must have an available element
+                for the sample to be included in the dataset.
         """
         self.dt_max = pd.Timedelta(dt_max, unit="h")
         self.dataset_dir = Path(dataset_dir)
@@ -76,7 +82,8 @@ class MultiSourceDataset(torch.utils.data.Dataset):
             arr = np.load(self.get_data_filepath(season, basin, sid, time, source_name))
             self.source_shapes[source_name] = arr.shape[1:]  # Remove the channel dimension
         # Create a DataFrame gathering all of these coordinates as well as the index of the source.
-        # The DF should have the columns 'sid', 'source', 'season', 'basin', 'cyclone_number', 'time'.
+        # The DF should have the columns 'sid', 'source', 'season', 'basin',
+        # 'cyclone_number', 'time'.
         # Check that the included and excluded seasons are not overlapping
         if include_seasons is not None and exclude_seasons is not None:
             if set(include_seasons).intersection(exclude_seasons):
@@ -89,15 +96,17 @@ class MultiSourceDataset(torch.utils.data.Dataset):
             self.df = self.df[~self.df["season"].isin(exclude_seasons)]
         if len(self.df) == 0:
             raise ValueError("No elements available for the selected sources and seasons.")
-        # Create a copy of self.df which won't be modified. This dataframe will work as an exact index
-        # of the xarray Datasets and will be used to retrieve the elements using isel instead of sel.
+        # Create a copy of self.df which won't be modified.
+        # This dataframe will work as an exact index of the xarray Datasets
+        # and will be used to retrieve the elements using isel instead of sel.
         self.df_index = (
             self.df.copy().sort_values(["sid", "source", "time"]).reset_index(drop=True)
         )
         # Compute the synoptic time that is closest and after the element's time
         self.df["syn_time"] = self.df["time"].dt.ceil("6h")
-        # For each element, compute the list of synoptic times that are within dt_max of the element's time
-        # e.g. 06:41:00 -> [12:00:00, 18:00:00, 00:00:00 (next day), 06:00:00 (next day)]
+        # For each element, compute the list of synoptic times that are within dt_max
+        # of the element's time, e.g.
+        # 06:41:00 -> [12:00:00, 18:00:00, 00:00:00 (next day), 06:00:00 (next day)]
         self.df["syn_time"] = self.df.apply(
             lambda row: pd.date_range(row["syn_time"], row["time"] + self.dt_max, freq="6h"),
             axis=1,
@@ -113,16 +122,19 @@ class MultiSourceDataset(torch.utils.data.Dataset):
             .reset_index()
         )
         avail["avail_frac"] = avail["avail_source"] / self.get_n_sources()
-        # - Keep only the storm/time pairs for which at least min_available_sources_prop sources are available
+        # - Keep only the storm/time pairs for which at least min_available_sources_prop sources
+        # are available
         avail = avail[avail["avail_frac"] >= min_available_sources_prop]
         self.df = self.df.merge(avail[["sid", "syn_time"]], on=["sid", "syn_time"], how="inner")
-        # - Sort by sid,source,time and for every (sid,syn_time,source) triplet, keep only the last one
-        #   (i.e. the one with the latest time)
+        # - Sort by sid,source,time and for every (sid,syn_time,source) triplet,
+        # keep only the last one (i.e. the one with the latest time)
         self.df = self.df.sort_values(["sid", "source", "time"]).drop_duplicates(
             ["sid", "syn_time", "source"], keep="last"
         )
-        # Finally, compute the list of unique (sid,syn_time) pairs. Each row of this final dataframe will
-        # constitute a sample of the dataset, while self.df can be used to retrieve the corresponding elements.
+        # Finally, compute the list of unique (sid,syn_time) pairs.
+        # Each row of this final dataframe will
+        # constitute a sample of the dataset, while self.df can be used
+        # to retrieve the corresponding elements.
         self.samples_df = self.df[["sid", "syn_time"]].drop_duplicates().reset_index(drop=True)
 
     def __getitem__(self, idx):
@@ -132,8 +144,8 @@ class MultiSourceDataset(torch.utils.data.Dataset):
             idx (int): The index of the element to retrieve.
 
         Returns:
-            dict: A dictionary {source_name: (S, DT, C, D, V)}. If the element is not available for a source,
-                DT, C, D, and V are filled with NaNs.
+            dict: A dictionary {source_name: (S, DT, C, D, V)}. If the element is not available
+                for a source, DT, C, D, and V are filled with NaNs.
         """
         sample = self.samples_df.iloc[idx]
         sid = sample["sid"]
@@ -175,7 +187,8 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                 # Load the npy file containing the data for the given storm, time, and source
                 filepath = self.get_data_filepath(season, basin, sid, time, source_name)
                 tensor = torch.from_numpy(np.load(filepath)).to(torch.float32)
-                # The tensor has shape (channels, H, W), where the channels are in the following order:
+                # The tensor has shape (channels, H, W), where the channels are in the following
+                # order:
                 # - Latitude
                 # - Longitude
                 # - Land-sea mask
@@ -188,7 +201,8 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                 # For the variables, we need to first retrieve which variables to use from
                 # the config. We can access these as source.variables.
                 # To know the order of the available variables in the tensor, we can use
-                # df['data_vars'], which is the list [var1, ..., varN] of the variables in the tensor.
+                # df['data_vars'], which is the list [var1, ..., varN] of the variables
+                # in the tensor.
                 selected_vars = self.source_variables[source_name]
                 var_indices = [4 + df["data_vars"].iloc[0].index(var) for var in selected_vars]
                 V = tensor[var_indices]
