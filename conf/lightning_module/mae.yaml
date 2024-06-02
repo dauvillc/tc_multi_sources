@@ -1,4 +1,3 @@
 # Defines the arguments for the MultisourceMaskedAutoencoder lightning module
 _target_: multi_sources.structure.mae.MultisourceMaskedAutoencoder
 lr_scheduler_kwargs: ${lr_scheduler}
-metrics:
