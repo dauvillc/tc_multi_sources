@@ -2,6 +2,7 @@
 
 import pytorch_lightning as pl
 import torch
+import multi_sources.metrics
 from multi_sources.utils.scheduler import CosineAnnealingWarmupRestarts
 
 
@@ -12,26 +13,32 @@ class MultisourceMaskedAutoencoder(pl.LightningModule):
     - S is a tensor of shape (batch_size,) containing the source index.
     - DT is a tensor of shape (batch_size,) containing the time delta between the element's time
         and the reference time.
-    - C is a tensor of shape (batch_size, 3, H, W) containing the coordinates (lat, lon) of each pixel,
+    - C is a tensor of shape (batch_size, 3, H, W) containing the coordinates
+        (lat, lon) of each pixel,
         and the land mask.
-    - D is a tensor of shape (batch_size, H, W) containing the distance to the storm center at each pixel.
+    - D is a tensor of shape (batch_size, H, W) containing the distance to the
+        storm center at each pixel.
     - V is a tensor of shape (batch_size, channels, H, W) containing the values of each pixel.
-    The model is expected to receive the same input map, and return a map {source_name: V'} where V'
-    are the reconstructed values of the input.
+    The model is expected to receive the same input map, and return a map {source_name: V'}
+    where V' are the reconstructed values of the input.
 
     Attributes:
         model (torch.nn.Module): The model to wrap.
     """
 
-    def __init__(self, model, lr_scheduler_kwargs):
+    def __init__(self, model, lr_scheduler_kwargs, metrics={}):
         """
         Args:
             model (torch.nn.Module): The model to wrap.
-            lr_scheduler_kwargs (dict): The keyword arguments to pass to the learning rate scheduler.
+            lr_scheduler_kwargs (dict): The keyword arguments to pass to the learning rate
+                scheduler.
+            metrics (dict of str: callable): The metrics to compute during training and validation.
+                A metric should have the signature metric(y_pred, y_true) -> torch.Tensor.
         """
         super().__init__()
         self.model = model
         self.lr_scheduler_kwargs = lr_scheduler_kwargs
+        self.metrics = metrics
 
     def loss_fn(self, y_pred, y_true, masked_source_name):
         """Computes the reconstruction loss over the masked source.
@@ -57,15 +64,13 @@ class MultisourceMaskedAutoencoder(pl.LightningModule):
         # loss = loss * (d.unsqueeze(1) < 1100)
         return loss.mean()
 
-    def forward_and_compute_loss(self, x):
-        """Factorization of the forward pass and loss computation.
-        See training_step() for arguments and return values.
-        """
+    def mask_and_forward(self, x):
+        """Masks the input and computes the forward pass of the model."""
         # Preprocess the input
         x = self.preproc_input(x)
         masked_x, masked_source_name = self.mask(x)
         pred = self.forward(x)
-        return self.loss_fn(pred, x, masked_source_name)
+        return pred, masked_source_name
 
     def training_step(self, batch, batch_idx):
         """Defines a training step for the model.
@@ -77,8 +82,13 @@ class MultisourceMaskedAutoencoder(pl.LightningModule):
         Returns:
             torch.Tensor: The loss of the model.
         """
-        loss = self.forward_and_compute_loss(batch)
+        pred, masked_source_name = self.mask_and_forward(batch)
+        loss = self.loss_fn(pred, batch, masked_source_name)
         self.log("train_loss", loss, prog_bar=True)
+        # Compute metrics
+        for metric_name, metric_fn in self.metrics.items():
+            metric_value = metric_fn(pred, batch)
+            self.log(f"train_{metric_name}", metric_value)
         return loss
 
     def validation_step(self, batch, batch_idx):
@@ -91,8 +101,13 @@ class MultisourceMaskedAutoencoder(pl.LightningModule):
         Returns:
             torch.Tensor: The loss of the model.
         """
-        loss = self.forward_and_compute_loss(batch)
+        pred, masked_source_name = self.mask_and_forward(batch)
+        loss = self.loss_fn(pred, batch, masked_source_name)
         self.log("val_loss", loss, prog_bar=True)
+        # Compute metrics
+        for metric_name, metric_fn in self.metrics.items():
+            metric_value = metric_fn(pred, batch)
+            self.log(f"val_{metric_name}", metric_value)
         return loss
 
     def preproc_input(self, x):
