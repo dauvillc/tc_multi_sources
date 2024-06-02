@@ -33,15 +33,15 @@ def main(cfg: DictConfig):
     pl_module = instantiate(cfg["lightning_module"], model)
 
     # Create the logger
-    logger = WandbLogger(dir=cfg["paths"]["wandb_logs"])
+    logger = WandbLogger(dir=cfg["paths"]["wandb_logs"], log_model='all')
     # Log the configuration
     logger.log_hyperparams(cfg)
     # Model checkpoint
     checkpoint_callback = ModelCheckpoint(
         monitor="val_loss",
         dirpath=Path(cfg["paths"]["checkpoints"]) / wandb.run.id,
-        filename="unet-{epoch:02d}-{val_loss:.2f}",
-        save_top_k=3,
+        filename="{epoch:02d}",
+        save_top_k=1,
         mode="min",
     )
     # Create the trainer
