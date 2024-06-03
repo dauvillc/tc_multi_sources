@@ -7,16 +7,15 @@ from omegaconf import DictConfig, OmegaConf
 from multi_sources.data_processing.writer import MultiSourceWriter
 
 
-@hydra.main(version_base=None, config_path="../conf", config_name="config")
+@hydra.main(version_base=None, config_path="../conf", config_name="make_predictions")
 def main(cfg: DictConfig):
     cfg = OmegaConf.to_object(cfg)
-    if "run_id" not in cfg:
-        raise ValueError("Usage: python make_predictions.py run_id=<wandb_run_id>")
     run_id = cfg["run_id"]
 
-    # Load the checkpoint
+    # Load the checkpoint. The checkpoints are stored as "epoch=xx.ckpt" files in the checkpoints
+    # directory.
     checkpoints_dir = Path(cfg["paths"]["checkpoints"]) / run_id
-    checkpoint_path = checkpoints_dir / "epoch=90.ckpt"
+    checkpoint_path = checkpoints_dir / f"epoch={cfg['checkpoint_epoch']}.ckpt"
     lightning_module_class = get_class(cfg["lightning_module"]["_target_"])
     module = lightning_module_class.load_from_checkpoint(checkpoint_path)
 

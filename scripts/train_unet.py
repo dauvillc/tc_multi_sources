@@ -10,7 +10,7 @@ from torch.utils.data import DataLoader
 from omegaconf import DictConfig, OmegaConf
 
 
-@hydra.main(version_base=None, config_path="../conf", config_name="config")
+@hydra.main(version_base=None, config_path="../conf", config_name="train")
 def main(cfg: DictConfig):
     cfg = OmegaConf.to_object(cfg)
     # Initialize Wandb and log the configuration

@@ -48,18 +48,18 @@ def process_source_name(source_name, results_dir, targets_dir, outputs_dir):
             plt.close(fig)
 
 
-@hydra.main(version_base=None, config_path="../conf", config_name="config")
+@hydra.main(version_base=None, config_path="../conf", config_name="eval")
 def main(cfg: DictConfig):
     cfg = OmegaConf.to_object(cfg)
     if "run_id" not in cfg:
-        raise ValueError("Usage: python scripts/eval.py +run_id=<wandb_run_id>")
+        raise ValueError("Usage: python scripts/eval.py run_id=<wandb_run_id>")
     run_id = cfg["run_id"]
 
     root_dir = Path(cfg["paths"]["predictions"]) / run_id
     if not root_dir.exists():
         raise ValueError(
             f"Predictions for run_id {run_id} do not exist.\
-                Please run scripts/make_predictions.py +run_id={run_id} first."
+                Please run scripts/make_predictions.py first."
         )
     targets_dir = root_dir / "targets"
     outputs_dir = root_dir / "outputs"
@@ -69,7 +69,7 @@ def main(cfg: DictConfig):
     results_dir = Path(cfg["paths"]["results"]) / run_id
     results_dir.mkdir(parents=True, exist_ok=True)
 
-    num_workers = cfg["eval"]["num_workers"]
+    num_workers = cfg["num_workers"]
 
     # ==== VISUAL EVALUATION ====
     # Process the source names in parallel.

@@ -9,7 +9,7 @@ from multi_sources.data_processing.utils import read_sources
 from pyinstrument import Profiler
 
 
-@hydra.main(config_path="../conf/", config_name="config", version_base=None)
+@hydra.main(config_path="../conf/", config_name="train", version_base=None)
 def main(cfg: DictConfig):
     cfg = OmegaConf.to_object(cfg)
     # Create the dataset

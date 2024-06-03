@@ -1,2 +1,8 @@
 # Configuration for scripts/eval.py
+
+defaults:
+  - _self_
+  - paths/local
+
+run_id: ???
 num_workers: 4
