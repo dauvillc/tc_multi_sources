@@ -44,10 +44,12 @@ class MultisourceMaskedAutoencoder(pl.LightningModule):
     def loss_fn(self, y_pred, y_true, masked_source_name):
         """Computes the reconstruction loss over the masked source.
         The reconstruction loss is computed as the average over all pixels of:
-          (ŷ - y)^2 * 1_{dist_to_center(pixel) < R}
+          (ŷ - y)^2 * 1_{dist_to_center(pixel) < R} * (1 - land_mask(pixel)),
         where ŷ is the predicted value, y is the true value, and R is an arbitrary radius.
         Currently, R is chosen as 1100 km, which is enough to cover the largest storm
         ever recorded (Typhoon Tip, 1979, 2170 km diameter).
+        The land pixels are not considered in the loss, as the model would just learn to
+        predict it instead of the storm.
 
         Args:
             y_pred (dict): The predicted values. See the class description for the expected format.
@@ -58,11 +60,15 @@ class MultisourceMaskedAutoencoder(pl.LightningModule):
         Returns:
             torch.Tensor: The loss of the model.
         """
-        _, _, _, d, v = y_true[masked_source_name]
+        _, _, c, d, v = y_true[masked_source_name]
         # Compute the MSE loss element-wise
         loss = (y_pred[masked_source_name] - v) ** 2
+        # The land mask is the third channel of the coordinates tensor
+        land_mask = c[:, 2]
+        # Mask the loss for land pixels
+        loss = loss * (1 - land_mask.unsqueeze(1))
         # Mask the loss for pixels outside the storm radius
-        # loss = loss * (d.unsqueeze(1) < 1100)
+        loss = loss * (d.unsqueeze(1) < 1100)
         return loss.mean()
 
     def step(self, batch, batch_idx, train_or_val):
