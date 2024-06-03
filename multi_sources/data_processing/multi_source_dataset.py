@@ -200,7 +200,8 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                 # df['data_vars'], which is the list [var1, ..., varN] of the variables
                 # in the tensor.
                 selected_vars = self.source_variables[source_name]
-                var_indices = [4 + df["data_vars"].iloc[0].index(var) for var in selected_vars]
+                data_vars = df["data_vars"].iloc[0]
+                var_indices = [4 + data_vars.index(var) for var in selected_vars]
                 V = tensor[var_indices]
                 output[source_name] = (source_tensor, dt_tensor, C, D, V)
 
