@@ -12,3 +12,5 @@ defaults:
   - trainer/local
   - lr_scheduler:
     - test
+  - eval:
+    - local

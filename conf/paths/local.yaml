@@ -16,3 +16,5 @@ checkpoints: "/home/cdauvill/scratch/checkpoints/"
 wandb_logs: "/home/cdauvill/scratch/"
 # Predictions directory
 predictions: "/home/cdauvill/scratch/data/multi_sources/predictions"
+# Results (including visualisation of predictions and targets)
+results: "/home/cdauvill/scratch/data/multi_sources/results"

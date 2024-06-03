@@ -1,0 +1,2 @@
+# Configuration for scripts/eval.py
+num_workers: 4
