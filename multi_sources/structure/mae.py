@@ -67,6 +67,8 @@ class MultisourceMaskedAutoencoder(pl.LightningModule):
 
     def step(self, batch, batch_idx, train_or_val):
         """Defines a training or validation step for the model."""
+        # Preprocess the input
+        batch = self.preproc_input(batch)
         # Forward pass
         pred, masked_source_name = self.forward(batch)
         # Compute and log the loss
@@ -104,7 +106,9 @@ class MultisourceMaskedAutoencoder(pl.LightningModule):
 
     def predict_step(self, batch, batch_idx):
         """Defines a prediction step for the model."""
-        return self.forward(batch)
+        # Preprocess the input
+        batch = self.preproc_input(batch)
+        return self.forward(batch)[0]
 
     def preproc_input(self, x):
         """Fills NaN values in the input tensors with zeros, and normalizes the coordinates."""
@@ -119,6 +123,8 @@ class MultisourceMaskedAutoencoder(pl.LightningModule):
             dt = torch.nan_to_num(dt, nan=0)
             c = torch.nan_to_num(c, nan=0)
             v = torch.nan_to_num(v, nan=0)
+            # For the distance tensor, fill the nan values with +inf
+            d = torch.nan_to_num(d, nan=float("inf"))
             # Normalize the lat/lon coordinates
             # Note: the lon is in the range [0, 360]
             c[:, 0] = c[:, 0] / 90
@@ -128,13 +134,11 @@ class MultisourceMaskedAutoencoder(pl.LightningModule):
 
     def forward(self, batch):
         """Computes the forward pass of the model"""
-        # Preprocess the input
-        batch = self.preproc_input(batch)
         # Mask the input
         masked_batch, masked_source_name = self.mask(batch)
         # Remove the "distance to center" tensor from the input
         input_ = {source: (s, dt, c, v) for source, (s, dt, c, _, v) in batch.items()}
-        return self.model(input_)
+        return self.model(input_), masked_source_name
 
     def mask(self, x):
         """Given a training batch, randomly selects a source and masks all of its values.
@@ -146,9 +150,15 @@ class MultisourceMaskedAutoencoder(pl.LightningModule):
             masked_x (dict): The masked input batch.
             masked_source_name (str): The name of the source that was masked.
         """
-        # For now, just select the first source
-        source_name = list(x.keys())[0]
-        return x, source_name
+        # Randomly select a source to mask, until finding one such that
+        # dt is not fully nan.
+        source_name = None
+        for source, (_, dt, _, _, _) in x.items():
+            if not torch.isnan(dt).all():
+                source_name = source
+                break
+        if source_name is None:
+            raise ValueError("All sources are missing.")
         masked_x = {}
         for source, (s, dt, c, d, v) in x.items():
             if source == source_name:
