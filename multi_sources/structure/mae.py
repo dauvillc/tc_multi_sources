@@ -67,12 +67,8 @@ class MultisourceMaskedAutoencoder(pl.LightningModule):
 
     def step(self, batch, batch_idx, train_or_val):
         """Defines a training or validation step for the model."""
-        # Preprocess the input
-        batch = self.preproc_input(batch)
-        # Mask the input
-        masked_batch, masked_source_name = self.mask(batch)
         # Forward pass
-        pred = self.forward(masked_batch)
+        pred, masked_source_name = self.forward(batch)
         # Compute and log the loss
         loss = self.loss_fn(pred, batch, masked_source_name)
         self.log(f"{train_or_val}_loss", loss, prog_bar=True)
@@ -106,6 +102,10 @@ class MultisourceMaskedAutoencoder(pl.LightningModule):
         """
         return self.step(batch, batch_idx, "val")
 
+    def predict_step(self, batch, batch_idx):
+        """Defines a prediction step for the model."""
+        return self.forward(batch)
+
     def preproc_input(self, x):
         """Fills NaN values in the input tensors with zeros, and normalizes the coordinates."""
         # x is a map {source_name: S, DT, C, D, V}
@@ -126,9 +126,14 @@ class MultisourceMaskedAutoencoder(pl.LightningModule):
             input_[source] = (s, dt, c, d, v)
         return input_
 
-    def forward(self, x):
+    def forward(self, batch):
+        """Computes the forward pass of the model"""
+        # Preprocess the input
+        batch = self.preproc_input(batch)
+        # Mask the input
+        masked_batch, masked_source_name = self.mask(batch)
         # Remove the "distance to center" tensor from the input
-        input_ = {source: (s, dt, c, v) for source, (s, dt, c, _, v) in x.items()}
+        input_ = {source: (s, dt, c, v) for source, (s, dt, c, _, v) in batch.items()}
         return self.model(input_)
 
     def mask(self, x):
