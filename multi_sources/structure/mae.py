@@ -137,7 +137,7 @@ class MultisourceMaskedAutoencoder(pl.LightningModule):
         # Mask the input
         masked_batch, masked_source_name = self.mask(batch)
         # Remove the "distance to center" tensor from the input
-        input_ = {source: (s, dt, c, v) for source, (s, dt, c, _, v) in batch.items()}
+        input_ = {source: (s, dt, c, v) for source, (s, dt, c, _, v) in masked_batch.items()}
         return self.model(input_), masked_source_name
 
     def mask(self, x):
