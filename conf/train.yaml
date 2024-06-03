@@ -2,7 +2,7 @@ defaults:
   - paths/local
   - wandb/default
   - sources:
-    - test
+    - sattelite_interpolation
   - dataset/multi_sources
   - dataloader/local
   - lightning_module:
@@ -11,4 +11,4 @@ defaults:
       - unet
   - trainer/local
   - lr_scheduler:
-    - test
+    - cosine_warmup_100epochs
