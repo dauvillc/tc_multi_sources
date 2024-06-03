@@ -2,7 +2,7 @@ defaults:
   - paths/local
   - wandb/default
   - sources:
-    - sattelite_interpolation
+    - satellite_interpolation
   - dataset/multi_sources
   - dataloader/local
   - lightning_module:
