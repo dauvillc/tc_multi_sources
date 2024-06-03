@@ -1,10 +1,8 @@
 import pytorch_lightning as pl
 import hydra
-import numpy as np
-from tqdm import tqdm
 from torch.utils.data import DataLoader
 from pathlib import Path
-from hydra.utils import instantiate, get_class
+from hydra.utils import get_class
 from omegaconf import DictConfig, OmegaConf
 from multi_sources.data_processing.writer import MultiSourceWriter
 
