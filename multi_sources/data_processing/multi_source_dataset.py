@@ -81,9 +81,6 @@ class MultiSourceDataset(torch.utils.data.Dataset):
             )
             arr = np.load(self.get_data_filepath(season, basin, sid, time, source_name))
             self.source_shapes[source_name] = arr.shape[1:]  # Remove the channel dimension
-        # Create a DataFrame gathering all of these coordinates as well as the index of the source.
-        # The DF should have the columns 'sid', 'source', 'season', 'basin',
-        # 'cyclone_number', 'time'.
         # Check that the included and excluded seasons are not overlapping
         if include_seasons is not None and exclude_seasons is not None:
             if set(include_seasons).intersection(exclude_seasons):
@@ -96,12 +93,11 @@ class MultiSourceDataset(torch.utils.data.Dataset):
             self.df = self.df[~self.df["season"].isin(exclude_seasons)]
         if len(self.df) == 0:
             raise ValueError("No elements available for the selected sources and seasons.")
-        # Create a copy of self.df which won't be modified.
-        # This dataframe will work as an exact index of the xarray Datasets
-        # and will be used to retrieve the elements using isel instead of sel.
-        self.df_index = (
-            self.df.copy().sort_values(["sid", "source", "time"]).reset_index(drop=True)
-        )
+        # ========================================================================================
+        # We'll now create a dataframe self.samples_df that contains the list of unique
+        # (sid, syn_time) pairs that will be used to sample the dataset.
+        # Some more processing is apply to it, which was first written in the notebook
+        # notebooks/sources.ipynb.
         # Compute the synoptic time that is closest and after the element's time
         self.df["syn_time"] = self.df["time"].dt.ceil("6h")
         # For each element, compute the list of synoptic times that are within dt_max
