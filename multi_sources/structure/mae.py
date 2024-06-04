@@ -162,7 +162,8 @@ class MultisourceMaskedAutoencoder(pl.LightningModule):
         # Randomly select a source to mask, until finding one such that
         # dt is not fully nan.
         source_name = None
-        permuted_sources = list(x.keys())
+        all_sources = list(x.keys())
+        permuted_sources = [all_sources[i] for i in torch.randperm(len(all_sources))]
         for source in permuted_sources:
             _, dt, _, _, _ = x[source]
             if not torch.isnan(dt).all():

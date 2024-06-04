@@ -4,7 +4,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from multi_sources.models.vit_classes import PatchEmbedding, Transformer
+from multi_sources.models.vit_classes import PatchEmbedding, Transformer, ResNet
 from einops import rearrange
 
 
@@ -47,6 +47,9 @@ class MultiSourceVIT(nn.Module):
         heads,
         mlp_dim,
         dim_head,
+        output_resnet_depth=3,
+        output_resnet_inner_channels=16,
+        output_resnet_kernel_size=3,
         dropout=0.0,
         emb_dropout=0.0,
     ):
@@ -60,6 +63,10 @@ class MultiSourceVIT(nn.Module):
             heads (int): Number of heads for the attention mechanism.
             mlp_dim (int): Dimension of the feedforward layers.
             dim_head (int): Dimension of each head.
+            output_resnet_depth (int): Depth of the output ResNet.
+                set to 0 to disable any convolutional layer at the output.
+            output_resnet_inner_channels (int): Number of channels in the inner layers of the output
+            output_resnet_kernel_size (int): Kernel size of the output ResNet.
             dropout (float): Dropout rate.
             emb_dropout (float): Dropout rate for the embeddings.
         """
@@ -132,6 +139,19 @@ class MultiSourceVIT(nn.Module):
             {
                 source_name: nn.Sequential(
                     nn.LayerNorm(self.dim), nn.Linear(self.dim, self.patch_dim[source_name])
+                )
+                for source_name in channels
+            }
+        )
+        # Create a ResNet module for each source at the end to correct artifacts at the borders
+        # between patches.
+        self.output_resnets = nn.ModuleDict(
+            {
+                source_name: ResNet(
+                    self.channels[source_name],
+                    output_resnet_inner_channels,
+                    output_resnet_depth,
+                    output_resnet_kernel_size,
                 )
                 for source_name in channels
             }
@@ -255,6 +275,11 @@ class MultiSourceVIT(nn.Module):
             for source_name, otp, (H, W) in zip(
                 output.keys(), output.values(), self.original_img_sizes.values()
             )
+        }
+        # For each source, apply the output ResNet.
+        output = {
+            source_name: self.output_resnets[source_name](otp)
+            for source_name, otp in output.items()
         }
         # Restore the original keys.
         output = restore_dots_in_keys(output)
