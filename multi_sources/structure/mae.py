@@ -26,7 +26,7 @@ class MultisourceMaskedAutoencoder(pl.LightningModule):
         model (torch.nn.Module): The model to wrap.
     """
 
-    def __init__(self, model, lr_scheduler_kwargs, metrics={}):
+    def __init__(self, model, lr_scheduler_kwargs, metrics={}, enable_masking=True):
         """
         Args:
             model (torch.nn.Module): The model to wrap.
@@ -34,11 +34,14 @@ class MultisourceMaskedAutoencoder(pl.LightningModule):
                 scheduler.
             metrics (dict of str: callable): The metrics to compute during training and validation.
                 A metric should have the signature metric(y_pred, y_true) -> torch.Tensor.
+            enable_masking (bool): Whether to enable masking of the input sources.
+                Disable to run in the autoencoder mode.
         """
         super().__init__()
         self.model = model
         self.lr_scheduler_kwargs = lr_scheduler_kwargs
         self.metrics = metrics
+        self.enable_masking = enable_masking
         self.save_hyperparameters()
 
     def loss_fn(self, y_pred, y_true, masked_source_name):
@@ -167,6 +170,8 @@ class MultisourceMaskedAutoencoder(pl.LightningModule):
                 break
         if source_name is None:
             raise ValueError("All sources are missing.")
+        if not self.enable_masking:
+            return x, source_name
         masked_x = {}
         for source, (s, dt, c, d, v) in x.items():
             if source == source_name:
