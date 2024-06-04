@@ -4,7 +4,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from multi_sources.models.vit_classes import Attention, FeedForward, PatchEmbedding, Transformer
+from multi_sources.models.vit_classes import PatchEmbedding, Transformer
 from einops import rearrange
 
 
@@ -224,14 +224,12 @@ class MultiSourceVIT(nn.Module):
         # Concatenate the embeddings for all sources to form the sequence.
         sequence = torch.cat([emb for emb in embeddings.values()], dim=1)
         # Apply the transformer layers.
-        output = self.transformer(sequence)
+        transformer_output = self.transformer(sequence)
         # Split the output back to the sources.
-        output = {
-            source_name: output[
-                :, i * self.num_patches[source_name]: (i + 1) * self.num_patches[source_name]
-            ]
-            for i, source_name in enumerate(embeddings)
-        }
+        output, cnt = {}, 0
+        for source_name, num_patches in self.num_patches.items():
+            output[source_name] = transformer_output[:, cnt: cnt + num_patches]
+            cnt += num_patches
         # Apply the final projection layer to go back to the original patch dim
         output = {
             source_name: self.output_projections[source_name](otp).view(
