@@ -3,12 +3,12 @@ defaults:
   - wandb/default
   - sources:
     - satellite_interpolation
-  - dataset/multi_sources
+  - dataset/full_set
   - dataloader/local
   - lightning_module:
     - mae
   - model:
-      - unet
+      - vit
   - trainer/local
   - lr_scheduler:
     - cosine_warmup_100epochs
