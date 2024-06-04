@@ -62,13 +62,16 @@ def pad_dataset(ds, max_size):
 
 def reverse_spatially(ds):
     """
-    Reverses the dataset ds spatially, i.e. reverses the pixel and scan dimensions
-    if the image was taken on the descending pass.
+    Reverses the dataset ds spatially, i.e. possibly reverses the scan and pixel
+    dimensions so that the latitude is decreasing from the top to the bottom of the image,
+    and the longitude is increasing from left to right.
     """
     # The latitude variable in TC-PRIMEd is in degrees north, so it should be
     # decreasing from the top to the bottom of the image.
     if ds.latitude[0, 0] < ds.latitude[1, 0]:
-        return ds.isel(scan=slice(None, None, -1), pixel=slice(None, None, -1))
+        return ds.isel(scan=slice(None, None, -1))
+    if ds.longitude[0, 0] > ds.longitude[0, 1]:
+        return ds.isel(pixel=slice(None, None, -1))
     return ds
 
 
@@ -120,8 +123,9 @@ def process_swath(sensat, swath, files, dest_path, cfg, use_cache=True, verbose=
     # Try to load previous normalization values if they exist
     if not use_cache or not (dest_swath_dir / "normalization_mean.nc").exists():
         # Normalization
-        # If 'use_subsample' is set to True (or isn't specified), we'll only load a subset of the data
-        # for computing the normalization values. Note that the sensors' brightness temperatures are
+        # If 'use_subsample' is set to True (or isn't specified), we'll only load
+        # a subset of the data for computing the normalization values.
+        # Note that the sensors' brightness temperatures are
         # calibrated in TC-PRIMED, and the mean / std are supposedly stationnary, which means that
         # using a subset of the data shouldn't significantly affect the normalization values.
         if "use_subsample" not in cfg or cfg["use_subsample"]:
@@ -158,7 +162,8 @@ def process_swath(sensat, swath, files, dest_path, cfg, use_cache=True, verbose=
         # each variable.
         mean = dataset.mean(dim=["sample", "scan", "pixel"], skipna=True)
         std = dataset.std(dim=["sample", "scan", "pixel"], skipna=True)
-        # To reinitialize the chunking, xarray advises to write the mean/std to a file and reload them.
+        # To reinitialize the chunking, xarray advises to write the mean/std
+        # to a file and reload them.
         # Use the dask diagnostics progress bar to monitor the progress of the computation
         if verbose:
             print("Computing normalization values")
@@ -200,6 +205,7 @@ def process_storm(
     max_sizes,
     dest_path,
     metadata_path,
+    cfg,
     verbose=True,
 ):
     """For a given storm, loads all files related to it, normalizes all sources, applies
@@ -220,8 +226,22 @@ def process_storm(
             continue
         # Process each file successively
         for file in sen_sat_files:
-            # Load the file's metadata
-            storm_meta = (
+            # Load the storm's metadata
+            storm_meta = xr.open_dataset(file, group="overpass_storm_metadata").load()
+            # Retrieve the intensity (in knots) of the storm at the time of the overpass.
+            # Compare it to the threshold defined in the configuration file. If the intensity
+            # is below the threshold, skip the file.
+            intensity = storm_meta.intensity.values[0]
+            if intensity < cfg["min_intensity_knots"]:
+                continue
+            # Retrieve the distance to land at the time of the overpass. If the distance is
+            # negative (the storm is over land), skip the file.
+            dist_to_land = storm_meta.distance_to_land.values[0]
+            if (not cfg['include_obs_over_land']) and dist_to_land < 0:
+                continue
+            storm_meta.close()
+            # Load the file's overpass metadata
+            overpass_meta = (
                 xr.open_dataset(
                     file,
                     group="overpass_metadata",
@@ -229,7 +249,7 @@ def process_storm(
                 .reset_coords()
                 .load()
             )
-            time = pd.to_datetime(storm_meta.time.values[0])
+            time = pd.to_datetime(overpass_meta.time.values[0])
             # Process each swath of the sensor-satellite pair for that file
             for swath in sen_sat_swaths[sensat]:
                 dataset = preprocess_source_files(
@@ -258,7 +278,8 @@ def process_storm(
                 dataset["dist_to_center"] = np.sqrt(dataset["x"] ** 2 + dataset["y"] ** 2)
                 dataset = dataset.drop_vars(["x", "y"])
                 # Add the land-sea mask as a new variable.
-                # We need to convert NaN values to 0, as the land-sea mask function does not handle them.
+                # We need to convert NaN values to 0, as the land-sea mask function
+                # does not handle them.
                 # Note: globe.is_land expects the longitude to be in the range [-180, 180]
                 lon = np.nan_to_num(dataset.longitude.values)
                 lon[lon > 180] -= 360
@@ -299,10 +320,10 @@ def process_storm(
                 metadata = metadata[_METADATA_COL_ORDER_]
                 # Save to json and not csv, as one of the columns is a list
                 metadata.to_json(metadata_path, mode="a", orient="records", lines=True)
-                storm_meta.close()
+                overpass_meta.close()
 
 
-@hydra.main(config_path="../conf/", config_name="config", version_base=None)
+@hydra.main(config_path="../conf/", config_name="preproc", version_base=None)
 def main(cfg):
     cfg = OmegaConf.to_container(cfg, resolve=True)
     # Path to the raw dataset
@@ -321,8 +342,8 @@ def main(cfg):
         print("\033[91mUsing cache. Use +use_cache=false or remove arg to disable cache.\033[0m")
     # Retrieve the list of seaons that are used for the validation and test sets
     val_seasons, test_seasons = (
-        cfg["experiment"]["val_seasons"],
-        cfg["experiment"]["test_seasons"],
+        cfg["val_seasons"],
+        cfg["test_seasons"],
     )
     # Retrieve the list of files from the TC-Primed dataset, excluding the validation and test sets
     sen_sat_pairs, sen_sat_files, sen_sat_swaths = list_tc_primed_sources(
@@ -391,6 +412,7 @@ def main(cfg):
                     max_sizes,
                     dest_path,
                     metadata_path,
+                    cfg,
                     verbose=False,
                 )
                 for (season, basin, number), files in storm_files.items()
@@ -411,6 +433,7 @@ def main(cfg):
                 max_sizes,
                 dest_path,
                 metadata_path,
+                cfg,
             )
 
 

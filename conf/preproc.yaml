@@ -1,0 +1,13 @@
+defaults:
+  - _self_
+  - paths/local
+
+val_seasons: [2014, 2017]
+test_seasons: [2020, 2021]
+# Minimum 10m 1-min average sustained wind speed, in knots,
+# for a sample to be included in the preprocessed data.
+min_intensity_knots: 35
+# Boolean: whether to include samples where the storm is over land.
+# A potential reason to remove those is since land reflects microwaves
+# more than the storm itself, which makes the storm invisible over land.
+include_obs_over_land: false
