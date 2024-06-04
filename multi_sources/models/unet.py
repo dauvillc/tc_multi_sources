@@ -25,9 +25,11 @@ class UNet(nn.Module):
     The resulting tensor is then fed to the UNet.
     """
 
-    def __init__(self, n_variables, n_blocks=4, base_filters=32, kernel_size=3):
+    def __init__(self, sizes, n_variables,  n_blocks=4, base_filters=32, kernel_size=3):
         """
         Args:
+            sizes (dict of str: tuple of int): dict {source: (H, W)} containing the sizes of the
+                inputs for each source.
             n_variables (dict): dict {source: n_variables} containing the number of variables
                 for each source.
             n_blocks (int): Number of blocks in the UNet. Each block downsamples the input by
@@ -37,6 +39,7 @@ class UNet(nn.Module):
         """
         super().__init__()
         self.n_variables = n_variables
+        self.size = sizes
         self.n_sources = len(n_variables)
         self.n_blocks = n_blocks
         self.base_filters = base_filters

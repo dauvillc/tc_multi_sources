@@ -28,12 +28,14 @@ def main(cfg: DictConfig):
     print("Validation dataset size:", len(val_dataset))
 
     # Create the model
-    model = instantiate(cfg["model"], train_dataset.get_n_variables()).float()
+    model = instantiate(
+        cfg["model"], train_dataset.get_source_sizes(), train_dataset.get_n_variables()
+    ).float()
     # Create the lightning module
     pl_module = instantiate(cfg["lightning_module"], model)
 
     # Create the logger
-    logger = WandbLogger(dir=cfg["paths"]["wandb_logs"], log_model='all')
+    logger = WandbLogger(dir=cfg["paths"]["wandb_logs"], log_model="all")
     # Log the configuration
     logger.log_hyperparams(cfg)
     # Model checkpoint

@@ -237,3 +237,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
     def get_n_sources(self):
         """Returns the number of sources."""
         return len(self.source_names)
+
+    def get_source_sizes(self):
+        """Returns a dict {source_name: (H, W)}."""
+        return self.source_shapes

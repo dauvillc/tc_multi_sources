@@ -1,0 +1,7 @@
+_target_: multi_sources.models.vit.MultiSourceVIT
+patch_size: 32
+dim: 128
+depth: 1
+heads: 4
+mlp_dim: 256
+dim_head: 64
