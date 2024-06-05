@@ -2,3 +2,4 @@ max_epochs: 100
 accelerator: 'gpu'
 devices: 1
 precision: 32
+gradient_clip_val: 1
