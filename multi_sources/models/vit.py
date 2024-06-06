@@ -132,8 +132,9 @@ class MultiSourceVIT(nn.Module):
         # which patches in the other sources correspond to the same approximate location.
         # Note: while C gives the lat/lon for each pixel, we'll only use the coordinates
         # of the four corners of each patch, to limit the additional patch dimension.
-        # We'll also append the time delta and the source index, which are scalar values.
-        self.dim += 10  # 4 corners * 2 coordinates + time delta + source_index
+        # We'll also append the time delta and the source index, which are scalar values, as
+        # well as the availability flag.
+        self.dim += 11  # 4 corners * 2 coordinates + time delta + source_index + availability
 
         # Create the transformer layers.
         self.transformer = Transformer(self.dim, depth, heads, dim_head, mlp_dim, dropout)
@@ -225,16 +226,16 @@ class MultiSourceVIT(nn.Module):
                 ],
                 dim=-1,
             )
-        # Stack the time delta and the source indices
-        dt_and_source = {
-            source_name: torch.stack([s, dt], dim=-1)
+        # Stack the source indices, the time delta and the availability flag.
+        info_tensor = {
+            source_name: torch.stack([a, s, dt], dim=-1)
             .unsqueeze(1)
             .expand(-1, self.num_patches[source_name], -1)
-            for source_name, (_, s, dt, _, _, _) in inputs.items()
+            for source_name, (a, s, dt, _, _, _) in inputs.items()
         }
-        # Concatenate the embeddings with the coordinates and the time delta and source indices.
+        # Concatenate the embeddings with the coordinates and the info tensor for each source
         embeddings = {
-            source_name: torch.cat([emb, coords[source_name], dt_and_source[source_name]], dim=-1)
+            source_name: torch.cat([emb, coords[source_name], info_tensor[source_name]], dim=-1)
             for source_name, emb in embeddings.items()
         }
         # Concatenate the embeddings for all sources to form the sequence.
