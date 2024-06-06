@@ -79,7 +79,7 @@ class MultisourceMaskedAutoencoder(pl.LightningModule):
         pred = self(batch)
         # Compute and log the loss
         loss = self.loss_fn(pred, batch)
-        self.log(f"{train_or_val}_loss", loss, prog_bar=True)
+        self.log(f"{train_or_val}_loss", loss, prog_bar=True, on_step=True, on_epoch=True)
         # Compute metrics
         for metric_name, metric_fn in self.metrics.items():
             metric_value = metric_fn(pred, batch)
