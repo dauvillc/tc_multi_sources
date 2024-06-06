@@ -3,6 +3,8 @@
 import torch
 import pandas as pd
 import numpy as np
+import torchvision.transforms.v2 as transforms
+from torchvision import tv_tensors
 from pathlib import Path
 
 
@@ -33,6 +35,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         exclude_seasons=None,
         dt_max=24,
         min_available_sources_prop=0.6,
+        enable_data_augmentation=False,
     ):
         """
         Args:
@@ -50,10 +53,12 @@ class MultiSourceDataset(torch.utils.data.Dataset):
             min_available_sources_prop (float): For a given sample (storm/time pair),
                 the minimum proportion of sources that must have an available element
                 for the sample to be included in the dataset.
+            enable_data_augmentation (bool): If True, data augmentation is enabled.
         """
         self.dt_max = pd.Timedelta(dt_max, unit="h")
         self.dataset_dir = Path(dataset_dir)
         self.sources = sources
+        self.enable_data_augmentation = enable_data_augmentation
         # Load the metadata file
         self.df = pd.read_json(metadata_path, orient="records", lines=True, convert_dates=["time"])
         # Filter the dataframe to only keep the rows where source_name is the name of a source
@@ -132,6 +137,17 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         # to retrieve the corresponding elements.
         self.samples_df = self.df[["sid", "syn_time"]].drop_duplicates().reset_index(drop=True)
 
+        # Data augmentation: prepare the transformations
+        if self.enable_data_augmentation:
+            self.transform = transforms.Compose(
+                [
+                    transforms.RandomHorizontalFlip(p=0.5),
+                    transforms.RandomVerticalFlip(p=0.5),
+                    transforms.RandomRotation(180),
+                    transforms.RandomPerspective(distortion_scale=0.2, p=0.5),
+                ]
+            )
+
     def __getitem__(self, idx):
         """Returns the element at the given index.
 
@@ -204,7 +220,17 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                 data_vars = df["data_vars"].iloc[0]
                 var_indices = [4 + data_vars.index(var) for var in selected_vars]
                 V = tensor[var_indices]
+                # Data augmentation
+                if self.enable_data_augmentation:
+                    # Convert C, D, and V to tv_tensors.Image so that they're all transformed
+                    # with the same transformation
+                    C, V = tv_tensors.Image(C), tv_tensors.Image(V)
+                    D = tv_tensors.Image(D.unsqueeze(0))
+                    # Apply the same transformation to C, D, and V
+                    C, D, V = self.transform(C, D, V)
+                    D = D.squeeze(0)
                 output[source_name] = (avail_tensor, source_tensor, dt_tensor, C, D, V)
+
         return output
 
     def get_data_filepath(self, season, basin, sid, time, source_name):
