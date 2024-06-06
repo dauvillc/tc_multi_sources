@@ -126,7 +126,9 @@ class ResNet(nn.Module):
             self.layers.append(
                 nn.Sequential(
                     nn.BatchNorm2d(inner_channels),
-                    nn.Conv2d(channels, inner_channels, kernel_size, padding=kernel_size // 2),
+                    nn.Conv2d(
+                        inner_channels, inner_channels, kernel_size, padding=kernel_size // 2
+                    ),
                     nn.GELU(),
                     nn.Conv2d(
                         inner_channels, inner_channels, kernel_size, padding=kernel_size // 2
