@@ -1,0 +1,5 @@
+train_seasons: [2016]
+val_seasons: [2017]
+test_seasons: [2017]
+
+

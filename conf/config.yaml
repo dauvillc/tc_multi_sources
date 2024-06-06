@@ -1,0 +1,14 @@
+defaults:
+  - paths/jz
+  - wandb/default
+  - sources:
+    - test
+  - dataset/multi_sources
+  - dataloader/jz
+  - lightning_module:
+    - mae
+  - model:
+      - unet
+  - trainer/jz
+  - lr_scheduler:
+    - test

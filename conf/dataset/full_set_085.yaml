@@ -13,7 +13,7 @@ train:
   dt_max: 24
   # Minimum proportion of the sources that must be available at a given (synoptic time, storm)
   # for the sample to be yielded by the dataset.
-  min_available_sources_prop: 0.6
+  min_available_sources_prop: 0.85
 
 # Validation dataset
 val:
@@ -25,4 +25,4 @@ val:
     sources_dict: ${sources}
   include_seasons: [2014, 2017]
   dt_max: 24
-  min_available_sources_prop: 0.6
+  min_available_sources_prop: 0.85

@@ -1,14 +1,14 @@
 defaults:
-  - paths/local
-  - wandb/default
+  - paths: local
+  - wandb: default
   - sources:
-    - satellite_interpolation
-  - dataset/full_set
-  - dataloader/local
+    - swath_interpolation
+  - dataset: full_set
+  - dataloader: local
   - lightning_module:
     - mae
   - model:
-      - vit
-  - trainer/local
+      - vit_test
+  - trainer: local
   - lr_scheduler:
-    - cosine_warmup_100epochs
+    - cosine_warmup_150epochs

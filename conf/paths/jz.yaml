@@ -1,0 +1,18 @@
+# Path to where the unpreprocessed datasets are stored
+raw_datasets: "/gpfswork/rech/xyw/ute68qj/data/multi_sources/raw/"
+# Path to where the preprocessed dataset will be saved
+preprocessed_dataset: "/gpfsscratch/rech/xyw/ute68qj/data/multi_sources/preprocessed/"
+# Path the intermediary preprocessing data (specific to each source, such
+# as the normalization constants) 
+sources: "/gpfswork/rech/xyw/ute68qj/data/multi_sources/sources/"
+# Path to the metadata regarding the preprocessed dataset
+metadata: "/gpfsscratch/rech/xyw/ute68qj/data/multi_sources/preprocessed/metadata.json"
+# Path to a tmp directory for scripts
+tmp_dir: "~/scratch/tmp"
+# Checkpoints directory
+checkpoints: "/gpfsscratch/rech/xyw/ute68qj/checkpoints/"
+# Weights and Biases logs
+wandb_logs: "/gpfsscratch/rech/xyw/ute68qj/"
+predictions: "/gpfsscratch/rech/xyw/ute68qj/data/multi_sources/predictions"
+results: "/gpfsscratch/rech/xyw/ute68qj/data/multi_sources/results"
+

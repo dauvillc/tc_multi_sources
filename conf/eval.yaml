@@ -2,7 +2,7 @@
 
 defaults:
   - _self_
-  - paths/local
+  - paths/jz
 
 run_id: ???
 num_workers: 4
