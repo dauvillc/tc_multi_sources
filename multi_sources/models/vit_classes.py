@@ -117,6 +117,10 @@ class ResNet(nn.Module):
         """
         super().__init__()
         self.input_channels = channels
+        # Create an input convolutional layer to match the number of channels
+        self.input_layer = nn.Conv2d(
+            channels, inner_channels, kernel_size, padding=kernel_size // 2
+        )
         self.layers = nn.ModuleList([])
         for i in range(n_blocks):
             self.layers.append(
@@ -137,6 +141,7 @@ class ResNet(nn.Module):
         )
 
     def forward(self, x):
+        x = self.input_layer(x)
         for layer in self.layers:
             x = layer(x) + x
         return self.output_layer(x)
