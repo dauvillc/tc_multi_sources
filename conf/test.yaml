@@ -1,0 +1,6 @@
+defaults:
+  - paths/local
+  - sources:
+    - satellite_interpolation
+  - dataset/full_set
+  - dataloader/local

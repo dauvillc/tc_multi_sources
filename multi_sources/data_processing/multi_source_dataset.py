@@ -8,21 +8,20 @@ from pathlib import Path
 
 class MultiSourceDataset(torch.utils.data.Dataset):
     """A dataset that yields elements from multiple sources.
-
-    The dataset yields maps {source_name: (S, DT, C, D, V)} where:
-    - S is the source index.
-    - DT is the ratio of the time difference between the element and the synoptic time
-        to the maximum time.
-    - C is a tensor of shape (3, H, W) containing the coordinates (lat, lon) of each pixel,
-        and the land-sea mask.
-    - D is a tensor of shape (H, W) containing the distance at each pixel
-        to the center of the storm.
-    - V is a tensor of shape (channels, H, W) containing the values of each pixel.
-    If the element is not available for a source, DT, C, D, and V are filled with NaNs.
+    A sample from the dataset is a dict {source_name: (A, S, DT, C, D, V)}, where:
+    - A is a scalar tensor of shape (1,) containing 1 if the element is available and 0 otherwise.
+    - S is a scalar tensor of shape (1,) containing the index of the source.
+    - DT is a scalar tensor of shape (1,) containing the time delta between the synoptic time
+      and the element's time, normalized by dt_max.
+    - C is a tensor of shape (3, H, W) containing the latitude, longitude, and land-sea mask.
+    - D is a tensor of shape (H, W) containing the distance to the center of the storm.
+    - V is a tensor of shape (n_variables, H, W) containing the variables for the source.
 
     Each element is associated with a storm and a synoptic time. For a given storm S and time t0,
     the dataset returns the element from each source that is closest
     to t0 and between t0 and t0 - dt_max.
+    If for a given source, no element is available for the storm S and time t0, the element is
+    filled with NaNs.
     """
 
     def __init__(
@@ -140,8 +139,8 @@ class MultiSourceDataset(torch.utils.data.Dataset):
             idx (int): The index of the element to retrieve.
 
         Returns:
-            dict: A dictionary {source_name: (S, DT, C, D, V)}. If the element is not available
-                for a source, DT, C, D, and V are filled with NaNs.
+            sample (multi_sources.data_processing.multi_source_batch.MultiSourceBatch): The element
+                at the given index.
         """
         sample = self.samples_df.iloc[idx]
         sid = sample["sid"]
@@ -158,9 +157,11 @@ class MultiSourceDataset(torch.utils.data.Dataset):
             if len(df) == 0 or syn_time - df["time"].iloc[0] > self.dt_max:
                 # No element available for this source
                 # Create a tensor of the appropriate shape filled with NaNs
+                avail_tensor = torch.tensor(0, dtype=torch.float32)
                 source_shape = self.source_shapes[source_name]
                 source_channels = self.get_n_variables()[source_name]
                 output[source_name] = (
+                    avail_tensor,  # A
                     source_tensor,  # S
                     torch.tensor(float("nan"), dtype=torch.float32),  # DT
                     torch.full(
@@ -176,7 +177,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
             else:
                 time = df["time"].iloc[0]
                 dt = time - syn_time
-                # Create the S and DT tensors
+                avail_tensor = torch.tensor(1, dtype=torch.float32)
                 dt_tensor = torch.tensor(
                     dt.total_seconds() / self.dt_max.total_seconds(), dtype=torch.float32
                 )
@@ -203,8 +204,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                 data_vars = df["data_vars"].iloc[0]
                 var_indices = [4 + data_vars.index(var) for var in selected_vars]
                 V = tensor[var_indices]
-                output[source_name] = (source_tensor, dt_tensor, C, D, V)
-
+                output[source_name] = (avail_tensor, source_tensor, dt_tensor, C, D, V)
         return output
 
     def get_data_filepath(self, season, basin, sid, time, source_name):

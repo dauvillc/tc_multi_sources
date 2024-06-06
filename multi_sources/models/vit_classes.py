@@ -116,6 +116,7 @@ class ResNet(nn.Module):
             kernel_size (int): Size of the convolutional kernel.
         """
         super().__init__()
+        self.input_channels = channels
         self.layers = nn.ModuleList([])
         for i in range(n_blocks):
             self.layers.append(
@@ -132,7 +133,7 @@ class ResNet(nn.Module):
             channels = inner_channels
         # Create an output convolutional layer for the regression task
         self.output_layer = nn.Conv2d(
-            inner_channels, channels, kernel_size, padding=kernel_size // 2
+            inner_channels, self.input_channels, kernel_size, padding=kernel_size // 2
         )
 
     def forward(self, x):

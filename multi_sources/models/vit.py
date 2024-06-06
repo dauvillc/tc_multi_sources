@@ -28,7 +28,10 @@ def restore_dots_in_keys(d):
 class MultiSourceVIT(nn.Module):
     """Uses a ViT backbone to reconstruct images from multiple sources, with a subset
     of them being masked out.
-    Specifically, the model takes inputs as a dict {source_name: (S, DT, C, V)} where:
+    Specifically, the model takes inputs a Mapping from source name
+    to a tuple (A, S, DT, C, V) where:
+    - A is a tensor of shape (batch_size, 1) whose value is 1 if the source is present,
+        0 if it is missing, and -1 if it is masked.
     - S is a tensor of shape (batch_size) containing the source indices.
     - DT is a tensor of shape (batch_size) containing the time delta.
     - C is a tensor of shape (batch_size, 3, H, W) containing the (lat, lon, land_mask) info
@@ -65,7 +68,8 @@ class MultiSourceVIT(nn.Module):
             dim_head (int): Dimension of each head.
             output_resnet_depth (int): Depth of the output ResNet.
                 set to 0 to disable any convolutional layer at the output.
-            output_resnet_inner_channels (int): Number of channels in the inner layers of the output
+            output_resnet_inner_channels (int): Number of channels in the inner layers
+                of the output
             output_resnet_kernel_size (int): Kernel size of the output ResNet.
             dropout (float): Dropout rate.
             emb_dropout (float): Dropout rate for the embeddings.
@@ -160,15 +164,7 @@ class MultiSourceVIT(nn.Module):
     def forward(self, inputs):
         """
         Args:
-            inputs (dict of str to tensor): Inputs for each source, as a dict
-                {source_name: (S, DT, C, V)} where:
-                - S is a tensor of shape (batch_size) containing the source indices.
-                - DT is a tensor of shape (batch_size) containing the time delta.
-                - C is a tensor of shape (batch_size, 3, H, W) containing the (lat, lon, land_mask)
-                    info at each pixel.
-                - V is a tensor of shape (batch_size, K, H, W) containing the values to be
-                    reconstructed.
-                For one or multiple sources, DT, C and V can be masked out.
+            inputs (dict of str to tuple of tensors): Inputs to the model.
         Returns:
             output (dict of str to tensor): Reconstructed values for each source, as a dict
                 {source_name: tensor of shape (batch_size, K, H, W)}.
@@ -178,7 +174,7 @@ class MultiSourceVIT(nn.Module):
         # Also pad the coordinates tensor C to the same size.
         padded_values, padded_coords = {}, {}
         for source_name, (H, W) in self.img_sizes.items():
-            S, DT, C, V = inputs[source_name]
+            A, S, DT, C, D, V = inputs[source_name]
             padded_values[source_name] = F.pad(V, (0, W - V.shape[-1], 0, H - V.shape[-2]))
             padded_coords[source_name] = F.pad(C, (0, W - C.shape[-1], 0, H - C.shape[-2]))
         # For each source, compute the patch embeddings.
@@ -234,7 +230,7 @@ class MultiSourceVIT(nn.Module):
             source_name: torch.stack([s, dt], dim=-1)
             .unsqueeze(1)
             .expand(-1, self.num_patches[source_name], -1)
-            for source_name, (s, dt, _, _) in inputs.items()
+            for source_name, (_, s, dt, _, _, _) in inputs.items()
         }
         # Concatenate the embeddings with the coordinates and the time delta and source indices.
         embeddings = {

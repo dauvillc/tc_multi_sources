@@ -1,4 +1,5 @@
 """Tests the MultiSourceDataset class."""
+
 import matplotlib.pyplot as plt
 import hydra
 from omegaconf import DictConfig, OmegaConf
@@ -9,20 +10,19 @@ from multi_sources.data_processing.utils import read_sources
 from pyinstrument import Profiler
 
 
-@hydra.main(config_path="../conf/", config_name="train", version_base=None)
+@hydra.main(config_path="../conf/", config_name="test", version_base=None)
 def main(cfg: DictConfig):
     cfg = OmegaConf.to_object(cfg)
     # Create the dataset
-    metadata_path = cfg['paths']['metadata']
-    dataset_dir = cfg['paths']['preprocessed_dataset']
-    sources = read_sources(cfg['sources'])
-    dataset = MultiSourceDataset(metadata_path, dataset_dir, sources,
-                                 include_seasons=[2016])
-    
+    metadata_path = cfg["paths"]["metadata"]
+    dataset_dir = cfg["paths"]["preprocessed_dataset"]
+    sources = read_sources(cfg["sources"])
+    dataset = MultiSourceDataset(metadata_path, dataset_dir, sources, include_seasons=[2016])
+
     print(f"Dataset length: {len(dataset)} samples")
     # Try loading one sample
     sample = dataset[0]
-    S, DT, C, D, V = sample[list(sample.keys())[0]]
+    A, S, DT, C, D, V = sample[list(sample.keys())[0]]
     # Plot the data
     fig, axs = plt.subplots(nrows=1, ncols=3, figsize=(15, 5))
     axs[0].imshow(C[0], cmap="gray")
@@ -31,7 +31,7 @@ def main(cfg: DictConfig):
     axs[1].set_title("Distance to center")
     axs[2].imshow(V[0], cmap="gray")
     axs[2].set_title("First variable")
-    plt.savefig('tests/figures/multi_source_dataset_sample.png')
+    plt.savefig("tests/figures/multi_source_dataset_sample.png")
 
     # Profile an iteration over the dataset
     profiler = Profiler()
@@ -40,7 +40,7 @@ def main(cfg: DictConfig):
     for i, batch in zip(trange(len(dataloader)), dataloader):
         pass
     profiler.stop()
-    profiler.write_html('tests/outputs/profile_multi_source_dataset.html')
+    profiler.write_html("tests/outputs/profile_multi_source_dataset.html")
     profiler.print()
 
 
