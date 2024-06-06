@@ -40,7 +40,7 @@ class MultisourceMaskedAutoencoder(pl.LightningModule):
         self.lr_scheduler_kwargs = lr_scheduler_kwargs
         self.metrics = metrics
         self.enable_masking = enable_masking
-        self.save_hyperparameters()
+        self.save_hyperparameters(ignore=["model"])
 
     def loss_fn(self, y_pred, y_true):
         """Computes the reconstruction loss over the masked source.
