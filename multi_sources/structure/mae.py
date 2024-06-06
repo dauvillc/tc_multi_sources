@@ -163,7 +163,7 @@ class MultisourceMaskedAutoencoder(pl.LightningModule):
         batch_size = x[source_names[0]][0].shape[0]
         random_numbers = torch.rand(batch_size, len(source_names))
         for i, source_name in enumerate(source_names):
-            a = x[source_name]  # batch of availability tensors of shape (batch_size,)
+            a, _, _, _, _, _ = x[source_name]  # Availability tensor of shape (bs,)
             random_numbers[a == 0, i] = -1
         values, indices = torch.max(random_numbers, dim=1)
         if values.min().item() == -1:
