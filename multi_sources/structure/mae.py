@@ -40,7 +40,7 @@ class MultisourceMaskedAutoencoder(pl.LightningModule):
         self.lr_scheduler_kwargs = lr_scheduler_kwargs
         self.metrics = metrics
         self.enable_masking = enable_masking
-        self.save_hyperparameters(ignore=["model"])
+        self.save_hyperparameters()
 
     def loss_fn(self, y_pred, y_true):
         """Computes the reconstruction loss over the masked source.
@@ -177,7 +177,7 @@ class MultisourceMaskedAutoencoder(pl.LightningModule):
             raise ValueError("Found an element for which all sources are missing.")
         # Deduce which source to mask for each elemente
         masked_x = {}
-        for i, (a, s, dt, c, d, v) in enumerate(x.values()):
+        for i, (source_name, (a, s, dt, c, d, v)) in enumerate(x.items()):
             masked_v = v.clone()
             masked_v[indices == i] = 0
             # At this point, a == 1 for an available source, and a == 0 for a non-available source.
@@ -185,7 +185,7 @@ class MultisourceMaskedAutoencoder(pl.LightningModule):
             # 0 for the masked source.
             a = a * 2 - 1
             a[indices == i] = 0
-            masked_x[i] = (a, s, dt, c, d, masked_v)
+            masked_x[source_name] = (a, s, dt, c, d, masked_v)
 
         return masked_x
 
