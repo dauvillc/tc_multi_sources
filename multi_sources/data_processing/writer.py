@@ -1,6 +1,7 @@
 """Implements the MultiSourceWriter class"""
 
 import numpy as np
+import pandas as pd
 from pathlib import Path
 from pytorch_lightning.callbacks import BasePredictionWriter
 
@@ -8,12 +9,15 @@ from pytorch_lightning.callbacks import BasePredictionWriter
 class MultiSourceWriter(BasePredictionWriter):
     """Can be used as callback to a Lightning Trainer to write to disk the predictions of a model
     such that:
-    - The targets are of the form {source_name: S, DT, C, D, V} where V are the values to predict.
+    - The targets are of the form {source_name: A, S, DT, C, D, V}
+        where V are the values to predict.
     - The outputs are of the form {source_name: V'} where V' are the predicted values.
 
     The predictions are written to disk in the following format:
     root_dir/targets/source_name/<batch_idx>.npy
     root_dir/outputs/source_name/<batch_idx>.npy
+    Additionally, the file root_dir/info.csv is written with the following columns:
+    source_name, batch_idx, dt, available, masked
     """
 
     def __init__(self, root_dir):
@@ -34,7 +38,11 @@ class MultiSourceWriter(BasePredictionWriter):
     def write_on_batch_end(
         self, trainer, pl_module, prediction, batch_indices, batch, batch_idx, dataloader_idx
     ):
-        for source_name, (_, _, _, _, v) in batch.items():
+        # The prediction is a tuple (masked_batch, pred)
+        masked_batch, prediction = prediction
+        # We'll write to the info file in append mode
+        info_file = self.root_dir / "info.csv"
+        for source_name, (_, _, _, _, _, v) in batch.items():
             source_target_dir = self.targets_dir / source_name
             source_output_dir = self.outputs_dir / source_name
             source_target_dir.mkdir(parents=True, exist_ok=True)
@@ -43,3 +51,22 @@ class MultiSourceWriter(BasePredictionWriter):
             source_targets = v.detach().cpu().numpy()
             np.save(source_target_dir / f"{batch_idx}.npy", source_targets)
             np.save(source_output_dir / f"{batch_idx}.npy", source_outputs)
+
+            (a, _, dt, _, _, _) = masked_batch[source_name]
+            # a is a tensor of shape (batch_size,) whose value is -1 if the source was
+            # not available, 0 if it was masked, and 1 if it was available.
+            # dt is a tensor of shape (batch_size,) whose value is the time delta, normalized
+            # to the range [0, 1].
+            available = a.detach().cpu().numpy()
+            masked = available == 0
+            info_df = pd.DataFrame(
+                {
+                    "source_name": [source_name] * len(available),
+                    "batch_idx": batch_idx,
+                    "dt": dt.detach().cpu().numpy(),
+                    "available": available,
+                    "masked": masked,
+                },
+            )
+        include_header = not info_file.exists()
+        info_df.to_csv(info_file, mode="a", header=include_header, index=False)
