@@ -79,7 +79,7 @@ class MultisourceMaskedAutoencoder(pl.LightningModule):
         pred = self(batch)
         # Compute and log the loss
         loss = self.loss_fn(pred, batch)
-        self.log(f"{train_or_val}_loss", loss, prog_bar=True, on_step=True, on_epoch=True)
+        self.log(f"{train_or_val}_loss", loss, prog_bar=True, on_epoch=True)
         # Compute metrics
         for metric_name, metric_fn in self.metrics.items():
             metric_value = metric_fn(pred, batch)
@@ -111,9 +111,14 @@ class MultisourceMaskedAutoencoder(pl.LightningModule):
         return self.step(batch, batch_idx, "val")
 
     def predict_step(self, batch, batch_idx):
-        """Defines a prediction step for the model."""
+        """Defines a prediction step for the model.
+        Returns:
+            batch (dict of str to tuple of tensors): The input batch.
+            pred (dict of str to tensor): The predicted values.
+        """
         batch = self.preproc_input(batch)
-        return self(batch)[0]
+        pred = self(batch)
+        return batch, pred
 
     def preproc_input(self, x):
         """Fills NaN values in the input tensors with zeros, and normalizes the coordinates."""
@@ -151,6 +156,8 @@ class MultisourceMaskedAutoencoder(pl.LightningModule):
         Returns:
             masked_x (dict of str to tuple of tensors): The masked input batch.
         """
+        if not self.enable_masking:
+            return x
         # For each element in the batch, we need to select one source to mask.
         # However, we can't mask a source that is not available, as there is no
         # available target to compare the reconstruction with.
@@ -170,10 +177,16 @@ class MultisourceMaskedAutoencoder(pl.LightningModule):
             raise ValueError("Found an element for which all sources are missing.")
         # Deduce which source to mask for each elemente
         masked_x = {}
-        for i, (a, s, dt, c, d, v) in x.items():
+        for i, (a, s, dt, c, d, v) in enumerate(x.values()):
             masked_v = v.clone()
             masked_v[indices == i] = 0
+            # At this point, a == 1 for an available source, and a == 0 for a non-available source.
+            # Convert that to -1 for a non-available source, 1 for an available source, and
+            # 0 for the masked source.
+            a = a * 2 - 1
+            a[indices == i] = 0
             masked_x[i] = (a, s, dt, c, d, masked_v)
+
         return masked_x
 
     def configure_optimizers(self):
