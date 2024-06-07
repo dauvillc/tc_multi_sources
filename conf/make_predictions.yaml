@@ -1,13 +1,15 @@
 # Config for scripts/make_predictions.py
 defaults:
   - _self_
-  - paths/jz
+  - paths/local
   - sources:
     - satellite_interpolation
-  - dataset/multi_sources
-  - dataloader/jz
+  - dataset: full_set
+  - dataloader/local
   - lightning_module:
     - mae
+  - model:
+    - vit
   - lr_scheduler:
     - test
 
