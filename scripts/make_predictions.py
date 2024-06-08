@@ -21,11 +21,8 @@ def main(cfg: DictConfig):
     # directory.
     checkpoints_dir = Path(cfg["paths"]["checkpoints"]) / run_id
     checkpoint_path = checkpoints_dir / f"epoch={cfg['checkpoint_epoch']}.ckpt"
-    model = instantiate(
-        cfg["model"], val_dataset.get_source_sizes(), val_dataset.get_n_variables()
-    ).float()
     lightning_module_class = get_class(cfg["lightning_module"]["_target_"])
-    module = lightning_module_class.load_from_checkpoint(checkpoint_path, model=model)
+    module = lightning_module_class.load_from_checkpoint(checkpoint_path)
 
     # Create the results directory
     run_results_dir = Path(cfg["paths"]["predictions"]) / run_id
