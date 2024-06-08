@@ -1,4 +1,4 @@
-import pytorch_lightning as pl
+import lightning.pytorch as pl
 import hydra
 from torch.utils.data import DataLoader
 from pathlib import Path

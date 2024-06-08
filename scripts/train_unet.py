@@ -1,11 +1,11 @@
-import pytorch_lightning as pl
+import lightning.pytorch as pl
 import hydra
 import wandb
 import multi_sources
 from hydra.utils import instantiate
 from pathlib import Path
-from pytorch_lightning.loggers import WandbLogger
-from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
+from lightning.pytorch.loggers import WandbLogger
+from lightning.pytorch.callbacks import ModelCheckpoint, LearningRateMonitor
 from torch.utils.data import DataLoader
 from omegaconf import DictConfig, OmegaConf
 

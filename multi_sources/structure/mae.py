@@ -1,6 +1,6 @@
 """Implements the MultisourceMaskedAutoencoder class"""
 
-import pytorch_lightning as pl
+import lightning.pytorch as pl
 import torch
 import multi_sources.metrics
 from multi_sources.utils.scheduler import CosineAnnealingWarmupRestarts

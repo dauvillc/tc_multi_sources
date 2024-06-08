@@ -3,7 +3,7 @@
 import numpy as np
 import pandas as pd
 from pathlib import Path
-from pytorch_lightning.callbacks import BasePredictionWriter
+from lightning.pytorch.callbacks import BasePredictionWriter
 
 
 class MultiSourceWriter(BasePredictionWriter):
