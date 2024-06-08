@@ -10,7 +10,7 @@ class MultisourceMaskedAutoencoder(pl.LightningModule):
     """Given a torch model which receives inputs from multiple sources, this class
     wraps it as a masked autoencoder, using Lightning.
     The structure receives inputs as a map {source_name: (A, S, DT, C, D, V)}, where:
-    - A is a scalar tensor of shape (1,) containing 1 if the element is available and 0 otherwise.
+    - A is a scalar tensor of shape (1,) containing 1 if the element is available and -1 otherwise.
     - S is a scalar tensor of shape (1,) containing the index of the source.
     - DT is a scalar tensor of shape (1,) containing the time delta between the synoptic time
       and the element's time, normalized by dt_max.
@@ -43,7 +43,7 @@ class MultisourceMaskedAutoencoder(pl.LightningModule):
         self.save_hyperparameters()
 
     def loss_fn(self, y_pred, y_true):
-        """Computes the reconstruction loss over the masked source.
+        """Computes the reconstruction loss over the masked source(s).
         The reconstruction loss is computed as the average over all pixels of:
           (ŷ - y)^2 * 1_{dist_to_center(pixel) < R} * (1 - land_mask(pixel)),
         where ŷ is the predicted value, y is the true value, and R is an arbitrary radius.
@@ -64,12 +64,13 @@ class MultisourceMaskedAutoencoder(pl.LightningModule):
             loss = (pred - v) ** 2
             # Mask the loss for pixels outside the storm radius
             loss = loss * (d.unsqueeze(1) < 1100)
-            # If the source is not available, don't include it in the loss
-            # computation
-            loss[a == 0] = 0
+            # Only keep in the loss the samples that have been masked
+            loss = loss[a == 0]
+            if loss.numel() == 0:
+                continue
             losses[source_name] = loss.mean()
-        # Return the sum of the losses
-        return sum(losses.values())
+        # Return the average of the losses
+        return torch.stack(list(losses.values())).mean()
 
     def step(self, batch, batch_idx, train_or_val):
         """Defines a training or validation step for the model."""
@@ -180,10 +181,7 @@ class MultisourceMaskedAutoencoder(pl.LightningModule):
         for i, (source_name, (a, s, dt, c, d, v)) in enumerate(x.items()):
             masked_v = v.clone()
             masked_v[indices == i] = 0
-            # At this point, a == 1 for an available source, and a == 0 for a non-available source.
-            # Convert that to -1 for a non-available source, 1 for an available source, and
-            # 0 for the masked source.
-            a = a * 2 - 1
+            # Set the availability tensor to 0 for the masked elements
             a[indices == i] = 0
             masked_x[source_name] = (a, s, dt, c, d, masked_v)
 

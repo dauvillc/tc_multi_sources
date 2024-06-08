@@ -11,7 +11,7 @@ from pathlib import Path
 class MultiSourceDataset(torch.utils.data.Dataset):
     """A dataset that yields elements from multiple sources.
     A sample from the dataset is a dict {source_name: (A, S, DT, C, D, V)}, where:
-    - A is a scalar tensor of shape (1,) containing 1 if the element is available and 0 otherwise.
+    - A is a scalar tensor of shape (1,) containing 1 if the element is available and -1 otherwise.
     - S is a scalar tensor of shape (1,) containing the index of the source.
     - DT is a scalar tensor of shape (1,) containing the time delta between the synoptic time
       and the element's time, normalized by dt_max.
@@ -173,7 +173,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
             if len(df) == 0 or syn_time - df["time"].iloc[0] > self.dt_max:
                 # No element available for this source
                 # Create a tensor of the appropriate shape filled with NaNs
-                avail_tensor = torch.tensor(0, dtype=torch.float32)
+                avail_tensor = torch.tensor(-1, dtype=torch.float32)
                 source_shape = self.source_shapes[source_name]
                 source_channels = self.get_n_variables()[source_name]
                 output[source_name] = (
