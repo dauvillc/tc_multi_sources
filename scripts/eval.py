@@ -40,6 +40,7 @@ def process_source_name(source_name, results_dir, targets_dir, outputs_dir, info
     batch_indices = [int(batch_index.stem) for batch_index in target_dir.iterdir()]
     # Load the info dataframe
     info_df = pd.read_csv(info_filepath)
+    info_df = info_df[info_df["source_name"] == source_name]
     for batch_index in batch_indices:
         target = np.load(target_dir / f"{batch_index}.npy")
         prediction = np.load(prediction_dir / f"{batch_index}.npy")

@@ -13,7 +13,7 @@ def main(cfg: DictConfig):
     run_id = cfg["run_id"]
 
     # Create the validation dataset and dataloader
-    val_dataset = hydra.utils.instantiate(cfg["dataset"]["val"], _convert_="partial")
+    val_dataset = hydra.utils.instantiate(cfg["dataset"]["train"], _convert_="partial")
     val_dataloader = DataLoader(val_dataset, **cfg["dataloader"])
     print("Validation dataset size:", len(val_dataset))
 
@@ -26,6 +26,9 @@ def main(cfg: DictConfig):
 
     # Create the results directory
     run_results_dir = Path(cfg["paths"]["predictions"]) / run_id
+    # Remove run_results_dir / info.csv if it exists
+    if (run_results_dir / "info.csv").exists():
+        (run_results_dir / "info.csv").unlink()
 
     # Make predictions using the MultiSourceWriter class, which is a custom implementation of
     # BasePredictionWriter.

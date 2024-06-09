@@ -68,5 +68,5 @@ class MultiSourceWriter(BasePredictionWriter):
                     "masked": masked,
                 },
             )
-        include_header = not info_file.exists()
-        info_df.to_csv(info_file, mode="a", header=include_header, index=False)
+            include_header = not info_file.exists()
+            info_df.to_csv(info_file, mode="a", header=include_header, index=False)
