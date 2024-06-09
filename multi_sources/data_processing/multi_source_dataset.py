@@ -192,7 +192,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                 )
             else:
                 time = df["time"].iloc[0]
-                dt = time - syn_time
+                dt = syn_time - time
                 avail_tensor = torch.tensor(1, dtype=torch.float32)
                 dt_tensor = torch.tensor(
                     dt.total_seconds() / self.dt_max.total_seconds(), dtype=torch.float32
