@@ -64,11 +64,11 @@ class MultisourceMaskedAutoencoder(pl.LightningModule):
             loss = (pred - v) ** 2
             # Mask the loss for pixels outside the storm radius
             loss = loss * (d.unsqueeze(1) < 1100)
+            # Take the average over all dimensions but the batch dimension
+            loss = loss.mean(dim=(1, 2, 3))
             # Only keep in the loss the samples that have been masked
-            loss = loss[a == 0]
-            if loss.numel() == 0:
-                continue
-            losses[source_name] = loss.mean()
+            loss[a != 0] = 0
+            losses[source_name] = loss.sum()
         # Return the average of the losses
         return torch.stack(list(losses.values())).mean()
 
@@ -172,7 +172,7 @@ class MultisourceMaskedAutoencoder(pl.LightningModule):
         random_numbers = torch.rand(batch_size, len(source_names))
         for i, source_name in enumerate(source_names):
             a, _, _, _, _, _ = x[source_name]  # Availability tensor of shape (bs,)
-            random_numbers[a == 0, i] = -1
+            random_numbers[a == -1, i] = -1
         values, indices = torch.max(random_numbers, dim=1)
         if values.min().item() == -1:
             raise ValueError("Found an element for which all sources are missing.")
