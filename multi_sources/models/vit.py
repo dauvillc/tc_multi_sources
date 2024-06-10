@@ -118,23 +118,18 @@ class MultiSourceVIT(nn.Module):
                 for source_name in channels
             }
         )
-        # Create an embedding for the land mask, which will be summed to the patch embeddings.
-        self.land_mask_embeddings = nn.ModuleDict(
+        # Create an embedding for the land mask and coordinates for each source.
+        self.coord_embeddings = nn.ModuleDict(
             {
                 source_name: PatchEmbedding(
-                    patch_size[0], patch_size[1], 1, dim
+                    patch_size[0], patch_size[1], 3, dim
                 )  # 1 channel for the land mask
                 for source_name in channels
             }
         )
-        # Instead of a traditional positional embedding, we'all append the latitude and longitude
-        # coordinates to the patch embeddings. The idea is to allow each patch to understand
-        # which patches in the other sources correspond to the same approximate location.
-        # Note: while C gives the lat/lon for each pixel, we'll only use the coordinates
-        # of the four corners of each patch, to limit the additional patch dimension.
         # We'll also append the time delta and the source index, which are scalar values, as
         # well as the availability flag.
-        self.dim += 11  # 4 corners * 2 coordinates + time delta + source_index + availability
+        self.dim = self.dim + 3  # Value emb. + [time delta, source_index, avail.]
 
         # Create the transformer layers.
         self.transformer = Transformer(self.dim, depth, heads, dim_head, mlp_dim, dropout)
@@ -183,49 +178,11 @@ class MultiSourceVIT(nn.Module):
             source_name: self.patch_embeddings[source_name](V)
             for source_name, V in padded_values.items()
         }
-        # For each source, compute the land mask embeddings.
-        land_mask_embeddings = {
-            source_name: self.land_mask_embeddings[source_name](C[:, 2:3])
+        # For each source, compute the coordinate embeddings.
+        coords = {
+            source_name: self.coord_embeddings[source_name](C)
             for source_name, C in padded_coords.items()
         }
-        # Add the land mask embeddings to the patch embeddings.
-        embeddings = {
-            source_name: emb + land_emb
-            for (source_name, emb), land_emb in zip(
-                embeddings.items(), land_mask_embeddings.values()
-            )
-        }
-        # For each source, retrieve the coordinates of the corners of each patch.
-        coords = {}
-        for source_name, C in padded_coords.items():
-            lat, lon = C[:, 0], C[:, 1]
-            # Rearrange each from (bs, H, W) to (bs, n_patch, patch_h, patch_w).
-            lat = rearrange(
-                lat,
-                "bs (h ph) (w pw) -> bs (h w) ph pw",
-                ph=self.patch_size[0],
-                pw=self.patch_size[1],
-            )
-            lon = rearrange(
-                lon,
-                "bs (h ph) (w pw) -> bs (h w) ph pw",
-                ph=self.patch_size[0],
-                pw=self.patch_size[1],
-            )
-            # Fetch the coordinates of the four corners of each patch.
-            coords[source_name] = torch.stack(
-                [
-                    lat[:, :, 0, 0],  # top left
-                    lat[:, :, 0, -1],  # top right
-                    lat[:, :, -1, 0],  # bottom left
-                    lat[:, :, -1, -1],  # bottom right
-                    lon[:, :, 0, 0],  # top left
-                    lon[:, :, 0, -1],  # top right
-                    lon[:, :, -1, 0],  # bottom left
-                    lon[:, :, -1, -1],  # bottom right
-                ],
-                dim=-1,
-            )
         # Stack the source indices, the time delta and the availability flag.
         info_tensor = {
             source_name: torch.stack([a, s, dt], dim=-1)
@@ -233,9 +190,16 @@ class MultiSourceVIT(nn.Module):
             .expand(-1, self.num_patches[source_name], -1)
             for source_name, (a, s, dt, _, _, _) in inputs.items()
         }
-        # Concatenate the embeddings with the coordinates and the info tensor for each source
+        # Sum the embeddings with the coordinate embeddings.
         embeddings = {
-            source_name: torch.cat([emb, coords[source_name], info_tensor[source_name]], dim=-1)
+            source_name: emb + coord
+            for source_name, emb, coord in zip(
+                embeddings.keys(), embeddings.values(), coords.values()
+            )
+        }
+        # Concatenate the embeddings with the info tensor for each source
+        embeddings = {
+            source_name: torch.cat([emb, info_tensor[source_name]], dim=-1)
             for source_name, emb in embeddings.items()
         }
         # Concatenate the embeddings for all sources to form the sequence.
