@@ -13,14 +13,18 @@ def main(cfg: DictConfig):
     run_id = cfg["run_id"]
 
     # Create the validation dataset and dataloader
-    val_dataset = hydra.utils.instantiate(cfg["dataset"]["train"], _convert_="partial")
+    val_dataset = hydra.utils.instantiate(cfg["dataset"]["val"], _convert_="partial")
     val_dataloader = DataLoader(val_dataset, **cfg["dataloader"])
     print("Validation dataset size:", len(val_dataset))
 
     # Load the checkpoint. The checkpoints are stored as "epoch=xx.ckpt" files in the checkpoints
     # directory.
+    # Use the latest checkpoint.
     checkpoints_dir = Path(cfg["paths"]["checkpoints"]) / run_id
-    checkpoint_path = checkpoints_dir / f"epoch={cfg['checkpoint_epoch']}.ckpt"
+    checkpoint_files = list(checkpoints_dir.glob("*.ckpt"))
+    checkpoint_files.sort(key=lambda x: x.stat().st_mtime)
+    checkpoint_path = checkpoint_files[-1]
+    print("Loading checkpoint:", checkpoint_path.stem)
     lightning_module_class = get_class(cfg["lightning_module"]["_target_"])
     module = lightning_module_class.load_from_checkpoint(checkpoint_path)
 

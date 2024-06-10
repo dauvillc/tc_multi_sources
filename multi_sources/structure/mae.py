@@ -66,9 +66,7 @@ class MultisourceMaskedAutoencoder(pl.LightningModule):
             loss = loss * (d.unsqueeze(1) < 1100)
             # Take the average over all dimensions but the batch dimension
             loss = loss.mean(dim=(1, 2, 3))
-            # Only keep in the loss the samples that have been masked
-            loss[a != 0] = 0
-            losses[source_name] = loss.sum()
+            losses[source_name] = loss.mean()
         # Return the average of the losses
         return torch.stack(list(losses.values())).mean()
 
