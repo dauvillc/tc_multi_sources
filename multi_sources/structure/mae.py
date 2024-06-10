@@ -24,7 +24,8 @@ class MultisourceMaskedAutoencoder(pl.LightningModule):
         model (torch.nn.Module): The model to wrap.
     """
 
-    def __init__(self, model, lr_scheduler_kwargs, metrics={}, enable_masking=True):
+    def __init__(self, model, lr_scheduler_kwargs, metrics={}, enable_masking=True,
+                 only_mask_sources=[]):
         """
         Args:
             model (torch.nn.Module): The model to wrap.
@@ -34,12 +35,16 @@ class MultisourceMaskedAutoencoder(pl.LightningModule):
                 A metric should have the signature metric(y_pred, y_true) -> torch.Tensor.
             enable_masking (bool): Whether to enable masking of the input sources.
                 Disable to run in the autoencoder mode.
+            only_mask_sources (list of str): The sources to mask. If empty, all sources have
+                an equal chance of being masked.
+                If not empty, only the sources in the list can be masked.
         """
         super().__init__()
         self.model = model
         self.lr_scheduler_kwargs = lr_scheduler_kwargs
         self.metrics = metrics
         self.enable_masking = enable_masking
+        self.only_mask_sources = only_mask_sources
         self.save_hyperparameters()
 
     def loss_fn(self, y_pred, y_true):
@@ -64,7 +69,7 @@ class MultisourceMaskedAutoencoder(pl.LightningModule):
             loss = (pred - v) ** 2
             # Ignore the pixels that were padded. We can find those as their
             # value in d is +inf.
-            loss[(d == float("inf")).unsqueeze(1)] = 0
+            loss[(d == float("inf")).unsqueeze(1).expand(loss.shape)] = 0
             # Take the average over all dimensions but the batch dimension
             loss = loss.mean(dim=(1, 2, 3))
             # Mask the loss for samples for which the source is not available
@@ -174,6 +179,10 @@ class MultisourceMaskedAutoencoder(pl.LightningModule):
         for i, source_name in enumerate(source_names):
             a, _, _, _, _, _ = x[source_name]  # Availability tensor of shape (bs,)
             random_numbers[a == -1, i] = -1
+            # If a set of maskable sources is provided, and this source is not in it,
+            # set the random number to -1
+            if self.only_mask_sources and source_name not in self.only_mask_sources:
+                random_numbers[:, i] = -1
         values, indices = torch.max(random_numbers, dim=1)
         if values.min().item() == -1:
             raise ValueError("Found an element for which all sources are missing.")
