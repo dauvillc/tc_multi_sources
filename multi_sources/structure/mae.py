@@ -62,13 +62,16 @@ class MultisourceMaskedAutoencoder(pl.LightningModule):
             pred = y_pred[source_name]
             # Compute the MSE loss element-wise
             loss = (pred - v) ** 2
-            # Mask the loss for pixels outside the storm radius
-            loss = loss * (d.unsqueeze(1) < 1100)
+            # Ignore the pixels that were padded. We can find those as their
+            # value in d is +inf.
+            loss[(d == float("inf")).unsqueeze(1)] = 0
             # Take the average over all dimensions but the batch dimension
             loss = loss.mean(dim=(1, 2, 3))
+            # Mask the loss for samples for which the source is not available
+            loss[a == -1] = 0
             losses[source_name] = loss.mean()
         # Return the average of the losses
-        return torch.stack(list(losses.values())).mean()
+        return sum(losses.values()) / len(losses)
 
     def step(self, batch, batch_idx, train_or_val):
         """Defines a training or validation step for the model."""
@@ -191,7 +194,19 @@ class MultisourceMaskedAutoencoder(pl.LightningModule):
         The learning rate goes through a linear warmup phase, then follows a cosine
         annealing schedule.
         """
-        optimizer = torch.optim.AdamW(self.model.parameters(), lr=1e-4)
+        decay_params = {
+            k: True for k, v in self.named_parameters() if "weight" in k and "norm" not in k
+        }
+        optimizer = torch.optim.AdamW(
+            [
+                {"params": [v for k, v in self.named_parameters() if k in decay_params]},
+                {
+                    "params": [v for k, v in self.named_parameters() if k not in decay_params],
+                    "weight_decay": 0,
+                },
+            ]
+        )
+
         scheduler = CosineAnnealingWarmupRestarts(
             optimizer,
             **self.lr_scheduler_kwargs,
