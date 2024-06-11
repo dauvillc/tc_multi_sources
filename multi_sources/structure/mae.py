@@ -73,7 +73,7 @@ class MultisourceMaskedAutoencoder(pl.LightningModule):
             # Take the average over all dimensions but the batch dimension
             loss = loss.mean(dim=(1, 2, 3))
             # Mask the loss for samples for which the source is not masked
-            loss[a != 0] = 0
+            loss *= (a != 0).to(loss.dtype)
             losses[source_name] = loss.mean()
         # Return the average of the losses
         return sum(losses.values()) / len(losses)
