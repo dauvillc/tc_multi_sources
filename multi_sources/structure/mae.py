@@ -69,7 +69,8 @@ class MultisourceMaskedAutoencoder(pl.LightningModule):
             loss = (pred - v) ** 2
             # Ignore the pixels that were padded. We can find those as their
             # value in d is +inf.
-            loss[(d == float("inf")).unsqueeze(1).expand(loss.shape)] = 0
+            padded = (d != float("inf")).unsqueeze(1).expand(loss.shape).to(loss.dtype)
+            loss *= padded
             # Take the average over all dimensions but the batch dimension
             loss = loss.mean(dim=(1, 2, 3))
             # Mask the loss for samples for which the source is not masked
