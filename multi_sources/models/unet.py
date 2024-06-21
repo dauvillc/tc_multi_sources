@@ -8,7 +8,9 @@ import torch.nn.functional as F
 class UNet(nn.Module):
     """A simple UNet model to perform field reconstruction or autoencoding.
 
-    The model receives as input a dict {source: (S, DT, C, V) or None} where:
+    The model receives as input a dict {source: (A, S, DT, C, V) or None} where:
+    - A is a tensor of shape (batch_size,) whose value is 1 if the source is available, 0 if it is
+        available but masked, and -1 if it is not available.
     - S is a tensor of shape (batch_size,) containing the source index.
     - DT is a tensor of shape (batch_size,) containing the time delta between the element's time
         and the reference time.
@@ -150,13 +152,13 @@ class UNet(nn.Module):
         if len(batch) != self.n_sources:
             raise ValueError(f"Expected {self.n_sources} sources, got {len(batch)}.")
         # Transform the input dict into a list of tensors, ordered by source index
-        x = {int(s[0].item()): (s, dt, c, v) for s, dt, c, v in batch.values()}
+        x = {int(s[0].item()): (a, s, dt, c, v) for a, s, dt, c, d, v in batch.values()}
         x = [x[i] for i in range(self.n_sources)]
         # For each source, pad C and V to the next multiple of 2^n_blocks
         # Then project S and DT into a tensor of shape (batch_size, 2, H, W)
         # - First, browse all sources to find their sizes
         widths, heights = [], []
-        for _, _, _, v in x:
+        for _, _, _, _, v in x:
             h, w = v.shape[-2:]
             heights.append(h)
             widths.append(w)
@@ -166,19 +168,19 @@ class UNet(nn.Module):
         w = (max(widths) + power - 1) // power * power
         # - Browse all sources to pad C and V to the computed size
         st, original_sizes = [], []
-        for k, (s, dt, c, v) in enumerate(x):
+        for k, (a, s, dt, c, v) in enumerate(x):
             # Pad C and V
             original_sizes.append(v.shape[-2:])
             c = F.pad(c, (0, w - c.shape[-1], 0, h - c.shape[-2]))
             v = F.pad(v, (0, w - v.shape[-1], 0, h - v.shape[-2]))
-            x[k] = (s, dt, c, v)
+            x[k] = (a, s, dt, c, v)
             # Project S and DT
             sdt = torch.stack((s, dt), dim=1)
             sdt = sdt.unsqueeze(-1).unsqueeze(-1).expand(-1, -1, h, w)
             st.append(sdt)
         # For each source, concat SDT, C and V along the channel dimension
         inputs = []
-        for k, (s, dt, c, v) in enumerate(x):
+        for k, (a, s, dt, c, v) in enumerate(x):
             inputs.append(torch.cat((st[k], c, v), dim=1))
         # Concatenate the inputs along the channel dimension
         x = torch.cat(inputs, dim=1)

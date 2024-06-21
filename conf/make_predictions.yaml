@@ -2,14 +2,13 @@
 defaults:
   - _self_
   - paths/local
-  - sources:
-    - satellite_interpolation
+  - sources: test
   - dataset: full_set
   - dataloader/local
   - lightning_module:
     - mae
   - model:
-    - vit
+    - vit_test
   - lr_scheduler:
     - test
 
@@ -18,4 +17,3 @@ trainer:
   devices: 1
 
 run_id: ???
-checkpoint_epoch: ???

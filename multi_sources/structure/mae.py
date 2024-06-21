@@ -62,22 +62,24 @@ class MultisourceMaskedAutoencoder(pl.LightningModule):
         Returns:
             torch.Tensor: The loss of the model.
         """
-        losses = {}
-        for source_name, (a, _, _, _, d, v) in y_true.items():
+        total_loss = 0
+        for source_name, (a, _, _, c, d, v) in y_true.items():
             pred = y_pred[source_name]
             # Compute the MSE loss element-wise
             loss = (pred - v) ** 2
-            # Ignore the pixels that were padded. We can find those as their
-            # value in d is +inf.
-            padded = (d != float("inf")).unsqueeze(1).expand(loss.shape).to(loss.dtype)
-            loss *= padded
-            # Take the average over all dimensions but the batch dimension
-            loss = loss.mean(dim=(1, 2, 3))
+            # Ignore all pixels for which d > 1100 km. Note that this also
+            # excludes the pixels for which d = inf.= (padding)
+            mask = (d <= 1100).unsqueeze(1).expand(loss.shape)
+            # Ignore all pixels for which the land mask is 1
+            mask &= (c[:, 2:3] == 0).expand(loss.shape)
             # Mask the loss for samples for which the source is not masked
-            loss *= (a != 0).to(loss.dtype)
-            losses[source_name] = loss.mean()
-        # Return the average of the losses
-        return sum(losses.values()) / len(losses)
+            mask[a != 0] = False
+            masked_loss = loss[mask]
+            if masked_loss.numel() == 0:
+                continue
+            total_loss += masked_loss.mean()
+
+        return total_loss / len(y_true)
 
     def step(self, batch, batch_idx, train_or_val):
         """Defines a training or validation step for the model."""

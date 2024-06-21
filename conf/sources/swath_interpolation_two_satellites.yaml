@@ -26,8 +26,23 @@ tc_primed:
   microwave:
     environment_variables: ['latitude', 'longitude']
     AMSR2_GCOMW1:
+      S1:
+        variables: ['TB_10.65H']
       S2:
         variables: ['TB_18.7H']
       S3:
         variables: ['TB_23.8V']
+      S4:
+        variables: ['TB_36.5H']
+      S5:
+        variables: ['TB_A89.0H']
+    ATMS_NPP:
+      S1:
+        variables: ['TB_23.8QV']
+      S2:
+        variables: ['TB_31.4QV']
+      S3:
+        variables: ['TB_88.2QV']
+      S4:
+        variables: ['TB_165.5QH', 'TB_183.31_1.0QH']
 

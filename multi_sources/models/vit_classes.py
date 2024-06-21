@@ -96,6 +96,9 @@ class PatchEmbedding(nn.Module):
             Rearrange("b c (h p1) (w p2) -> b (h w) (p1 p2 c)", p1=patch_h, p2=patch_w),
             nn.LayerNorm(self.patch_dim),
             nn.Linear(self.patch_dim, dim),
+            nn.GELU(),
+            nn.LayerNorm(dim),
+            nn.Linear(dim, dim),
         )
 
     def forward(self, x):
@@ -130,6 +133,7 @@ class ResNet(nn.Module):
                         inner_channels, inner_channels, kernel_size, padding=kernel_size // 2
                     ),
                     nn.GELU(),
+                    nn.BatchNorm2d(inner_channels),
                     nn.Conv2d(
                         inner_channels, inner_channels, kernel_size, padding=kernel_size // 2
                     ),
@@ -138,8 +142,9 @@ class ResNet(nn.Module):
             )
             channels = inner_channels
         # Create an output convolutional layer for the regression task
-        self.output_layer = nn.Conv2d(
-            inner_channels, self.input_channels, kernel_size, padding=kernel_size // 2
+        self.output_layer = nn.Sequential(
+            nn.BatchNorm2d(inner_channels),
+            nn.Conv2d(inner_channels, self.input_channels, kernel_size, padding=kernel_size // 2),
         )
 
     def forward(self, x):

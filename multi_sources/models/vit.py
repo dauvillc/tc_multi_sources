@@ -4,7 +4,8 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from multi_sources.models.vit_classes import PatchEmbedding, Transformer, ResNet
+from multi_sources.models.vit_classes import PatchEmbedding, ResNet
+from multi_sources.models.custom_vit import CoordinatesTransformer
 from einops import rearrange
 
 
@@ -45,13 +46,14 @@ class MultiSourceVIT(nn.Module):
         img_sizes,
         channels,
         patch_size,
-        dim,
+        x_dim,
+        c_dim,
         depth,
         heads,
         mlp_dim,
         dim_head,
         output_resnet_depth=3,
-        output_resnet_inner_channels=16,
+        output_resnet_inner_channels=8,
         output_resnet_kernel_size=3,
         dropout=0.0,
         emb_dropout=0.0,
@@ -61,7 +63,8 @@ class MultiSourceVIT(nn.Module):
             img_sizes (dict of str to int or tuple of int): Size of the images for each source.
             channels (dict of str to int): Number of channels in the values (V) for each source.
             patch_size (int or tuple of int): Size of the patches to be extracted from the image.
-            dim (int): Dimension of the model.
+            x_dim (int): Dimension of the internal embeddings for the pixel values.
+            c_dim (int): Dimension of the internal embeddings for the coordinates.
             depth (int): Number of layers.
             heads (int): Number of heads for the attention mechanism.
             mlp_dim (int): Dimension of the feedforward layers.
@@ -79,7 +82,8 @@ class MultiSourceVIT(nn.Module):
         # in the keys of img_sizes and channels.
         img_sizes = remove_dots_in_keys(img_sizes)
         channels = remove_dots_in_keys(channels)
-        self.dim = dim
+        self.x_dim = x_dim
+        self.c_dim = c_dim
         self.depth = depth
         self.heads = heads
         self.mlp_dim = mlp_dim
@@ -113,49 +117,52 @@ class MultiSourceVIT(nn.Module):
         self.patch_embeddings = nn.ModuleDict(
             {
                 source_name: PatchEmbedding(
-                    patch_size[0], patch_size[1], channels[source_name], dim
+                    patch_size[0], patch_size[1], channels[source_name], x_dim
                 )
                 for source_name in channels
             }
         )
-        # Create an embedding for the land mask and coordinates for each source.
-        self.coord_embeddings = nn.ModuleDict(
-            {
-                source_name: PatchEmbedding(
-                    patch_size[0], patch_size[1], 3, dim
-                )  # 1 channel for the land mask
-                for source_name in channels
-            }
-        )
+        # Create an embedding for the land mask for each source.
+        self.land_mask_embedding = PatchEmbedding(patch_size[0], patch_size[1], 1, x_dim)
+        # Create an embedding for the coordinates (lat/lon) for each source.
+        self.coord_embedding = PatchEmbedding(patch_size[0], patch_size[1], 2, c_dim)
+
         # We'll also append the time delta and the source index, which are scalar values, as
         # well as the availability flag.
-        self.dim = self.dim + 3  # Value emb. + [time delta, source_index, avail.]
+        self.x_dim = self.x_dim + 3  # Value emb. + [time delta, source_index, avail.]
 
         # Create the transformer layers.
-        self.transformer = Transformer(self.dim, depth, heads, dim_head, mlp_dim, dropout)
+        self.transformer = CoordinatesTransformer(
+            self.x_dim, self.c_dim, depth, heads, dim_head, mlp_dim, dropout
+        )
 
         # Create a final linear layer to go from the transformer dim to the original patch dim.
         self.output_projections = nn.ModuleDict(
             {
                 source_name: nn.Sequential(
-                    nn.LayerNorm(self.dim), nn.Linear(self.dim, self.patch_dim[source_name])
+                    nn.LayerNorm(self.x_dim), nn.Linear(self.x_dim, self.patch_dim[source_name])
                 )
                 for source_name in channels
             }
         )
         # Create a ResNet module for each source at the end to correct artifacts at the borders
         # between patches.
-        self.output_resnets = nn.ModuleDict(
-            {
-                source_name: ResNet(
-                    self.channels[source_name],
-                    output_resnet_inner_channels,
-                    output_resnet_depth,
-                    output_resnet_kernel_size,
-                )
-                for source_name in channels
-            }
-        )
+        if output_resnet_depth > 0:
+            self.output_resnets = nn.ModuleDict(
+                {
+                    source_name: ResNet(
+                        self.channels[source_name],
+                        output_resnet_inner_channels,
+                        output_resnet_depth,
+                        output_resnet_kernel_size,
+                    )
+                    for source_name in channels
+                }
+            )
+        else:
+            self.output_resnets = nn.ModuleDict(
+                {source_name: nn.Identity() for source_name in channels}
+            )
 
     def forward(self, inputs):
         """
@@ -178,9 +185,14 @@ class MultiSourceVIT(nn.Module):
             source_name: self.patch_embeddings[source_name](V)
             for source_name, V in padded_values.items()
         }
+        # For each source, compute the land mask embeddings.
+        land_mask_embed = {
+            source_name: self.land_mask_embedding(C[:, 2:3])
+            for source_name, C in padded_coords.items()
+        }
         # For each source, compute the coordinate embeddings.
-        coords = {
-            source_name: self.coord_embeddings[source_name](C)
+        coords_embed = {
+            source_name: self.coord_embedding(C[:, :2])
             for source_name, C in padded_coords.items()
         }
         # Stack the source indices, the time delta and the availability flag.
@@ -190,11 +202,11 @@ class MultiSourceVIT(nn.Module):
             .expand(-1, self.num_patches[source_name], -1)
             for source_name, (a, s, dt, _, _, _) in inputs.items()
         }
-        # Sum the embeddings with the coordinate embeddings.
+        # Sum the embeddings with the land mask embeddings.
         embeddings = {
-            source_name: emb + coord
-            for source_name, emb, coord in zip(
-                embeddings.keys(), embeddings.values(), coords.values()
+            source_name: emb + mask
+            for source_name, emb, mask in zip(
+                embeddings.keys(), embeddings.values(), land_mask_embed.values()
             )
         }
         # Concatenate the embeddings with the info tensor for each source
@@ -204,8 +216,10 @@ class MultiSourceVIT(nn.Module):
         }
         # Concatenate the embeddings for all sources to form the sequence.
         sequence = torch.cat([emb for emb in embeddings.values()], dim=1)
-        # Apply the transformer layers.
-        transformer_output = self.transformer(sequence)
+        # Concatenate the coordinates embeddings for all sources to form the sequence.
+        coords_sequence = torch.cat([emb for emb in coords_embed.values()], dim=1)
+        # Apply the transformer.
+        transformer_output = self.transformer(sequence, coords_sequence)
         # Split the output back to the sources.
         output, cnt = {}, 0
         for source_name, num_patches in self.num_patches.items():
@@ -222,12 +236,17 @@ class MultiSourceVIT(nn.Module):
         output = {
             source_name: rearrange(
                 otp,
-                "b (h w) (ph pw c) -> b c (h ph) (w pw)",
+                "b (h w) (c pw ph) -> b c (h ph) (w pw)",
                 ph=self.patch_size[0],
                 pw=self.patch_size[1],
                 c=self.channels[source_name],
                 h=self.img_sizes[source_name][0] // self.patch_size[0],
             )
+            for source_name, otp in output.items()
+        }
+        # Apply the ResNet to correct artifacts at the borders between patches.
+        output = {
+            source_name: self.output_resnets[source_name](otp)
             for source_name, otp in output.items()
         }
         # For each source, remove the padding.
@@ -236,11 +255,6 @@ class MultiSourceVIT(nn.Module):
             for source_name, otp, (H, W) in zip(
                 output.keys(), output.values(), self.original_img_sizes.values()
             )
-        }
-        # For each source, apply the output ResNet.
-        output = {
-            source_name: self.output_resnets[source_name](otp)
-            for source_name, otp in output.items()
         }
         # Restore the original keys.
         output = restore_dots_in_keys(output)
