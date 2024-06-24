@@ -4,10 +4,7 @@ defaults:
   - sources: test
   - dataset: full_set
   - dataloader: local
-  - lightning_module:
-    - mae
-  - model:
-      - vit_test
+  - lightning_module: mae
+  - model: regridding_vit
   - trainer: 1xv100-32g
-  - lr_scheduler:
-    - cosine_warmup_150epochs
+  - lr_scheduler: cosine_warmup_150epochs

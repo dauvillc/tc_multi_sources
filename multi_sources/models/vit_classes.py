@@ -96,13 +96,23 @@ class PatchEmbedding(nn.Module):
             Rearrange("b c (h p1) (w p2) -> b (h w) (p1 p2 c)", p1=patch_h, p2=patch_w),
             nn.LayerNorm(self.patch_dim),
             nn.Linear(self.patch_dim, dim),
-            nn.GELU(),
             nn.LayerNorm(dim),
-            nn.Linear(dim, dim),
         )
 
     def forward(self, x):
         return self.embedding(x)
+
+
+class VectorEmbedding(nn.Module):
+    def __init__(self, input_dim, output_dim):
+        super().__init__()
+        self.layers = nn.Sequential(
+            nn.Linear(input_dim, output_dim),
+            nn.LayerNorm(output_dim),
+        )
+
+    def forward(self, x):
+        return self.layers(x).unsqueeze(1)  # Add a dummy dimension for the patches
 
 
 class ResNet(nn.Module):

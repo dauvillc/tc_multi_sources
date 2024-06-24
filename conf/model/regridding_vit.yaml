@@ -1,0 +1,9 @@
+_target_: multi_sources.models.regridding_vit.RegriddingTransformer
+patch_size: 16
+c_dim: 256
+inner_channels: 4
+depth: 2
+heads: 4
+dim_head: 64
+output_resnet_depth: 1
+output_resnet_kernel_size: 7
