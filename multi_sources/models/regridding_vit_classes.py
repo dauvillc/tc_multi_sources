@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 from einops import rearrange
 from einops.layers.torch import Rearrange
+from multi_sources.models.utils import pad_to_next_multiple_of
 
 
 class VectorEmbedding(nn.Module):
@@ -68,6 +69,54 @@ class CoordinatesAttention(nn.Module):
 
         attn = self.attend(dots * self.scale)
         return attn
+
+
+class EntryConvBlock(nn.Module):
+    """Entry block of the RegriddingVit model."""
+
+    def __init__(self, in_channels, out_channels, downsample):
+        """
+        Args:
+            in_channels (list of int): number of channels of the input images;
+            out_channels (int): number of channels of the output images;
+            downsample (bool): whether to downsample the images by a factor of 2.
+        """
+        super().__init__()
+        self.downsamples = nn.ModuleList()
+        for c in in_channels:
+            if downsample:
+                # The downsampling block is a depthwise Conv2d with a stride of 2.
+                self.downsamples.append(
+                    nn.Sequential(
+                        nn.Conv2d(c, c, kernel_size=3, stride=2, padding=1, groups=c),
+                        nn.BatchNorm2d(c),
+                        nn.GELU()
+                    )
+                )
+            else:
+                self.downsamples.append(nn.Identity())
+        self.convs = nn.ModuleList()
+        for c in in_channels:
+            self.convs.append(
+                nn.Sequential(
+                    nn.Conv2d(c, out_channels, kernel_size=3, padding=1),
+                    nn.BatchNorm2d(out_channels),
+                    nn.GELU(),
+                    nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1),
+                    nn.BatchNorm2d(out_channels),
+                )
+            )
+
+    def forward(self, x):
+        """
+        Args:
+            x (list of torch.Tensor): list of input images.
+        Returns:
+            y (list of torch.Tensor): list of output images.
+        """
+        x = [downsample(img) for downsample, img in zip(self.downsamples, x)]
+        x = [conv(img) for conv, img in zip(self.convs, x)]
+        return x
 
 
 class AttentionRegriddingBlock(nn.Module):
@@ -152,10 +201,12 @@ class AttentionRegriddingBlock(nn.Module):
                 of shape (B, output_channels, H, W).
         """
         # Store the sizes of the images.
+        original_img_sizes = [img.shape[-2:] for img in x]
+        # Pad the images and coords so that their sizes are multiples of the patch size.
+        x = [pad_to_next_multiple_of(img, self.patch_size) for img in x]
+        coords = [pad_to_next_multiple_of(coord, self.patch_size) for coord in coords]
+        # Store the sizes of the padded images.
         img_sizes = [img.shape[-2:] for img in x]
-        assert all(
-            H % self.patch_size[0] == 0 and W % self.patch_size[1] == 0 for H, W in img_sizes
-        ), "The patch size must divide the image sizes."
         # Compute the number of patches for each source.
         self.num_patches = [
             H * W // (self.patch_size[0] * self.patch_size[1]) for H, W in img_sizes
@@ -204,4 +255,6 @@ class AttentionRegriddingBlock(nn.Module):
         images = [self.conv_heads(img) for img in images]  # list of (B, output_channels, hd, H, W)
         # Sum the heads
         images = [img.sum(dim=2) for img in images]  # list of (B, output_channels, H, W)
+        # Remove the padding
+        images = [img[..., :H, :W] for img, (H, W) in zip(images, original_img_sizes)]
         return images
