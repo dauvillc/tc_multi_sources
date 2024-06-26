@@ -71,7 +71,7 @@ class MultisourceMaskedAutoencoder(pl.LightningModule):
             # excludes the pixels for which d = inf.= (padding)
             mask = (d <= 1100).unsqueeze(1).expand(loss.shape)
             # Ignore all pixels for which the land mask is 1
-            mask &= (c[:, 2:3] == 0).expand(loss.shape)
+            mask = mask & (c[:, 2:3] == 0).expand(loss.shape)
             # Mask the loss for samples for which the source is not masked
             mask[a != 0] = False
             masked_loss = loss[mask]

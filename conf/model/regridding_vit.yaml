@@ -3,7 +3,7 @@ patch_size: 16
 c_dim: 256
 inner_channels: 4
 depth: 1
-downsample: False
+downsample: True
 heads: 1
 dim_head: 256
 output_resnet_depth: 1

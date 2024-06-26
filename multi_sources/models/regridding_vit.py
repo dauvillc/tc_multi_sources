@@ -62,7 +62,9 @@ class RegriddingTransformer(nn.Module):
         self.patch_size = patch_size
         # Create the input convolutions for the images and the coordinates.
         self.entry_block = EntryConvBlock(self.channels, inner_channels, downsample)
-        self.coord_entry_block = EntryConvBlock([2] * self.n_sources, 2, downsample)
+        self.coord_entry_block = (
+            nn.AvgPool2d(kernel_size=3, stride=2, padding=1) if downsample else nn.Identity()
+        )
         # Create the regridding blocks.
         self.regridding_blocks = nn.ModuleList(
             [
@@ -96,9 +98,6 @@ class RegriddingTransformer(nn.Module):
                         if downsample
                         else nn.Conv2d(inner_channels, channels, kernel_size=3, padding=1)
                     ),
-                    nn.BatchNorm2d(channels),
-                    nn.GELU(),
-                    nn.Conv2d(channels, channels, kernel_size=1)
                 )
                 for channels in self.channels
             ]
@@ -126,7 +125,7 @@ class RegriddingTransformer(nn.Module):
             coords = [pad_to_next_multiple_of(coord, 2) for coord in coords]
         # Apply the input convolutions.
         images = self.entry_block(images)
-        coords = self.coord_entry_block(coords)
+        coords = [self.coord_entry_block(coord) for coord in coords]
         # Apply the regridding blocks.
         for regridding_block in self.regridding_blocks:
             images = regridding_block(images, coords, contexts)
