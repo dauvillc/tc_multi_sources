@@ -2,4 +2,4 @@
 _target_: multi_sources.structure.mae.MultisourceMaskedAutoencoder
 lr_scheduler_kwargs: ${lr_scheduler}
 enable_masking: true
-only_mask_sources: ['tc_primed.microwave.AMSR2_GCOMW1.S4']
+only_mask_sources: ['tc_primed.microwave.AMSR2_GCOMW1.S2']

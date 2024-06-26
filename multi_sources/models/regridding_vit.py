@@ -3,6 +3,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from multi_sources.models.regridding_vit_classes import EntryConvBlock
 from multi_sources.models.regridding_vit_classes import AttentionRegriddingBlock
 
 
@@ -41,6 +42,7 @@ class RegriddingTransformer(nn.Module):
         c_dim,
         inner_channels,
         depth,
+        downsample,
         heads,
         dim_head,
         output_resnet_depth=3,
@@ -55,6 +57,7 @@ class RegriddingTransformer(nn.Module):
             c_dim (int): Dimension of the internal embeddings for the coordinates.
             inner_channels (int): Number of channels in the internal convolutions.
             depth (int): Number of layers.
+            downsample (bool): Whether to downsample the images by 2 at the beginning.
             heads (int): Number of heads for the attention mechanism.
             dim_head (int): Dimension of each head.
             output_resnet_depth (int): Depth of the output ResNet.
@@ -74,27 +77,10 @@ class RegriddingTransformer(nn.Module):
         self.channels = channels
         patch_size = pair(patch_size)
         self.patch_size = patch_size
-        # Store the original image sizes for later reconstruction.
-        self.original_img_sizes = {
-            source_name: pair(img_size) for source_name, img_size in img_sizes.items()
-        }
-        # For each source, compute the next multiple of patch_size (for both height and width).
-        # This is the size to which the image will be padded.
-        self.img_sizes = []
-        for source_name, (H, W) in self.original_img_sizes.items():
-            self.img_sizes.append(
-                (
-                    H + patch_size[0] - H % patch_size[0],
-                    W + patch_size[1] - W % patch_size[1],
-                )
-            )
-        # Create a simple input Conv2d layer for each source, to project it to the
-        # common number of channels.
-        self.input_convs = nn.ModuleList(
-            [
-                nn.Conv2d(channels[source_name], 1, kernel_size=1)
-                for source_name in img_sizes.keys()
-            ]
+        # Create the input convolutions for the images and the coordinates.
+        self.entry_block = EntryConvBlock(self.channels, inner_channels, downsample)
+        self.coord_entry_block = (
+            nn.AvgPool2d(kernel_size=3, stride=2, padding=1) if downsample else nn.Identity()
         )
         # Create the regridding blocks.
         self.regridding_blocks = nn.ModuleList(
@@ -111,6 +97,26 @@ class RegriddingTransformer(nn.Module):
                     dim_head,
                 )
                 for _ in range(depth)
+            ]
+        )
+        # Create an output transposed convolution to upsample the image back to the original size.
+        self.output_transposed_conv = nn.ModuleList(
+            [
+                nn.Sequential(
+                    (
+                        nn.ConvTranspose2d(
+                            inner_channels,
+                            channels,
+                            kernel_size=3,
+                            stride=2,
+                            padding=1,
+                            output_padding=1,
+                        )
+                        if downsample
+                        else nn.Conv2d(inner_channels, channels, kernel_size=3, padding=1)
+                    ),
+                )
+                for channels in self.channels
             ]
         )
 
@@ -135,10 +141,8 @@ class RegriddingTransformer(nn.Module):
             padded_images.append(F.pad(V, (0, W - V.shape[-1], 0, H - V.shape[-2])))
             padded_coords.append(F.pad(C, (0, W - C.shape[-1], 0, H - C.shape[-2])))
         # Apply the input convolutions.
-        padded_images = [
-            input_conv(padded_image)
-            for input_conv, padded_image in zip(self.input_convs, padded_images)
-        ]
+        images = self.entry_block(images)
+        coords = [self.coord_entry_block(coord) for coord in coords]
         # Apply the regridding blocks.
         for regridding_block in self.regridding_blocks:
             padded_images = regridding_block(padded_images, padded_coords, contexts)

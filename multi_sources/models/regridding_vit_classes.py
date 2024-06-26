@@ -70,6 +70,44 @@ class CoordinatesAttention(nn.Module):
         return attn
 
 
+class EntryConvBlock(nn.Module):
+    """Entry block of the RegriddingVit model."""
+
+    def __init__(self, in_channels, out_channels, downsample):
+        """
+        Args:
+            in_channels (list of int): number of channels of the input images;
+            out_channels (int): number of channels of the output images;
+            downsample (bool): whether to downsample the images by a factor of 2.
+        """
+        super().__init__()
+        self.downsample = downsample
+        self.layers = nn.ModuleList()
+        for c in in_channels:
+            if downsample:
+                self.layers.append(
+                    nn.Sequential(
+                        nn.Conv2d(c, out_channels, kernel_size=3, stride=2, padding=1),
+                    )
+                )
+            else:
+                self.layers.append(
+                    nn.Sequential(
+                        nn.Conv2d(c, out_channels, kernel_size=1),
+                    )
+                )
+
+    def forward(self, x):
+        """
+        Args:
+            x (list of torch.Tensor): list of input images.
+        Returns:
+            y (list of torch.Tensor): list of output images.
+        """
+        y = [layer(img) for layer, img in zip(self.layers, x)]
+        return y
+
+
 class AttentionRegriddingBlock(nn.Module):
     """Regridding attention mechanism:
     Given a a set of images from different sources and their corresponding coordinates,
@@ -157,9 +195,7 @@ class AttentionRegriddingBlock(nn.Module):
             H % self.patch_size[0] == 0 and W % self.patch_size[1] == 0 for H, W in img_sizes
         ), "The patch size must divide the image sizes."
         # Compute the number of patches for each source.
-        self.num_patches = [
-            H * W // (self.patch_size[0] * self.patch_size[1]) for H, W in img_sizes
-        ]
+        num_patches = [H * W // (self.patch_size[0] * self.patch_size[1]) for H, W in img_sizes]
         # Patch the images.
         patches = [self.image_to_patches(img) for img in x]
         # Embed the coordinates into tokens.
@@ -173,7 +209,7 @@ class AttentionRegriddingBlock(nn.Module):
         # Compute the attention weights.
         attn = self.attention(coords)  # (B, head, N, N)
         # Split the columns into the different sources.
-        attn_blocks = torch.split(attn, self.num_patches, dim=-1)  # list of (B, head, N, n_source)
+        attn_blocks = torch.split(attn, num_patches, dim=-1)  # list of (B, head, N, n_source)
         # For each row of the attention matrix, compute the weighted sum of the patches.
         patches = [
             torch.matmul(attn_block, patch.unsqueeze(1))
@@ -184,7 +220,7 @@ class AttentionRegriddingBlock(nn.Module):
         # the jth patch gives to each of the patches of source i.
         # We'll call that weighted sum the "selected patch".
         patches = torch.stack(patches, dim=2)  # (B, head, N, n_source, patch_dim)
-        patches = torch.split(patches, self.num_patches, dim=3)
+        patches = torch.split(patches, num_patches, dim=3)
         # list of (B, head, n_source, K_source, patch_dim) K_source = number of patches of source k
         # Now, patches[i][., ., k, j] is the selected patch of source i
         # for the jth patch of source k.
@@ -201,7 +237,8 @@ class AttentionRegriddingBlock(nn.Module):
             for patch, (H, W) in zip(patches, img_sizes)
         ]
         # Apply the 3D convolutions
-        images = [self.conv_heads(img) for img in images]  # list of (B, output_channels, hd, H, W)
-        # Sum the heads
+        images = [self.conv_heads(img) for img in images]
+        # list of (B, output_channels, hd, H, W)
+        # Sum over the heads.
         images = [img.sum(dim=2) for img in images]  # list of (B, output_channels, H, W)
         return images
