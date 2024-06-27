@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 from einops import rearrange
 from einops.layers.torch import Rearrange
+from multi_sources.models.utils import pad_to_next_multiple_of
 
 
 class VectorEmbedding(nn.Module):
@@ -190,10 +191,12 @@ class AttentionRegriddingBlock(nn.Module):
                 of shape (B, output_channels, H, W).
         """
         # Store the sizes of the images.
+        original_img_sizes = [img.shape[-2:] for img in x]
+        # Pad the images and coords so that their sizes are multiples of the patch size.
+        x = [pad_to_next_multiple_of(img, self.patch_size) for img in x]
+        coords = [pad_to_next_multiple_of(coord, self.patch_size) for coord in coords]
+        # Store the sizes of the padded images.
         img_sizes = [img.shape[-2:] for img in x]
-        assert all(
-            H % self.patch_size[0] == 0 and W % self.patch_size[1] == 0 for H, W in img_sizes
-        ), "The patch size must divide the image sizes."
         # Compute the number of patches for each source.
         num_patches = [H * W // (self.patch_size[0] * self.patch_size[1]) for H, W in img_sizes]
         # Patch the images.
@@ -241,4 +244,6 @@ class AttentionRegriddingBlock(nn.Module):
         # list of (B, output_channels, hd, H, W)
         # Sum over the heads.
         images = [img.sum(dim=2) for img in images]  # list of (B, output_channels, H, W)
+        # Remove the padding
+        images = [img[..., :H, :W] for img, (H, W) in zip(images, original_img_sizes)]
         return images
