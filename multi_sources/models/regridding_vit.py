@@ -5,6 +5,7 @@ import torch.nn as nn
 from multi_sources.models.regridding_vit_classes import AttentionRegriddingBlock
 from multi_sources.models.regridding_vit_classes import EntryConvBlock
 from multi_sources.models.utils import pad_to_next_multiple_of, pair
+from multi_sources.models.utils import normalize_coords_across_sources
 
 
 class RegriddingTransformer(nn.Module):
@@ -28,6 +29,7 @@ class RegriddingTransformer(nn.Module):
         downsample,
         heads,
         dim_head,
+        kernel_size=3,
         output_resnet_depth=3,
         output_resnet_inner_channels=8,
         output_resnet_kernel_size=3,
@@ -43,6 +45,7 @@ class RegriddingTransformer(nn.Module):
             downsample (bool): Whether to downsample the image at the input by 2.
             heads (int): Number of heads for the attention mechanism.
             dim_head (int): Dimension of each head.
+            kernel_size (int or tuple of int): Kernel size of the internal convolutions.
             output_resnet_depth (int): Depth of the output ResNet.
                 set to 0 to disable any convolutional layer at the output.
             output_resnet_inner_channels (int): Number of channels in the inner layers
@@ -78,6 +81,7 @@ class RegriddingTransformer(nn.Module):
                     c_dim,
                     heads,
                     dim_head,
+                    kernel_size=kernel_size,
                 )
                 for _ in range(depth)
             ]
@@ -112,11 +116,16 @@ class RegriddingTransformer(nn.Module):
             output (dict of str to tensor): Reconstructed values for each source, as a dict
                 {source_name: tensor of shape (batch_size, channels, H, W)}.
         """
-        images, coords, contexts = [], [], []
-        for source_name, (A, S, DT, C, _, V) in inputs.items():
+        images, coords, contexts, missing_values = [], [], [], []
+        for source_name, (A, S, DT, C, D, V) in inputs.items():
             images.append(V)
             coords.append(C[:, :2])  # 0 and 1 are lat/lon
             contexts.append(torch.stack([A, S, DT], dim=1))
+            # Missing values have been filled beforehand, but they can be located via
+            # infinite values in D.
+            missing_values.append(D == float("inf"))
+        # Normalize the coordinates to be in the range [-1, 1].
+        coords = normalize_coords_across_sources(coords, ignore_mask=missing_values)
         # Store the original image sizes.
         original_img_sizes = [image.shape[-2:] for image in images]
         if self.downsample:

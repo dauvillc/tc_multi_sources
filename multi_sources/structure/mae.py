@@ -139,13 +139,16 @@ class MultisourceMaskedAutoencoder(pl.LightningModule):
         for source, (a, s, dt, c, d, v) in x.items():
             # Don't modify the tensors in-place, as we need to keep the NaN values
             # for the loss computation
-            dt = torch.nan_to_num(dt, nan=0)
-            c = torch.nan_to_num(c, nan=0)
+            dt = torch.nan_to_num(dt, nan=1.0)
             v = torch.nan_to_num(v, nan=0)
+            # Where the coords are NaN, set them to 90 for the latitude and 0
+            # for the longitude (90 being an extreme value).
+            c[:, 0] = torch.nan_to_num(c[:, 0], nan=90)
+            c[:, 1] = torch.nan_to_num(c[:, 1], nan=0)
             # For the distance tensor, fill the nan values with +inf
             d = torch.nan_to_num(d, nan=float("inf"))
             # Normalize the lat/lon coordinates
-            # Note: the lon is in the range [0, 360]
+            # Note: the lon is in the range [0, 360)
             c[:, 0] = c[:, 0] / 90
             c[:, 1] = (c[:, 1] - 180) / 180
             input_[source] = (a, s, dt, c, d, v)

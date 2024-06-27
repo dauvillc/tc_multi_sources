@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 from einops import rearrange
 from einops.layers.torch import Rearrange
-from multi_sources.models.utils import pad_to_next_multiple_of
+from multi_sources.models.utils import pad_to_next_multiple_of, pair
 
 
 class VectorEmbedding(nn.Module):
@@ -130,6 +130,7 @@ class AttentionRegriddingBlock(nn.Module):
         c_dim,
         heads,
         dim_head,
+        kernel_size=3,
     ):
         """
         Args:
@@ -144,6 +145,7 @@ class AttentionRegriddingBlock(nn.Module):
             c_dim (int): dimension of the coordinates embeddings;
             heads (int): number of attention heads;
             dim_head (int): dimension of the attention heads.
+            kernel_size (int or tuple of int): size of the 2D kernels.
         """
         super().__init__()
         self.n_sources = n_sources
@@ -155,6 +157,8 @@ class AttentionRegriddingBlock(nn.Module):
         self.c_dim = c_dim
         self.heads = heads
         self.dim_head = dim_head
+        self.kernel_size = pair(kernel_size)
+        kh, kw = self.kernel_size
         # Compute the size of the flattened patch for each source.
         self.patch_dim = ph * pw * channels
         # Create an embedding for the coordinates (lat/lon).
@@ -169,13 +173,23 @@ class AttentionRegriddingBlock(nn.Module):
         # Create a 3D Conv block that will be applied to the reconstructed images
         # Using 3D convs with a kernel size of 1 over the depth dimension allows
         # to apply 2D convs with different heads in parallel.
-        input_channels = channels * n_sources
+        input_channels = (channels + 2) * n_sources  # Add the coordinates to the input channels
         self.conv_heads = nn.Sequential(
             nn.BatchNorm3d(input_channels),
-            nn.Conv3d(input_channels, inner_channels, kernel_size=(1, 3, 3), padding=(0, 1, 1)),
+            nn.Conv3d(
+                input_channels,
+                inner_channels,
+                kernel_size=(1, kh, kw),
+                padding=(0, kh // 2, kw // 2),
+            ),
             nn.GELU(),
             nn.BatchNorm3d(inner_channels),
-            nn.Conv3d(inner_channels, output_channels, kernel_size=(1, 3, 3), padding=(0, 1, 1)),
+            nn.Conv3d(
+                inner_channels,
+                output_channels,
+                kernel_size=(1, kh, kw),
+                padding=(0, kh // 2, kw // 2),
+            ),
         )
 
     def forward(self, x, coords, context):
@@ -195,6 +209,8 @@ class AttentionRegriddingBlock(nn.Module):
         # Pad the images and coords so that their sizes are multiples of the patch size.
         x = [pad_to_next_multiple_of(img, self.patch_size) for img in x]
         coords = [pad_to_next_multiple_of(coord, self.patch_size) for coord in coords]
+        # Concatenate the images and the coordinates along the channel dimension.
+        x = [torch.cat([img, coord], dim=1) for img, coord in zip(x, coords)]
         # Store the sizes of the padded images.
         img_sizes = [img.shape[-2:] for img in x]
         # Compute the number of patches for each source.
@@ -202,15 +218,15 @@ class AttentionRegriddingBlock(nn.Module):
         # Patch the images.
         patches = [self.image_to_patches(img) for img in x]
         # Embed the coordinates into tokens.
-        coords = [self.coord_embedding(c) for c in coords]
+        coords_embed = [self.coord_embedding(c) for c in coords]
         # Embed the context vectors into tokens, and sum them to the coordinates.
         context = [self.context_embedding(c) for c in context]
-        coords = [c + ctx for c, ctx in zip(coords, context)]
-        # Concatenate the embedded coordinates and the patches along the patch dimension, to form
+        coords_embed = [c + ctx for c, ctx in zip(coords_embed, context)]
+        # Concatenate the embedded coordinates along the patch dimension, to form
         # the sequences.
-        coords = torch.cat(coords, dim=1)  # (B, N, dim_c)
+        coords_embed = torch.cat(coords_embed, dim=1)  # (B, N, dim_c)
         # Compute the attention weights.
-        attn = self.attention(coords)  # (B, head, N, N)
+        attn = self.attention(coords_embed)  # (B, head, N, N)
         # Split the columns into the different sources.
         attn_blocks = torch.split(attn, num_patches, dim=-1)  # list of (B, head, N, n_source)
         # For each row of the attention matrix, compute the weighted sum of the patches.
