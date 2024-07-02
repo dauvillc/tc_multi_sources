@@ -4,6 +4,9 @@ defaults:
 
 val_seasons: [2014, 2017]
 test_seasons: [2020, 2021]
+# Target resolution to which the images will be regridded, in km.
+# Give a list [longitude_res, latitude_res]
+target_resolution_km: [15.0, 15.0]
 # Minimum 10m 1-min average sustained wind speed, in knots,
 # for a sample to be included in the preprocessed data.
 min_intensity_knots: 35

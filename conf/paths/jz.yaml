@@ -1,7 +1,7 @@
 # Path to where the unpreprocessed datasets are stored
 raw_datasets: "/gpfswork/rech/xyw/ute68qj/data/multi_sources/raw/"
 # Path to where the preprocessed dataset will be saved
-preprocessed_dataset: "/gpfsscratch/rech/xyw/ute68qj/data/multi_sources/preprocessed/"
+preprocessed_dataset: "/gpfsscratch/rech/xyw/ute68qj/data/multi_sources/preprocessed_regridded/"
 # Path the intermediary preprocessing data (specific to each source, such
 # as the normalization constants) 
 sources: "/gpfswork/rech/xyw/ute68qj/data/multi_sources/sources/"
