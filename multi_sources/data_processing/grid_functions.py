@@ -82,7 +82,7 @@ def regrid(ds, target_resolution_km, target_area):
             target area in degrees.
     """
     # Compute the radius of influence for the regridding (in meters)
-    radius_of_influence = 20000.0
+    radius_of_influence = 60000.0
     # Reformat the coordinates to suit pyresample
     lon, lat = check_and_wrap(ds.longitude.values, ds.latitude.values)
     # Define the swath

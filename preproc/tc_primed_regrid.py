@@ -48,7 +48,7 @@ def process_swath(sensat, swath, files, dest_path, cfg, use_cache=True, verbose=
     Returns:
         mean (xarray.Dataset): the mean of the training set for each band
         std (xarray.Dataset): the standard deviation of the training set for each band
-        area (tuple of float): Tuple (delta_lon, delta_lat) representing the maximum area
+        area (tuple of float): Tuple (delta_lon, delta_lat) representing the average area
             covered by the images from the swath.
     """
     sat, sensor = sensat.split("_")
@@ -66,20 +66,20 @@ def process_swath(sensat, swath, files, dest_path, cfg, use_cache=True, verbose=
 
     if not use_cache or not (dest_swath_dir / "max_area.txt").exists():
         if verbose:
-            print("Processing normalization constants and max area")
+            print("Processing normalization constants and area")
         # Process each file successively. Since the images don't have the same sizes,
         # we can't just stack them and open all of them with open_mfdataset.
-        # Thus, we'll compute the max area and the normalization constants iteratively.
-        max_area = [float("-inf"), float("-inf")]
+        # Thus, we'll compute the avg area and the normalization constants iteratively.
+        avg_area = [0, 0]
         means, stds = [], []
         iterator = tqdm(files) if verbose else files
         for file in iterator:
             ds = nc.Dataset(file)['passive_microwave'][swath]
             # Although a swath always contains the same bands, the areas covered by the images
-            # aren't exactly the same (due to the satellite's orbit). We'll compute the maximum
+            # aren't exactly the same (due to the satellite's orbit). We'll compute the average
             # area covered by the images from the swath, i.e.
-            # - The maximum delta between the minimum and maximum latitude
-            # - The maximum delta between the minimum and maximum longitude
+            # - The average delta_lat between the min and max latitudes
+            # - The average delta_lon between the min and max longitudes
             with xr.open_dataset(NetCDF4DataStore(ds)) as ds:
                 ds = preprocess_source_files(ds)
                 # Compute the area covered by the image
@@ -87,16 +87,18 @@ def process_swath(sensat, swath, files, dest_path, cfg, use_cache=True, verbose=
                 lon_min, lon_max = ds.longitude.min().values, ds.longitude.max().values
                 delta_lat = lat_max - lat_min
                 delta_lon = lon_max - lon_min
-                max_area[0] = max(max_area[0], delta_lon)
-                max_area[1] = max(max_area[1], delta_lat)
+                avg_area[0] += delta_lon
+                avg_area[1] += delta_lat
 
                 # Normalize the data if the file is in the subsample
                 if file in files_norm:
                     means.append(ds.mean())
                     stds.append(ds.std())
-        # Write the max_area to a dest_swath_dir/max_area.txt file
-        with open(dest_swath_dir / "max_area.txt", "w") as f:
-            f.write(f"{max_area[0]},{max_area[1]}")
+        avg_area[0] /= len(files)
+        avg_area[1] /= len(files)
+        # Write the avg_area to a dest_swath_dir/avg_area.txt file
+        with open(dest_swath_dir / "avg_area.txt", "w") as f:
+            f.write(f"{avg_area[0]},{avg_area[1]}")
         # Write the normalization constants to dest_swath_dir/normalization_mean.nc
         # and dest_swath_dir/normalization_std.nc
         mean = xr.concat(means, dim="sample").mean(dim="sample")
@@ -104,24 +106,24 @@ def process_swath(sensat, swath, files, dest_path, cfg, use_cache=True, verbose=
         mean.to_netcdf(dest_swath_dir / "normalization_mean.nc")
         std.to_netcdf(dest_swath_dir / "normalization_std.nc")
     else:
-        with open(dest_swath_dir / "max_area.txt", "r") as f:
-            max_area = list(map(float, f.read().split(",")))
+        with open(dest_swath_dir / "avg_area.txt", "r") as f:
+            avg_area = list(map(float, f.read().split(",")))
         mean = xr.open_dataset(dest_swath_dir / "normalization_mean.nc")
         std = xr.open_dataset(dest_swath_dir / "normalization_std.nc")
-    return mean, std, max_area
+    return mean, std, avg_area
 
 
 def process_sensat(sensat, swaths, files, dest_path, cfg, use_cache=True, verbose=True):
     """Computes the normalization constants and spatial size for a given sensor-satellite pair."""
-    means, stds, max_areas = {}, {}, {}
+    means, stds, avg_areas = {}, {}, {}
     for swath in swaths:
-        mean, std, max_area = process_swath(
+        mean, std, avg_area = process_swath(
             sensat, swath, files, dest_path, cfg, use_cache, verbose
         )
         means[sensat, swath] = mean
         stds[sensat, swath] = std
-        max_areas[sensat, swath] = max_area
-    return means, stds, max_areas
+        avg_areas[sensat, swath] = avg_area
+    return means, stds, avg_areas
 
 
 def process_storm(
@@ -133,7 +135,7 @@ def process_storm(
     sen_sat_swaths,
     means,
     stds,
-    max_areas,
+    avg_areas,
     target_res_km,
     dest_path,
     metadata_path,
@@ -194,7 +196,7 @@ def process_storm(
                 dataset = regrid(
                     dataset,
                     target_res_km,
-                    max_areas[sensat, swath],
+                    avg_areas[sensat, swath],
                 )
                 # Normalize the data, only for the variables that are in means and stds
                 # and that are not contextual variables ('latitude', 'longitude',
@@ -276,7 +278,7 @@ def main(cfg):
     )
     # Compute the normalization values for each swath
     print("Computing normalization constants")
-    means, stds, max_areas = {}, {}, {}
+    means, stds, avg_areas = {}, {}, {}
     # Process each sensor-satellite pair in parallel
     if "n_workers" in cfg:
         n_workers = cfg["n_workers"]
@@ -296,13 +298,13 @@ def main(cfg):
                     )
                 )
             for future in tqdm(futures):
-                mean, std, max_area = future.result()
+                mean, std, avg_area = future.result()
                 means.update(mean)
                 stds.update(std)
-                max_areas.update(max_area)
+                avg_areas.update(avg_area)
     else:
         for sensat in sen_sat_pairs:
-            mean, std, max_area = process_sensat(
+            mean, std, avg_area = process_sensat(
                 sensat,
                 sen_sat_swaths[sensat],
                 sen_sat_files[sensat],
@@ -312,7 +314,7 @@ def main(cfg):
             )
             means.update(mean)
             stds.update(std)
-            max_areas.update(max_area)
+            avg_areas.update(avg_area)
     # Retrieve the target regridding resolution from the configuration file
     target_res_km = cfg["target_resolution_km"]
     # Erase the metadata file if it already exists
@@ -336,7 +338,7 @@ def main(cfg):
                     sen_sat_swaths,
                     means,
                     stds,
-                    max_areas,
+                    avg_areas,
                     target_res_km,
                     dest_path,
                     metadata_path,
@@ -358,7 +360,7 @@ def main(cfg):
                 sen_sat_swaths,
                 means,
                 stds,
-                max_areas,
+                avg_areas,
                 target_res_km,
                 dest_path,
                 metadata_path,
