@@ -1,10 +1,8 @@
 """Implements functions to manipulate gridded data."""
 
-import numpy as np
 import xarray as xr
 import warnings
 from math import ceil
-from xarray.core.dtypes import NA
 from pyresample.kd_tree import resample_nearest
 from pyresample import SwathDefinition
 from pyresample.area_config import create_area_def
@@ -81,7 +79,9 @@ def regrid(ds, target_resolution_km, target_area):
         target_area (tuple of float): Tuple (d_lon, d_lat) representing the size of the
             target area in degrees.
     """
-    # Compute the radius of influence for the regridding (in meters)
+    # A radius of influence of 60 km is enough to avoid any issues at the swath edges.
+    # See: https://rammb-data.cira.colostate.edu/tcprimed/TCPRIMED_v01r00_documentation.pdf
+    # The coarsest resolution found in TC-PRIMED is 52.8 km.
     radius_of_influence = 60000.0
     # Reformat the coordinates to suit pyresample
     lon, lat = check_and_wrap(ds.longitude.values, ds.latitude.values)
@@ -124,7 +124,11 @@ def regrid(ds, target_resolution_km, target_area):
     # Resample all variables at once, by stacking them along the last dimension
     stacked = ds.to_dataarray().transpose("scan", "pixel", "variable").values
     stacked = resample_nearest(
-        swath, stacked, target_area, radius_of_influence=radius_of_influence
+        swath,
+        stacked,
+        target_area,
+        radius_of_influence=radius_of_influence,
+        fill_value=float("nan"),
     )
     result = {var: (("lat", "lon"), stacked[..., i]) for i, var in enumerate(variables)}
     # Add the latitude and longitude variables as coordinates
