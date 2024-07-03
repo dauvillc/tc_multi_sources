@@ -2,6 +2,7 @@
 
 import xarray as xr
 import warnings
+from numpy import nan as NA
 from math import ceil
 from pyresample.kd_tree import resample_nearest
 from pyresample import SwathDefinition
