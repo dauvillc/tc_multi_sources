@@ -214,7 +214,7 @@ def process_storm(
                     dataset["latitude"].values,
                     dataset["longitude"].values,
                 )
-                dataset["land_mask"] = (("latitude", "longitude"), mask)
+                dataset["land_mask"] = (("lat", "lon"), mask)
                 # Save the data for the current time step, sensor-satellite pair and swath
                 # as a numpy file
                 # The numpy array should be stacked in the following order:

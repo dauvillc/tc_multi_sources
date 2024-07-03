@@ -5,7 +5,7 @@ import xarray as xr
 import warnings
 from math import ceil
 from xarray.core.dtypes import NA
-from pyresample.bilinear.xarr import XArrayBilinearResampler
+from pyresample.kd_tree import resample_nearest
 from pyresample import SwathDefinition
 from pyresample.area_config import create_area_def
 from pyresample.utils import check_and_wrap
@@ -13,8 +13,8 @@ from pyresample.utils import check_and_wrap
 
 # Disable some warnings that pyresample and CRS are raising
 # but can be safely ignored
-warnings.simplefilter(action='ignore', category=RuntimeWarning)
-warnings.simplefilter(action='ignore', category=UserWarning)
+warnings.simplefilter(action="ignore", category=RuntimeWarning)
+warnings.simplefilter(action="ignore", category=UserWarning)
 
 
 EARTH_RADIUS = 6371228.0  # Earth radius in meters
@@ -82,9 +82,7 @@ def regrid(ds, target_resolution_km, target_area):
             target area in degrees.
     """
     # Compute the radius of influence for the regridding (in meters)
-    radius_of_influence = (
-        np.sqrt(target_resolution_km[0] ** 2 + target_resolution_km[1] ** 2) * 20000
-    )
+    radius_of_influence = 20000.0
     # Reformat the coordinates to suit pyresample
     lon, lat = check_and_wrap(ds.longitude.values, ds.latitude.values)
     # Define the swath
@@ -122,18 +120,19 @@ def regrid(ds, target_resolution_km, target_area):
     # Retrieve the variables to regrid
     variables = [var for var in ds.variables if "scan" in ds[var].dims and "pixel" in ds[var].dims]
     variables = [var for var in variables if var not in ["latitude", "longitude"]]
-    ds = ds[variables].reset_coords().rename({"scan": "y", "pixel": "x"})
-    # Create the resampler
-    resampler = XArrayBilinearResampler(
-        swath, target_area, radius_of_influence=radius_of_influence
+    ds = ds.reset_coords()[variables]
+    # Resample all variables at once, by stacking them along the last dimension
+    stacked = ds.to_dataarray().transpose("scan", "pixel", "variable").values
+    stacked = resample_nearest(
+        swath, stacked, target_area, radius_of_influence=radius_of_influence
     )
-    # Resample each variable
-    result = {var: resampler.resample(ds[var]) for var in variables}
-    result = xr.Dataset(result)
-    # Rename the 'x' and 'y' dimensions to 'latitude' and 'longitude'
-    result = result.rename({"x": "longitude", "y": "latitude"})
-    # Add the latitude and longitude variables
+    result = {var: (("lat", "lon"), stacked[..., i]) for i, var in enumerate(variables)}
+    # Add the latitude and longitude variables as coordinates
     lons, lats = target_area.get_lonlats()
-    result["latitude"] = xr.DataArray(lats, dims=("latitude", "longitude"))
-    result["longitude"] = xr.DataArray(lons, dims=("latitude", "longitude"))
+    coords = {
+        "latitude": (["lat", "lon"], lats),
+        "longitude": (["lat", "lon"], lons),
+    }
+    # Rebuild the dataset
+    result = xr.Dataset(result, coords=coords)
     return result
