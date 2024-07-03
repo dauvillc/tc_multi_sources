@@ -1,16 +1,13 @@
 # Config for scripts/make_predictions.py
 defaults:
-  - _self_
-  - paths/local
+  - paths: local
   - sources: test
   - dataset: full_set
-  - dataloader/local
-  - lightning_module:
-    - mae
-  - model:
-    - vit_test
-  - lr_scheduler:
-    - test
+  - dataloader: local
+  - lightning_module: mae
+  - model: regridding_vit
+  - lr_scheduler: test
+  - _self_
 
 trainer:
   accelerator: gpu
