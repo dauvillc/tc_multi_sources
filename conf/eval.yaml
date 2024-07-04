@@ -6,3 +6,5 @@ defaults:
 
 run_id: ???
 num_workers: 4
+
+n_displayed_batches: 2

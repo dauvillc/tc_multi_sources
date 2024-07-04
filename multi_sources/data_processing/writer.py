@@ -42,13 +42,18 @@ class MultiSourceWriter(BasePredictionWriter):
         masked_batch, prediction = prediction
         # We'll write to the info file in append mode
         info_file = self.root_dir / "info.csv"
-        for source_name, (_, _, _, _, _, v) in batch.items():
+        # An item in the batch is of the form {source_name: A, S, DT, C, D, V}
+        # We're interested in C (lat, lon, land_mask) and V (values)
+        for source_name, (_, _, _, c, _, v) in batch.items():
             source_target_dir = self.targets_dir / source_name
             source_output_dir = self.outputs_dir / source_name
             source_target_dir.mkdir(parents=True, exist_ok=True)
             source_output_dir.mkdir(parents=True, exist_ok=True)
             source_outputs = prediction[source_name].detach().cpu().numpy()
             source_targets = v.detach().cpu().numpy()
+            # Append the lat/lon to the targets
+            latlon = c[:, :2].detach().cpu().numpy()
+            source_targets = np.concatenate([latlon, source_targets], axis=1)
             np.save(source_target_dir / f"{batch_idx}.npy", source_targets)
             np.save(source_output_dir / f"{batch_idx}.npy", source_outputs)
 
