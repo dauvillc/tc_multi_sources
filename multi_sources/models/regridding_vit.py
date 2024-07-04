@@ -116,16 +116,13 @@ class RegriddingTransformer(nn.Module):
             output (dict of str to tensor): Reconstructed values for each source, as a dict
                 {source_name: tensor of shape (batch_size, channels, H, W)}.
         """
-        images, coords, contexts, missing_values = [], [], [], []
+        images, coords, contexts = [], [], []
         for source_name, (A, S, DT, C, D, V) in inputs.items():
             images.append(V)
             coords.append(C[:, :2])  # 0 and 1 are lat/lon
             contexts.append(torch.stack([A, S, DT], dim=1))
-            # Missing values have been filled beforehand, but they can be located via
-            # infinite values in D.
-            missing_values.append(D == float("inf"))
         # Normalize the coordinates to be in the range [-1, 1].
-        coords = normalize_coords_across_sources(coords, ignore_mask=missing_values)
+        coords = normalize_coords_across_sources(coords)
         # Store the original image sizes.
         original_img_sizes = [image.shape[-2:] for image in images]
         if self.downsample:
