@@ -10,11 +10,11 @@ if __name__ == "__main__":
     n_heads = 2
     patch_size = 16
     attention_dim = 256
-    possible_side_lens = [32, 64, 128, 256]
+    possible_side_lens = [32, 75, 128, 243]
     rng = np.random.default_rng(42)
 
     module = MultisourceConvAttention(
-        n_keys, n_queries, n_channels, n_channels, patch_size, attention_dim, n_heads
+        n_keys, n_queries, n_channels, patch_size, attention_dim, n_heads
     )
 
     # Create a list of len n_keys with random tensors of shape (1, n_channels, H, W)

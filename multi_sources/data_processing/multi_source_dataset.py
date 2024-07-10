@@ -252,12 +252,18 @@ class MultiSourceDataset(torch.utils.data.Dataset):
     def __len__(self):
         return len(self.samples_df)
 
+    def get_source_names(self):
+        """Returns a list of the source names."""
+        return self.source_names
+
     def get_source_variables(self):
         """Returns a dict {source_name: [variable_name]}."""
         return {source.name: source.variables for source in self.sources}
 
-    def get_n_variables(self):
+    def get_n_variables(self, source_name=None):
         """Returns a dict {source_name: n_variables}."""
+        if source_name is not None:
+            return len(self.source_variables[source_name])
         return {source.name: len(source.variables) for source in self.sources}
 
     def get_n_sources(self):

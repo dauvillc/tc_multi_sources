@@ -4,7 +4,7 @@ defaults:
   - sources: test
   - dataset: full_set
   - dataloader: local
-  - lightning_module: mae
-  - model: regridding_vit
+  - lightning_module: reconstruction
+  - model: encoder_decoder_transformer
   - trainer: 1xv100-32g
   - lr_scheduler: cosine_warmup_150epochs

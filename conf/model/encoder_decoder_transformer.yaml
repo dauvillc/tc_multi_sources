@@ -1,0 +1,17 @@
+_target_: multi_sources.models.encoder_decoder_transformer.EncoderDecoderTransformer
+inner_channels: 8
+n_blocks: 1
+values_conv_attention:
+  block_class:
+    _target_: hydra.utils.get_class
+    path: multi_sources.models.multisource_conv_attention.MultisourceConvAttention
+  patch_size: 16
+  attention_dim: 128
+  num_heads: 4
+values_conv_attention_2:
+  block_class:
+    _target_: hydra.utils.get_class
+    path: multi_sources.models.multisource_conv_attention.MultisourceConvAttention
+  patch_size: 16
+  attention_dim: 128
+  num_heads: 4
