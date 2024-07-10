@@ -18,8 +18,7 @@ class MultisourceConvAttention(nn.Module):
         self,
         n_keys,
         n_queries,
-        in_channels,
-        out_channels,
+        channels,
         patch_size,
         attention_dim,
         num_heads,
@@ -29,21 +28,20 @@ class MultisourceConvAttention(nn.Module):
         Args:
             n_keys (int): Number of keys.
             n_queries (int): Number of queries.
-            in_channels (int): Number of input channels.
-            out_channels (int): Number of output channels.
+            channels (int): Number of input and output channels.
             patch_size (int or tuple of ints): Size of the patches.
             attention_dim (int): Dimension of the embeddings used in the attention mechanism.
             num_heads (int): Number of heads in the attention mechanism.
-                Must be a divisor of attention_dim and of out_channels.
+                Must be a divisor of attention_dim and of channels.
             kernel_size (int or tuple of ints): Size of the convolutional kernel.
         """
         super().__init__()
         if attention_dim % num_heads != 0:
             raise ValueError("The attention dimension must be divisible by the number of heads.")
-        if out_channels % num_heads != 0:
-            raise ValueError("The output channels must be divisible by the number of heads.")
+        if channels % num_heads != 0:
+            raise ValueError("The channels must be divisible by the number of heads.")
         self.n_keys = n_keys
-        self.in_channels, self.out_channels = in_channels, out_channels
+        self.channels, self.channels = channels, channels
         self.patch_size = pair(patch_size)
         ph, pw = self.patch_size
         self.num_heads = num_heads
@@ -51,7 +49,7 @@ class MultisourceConvAttention(nn.Module):
         self.kernel_size = pair(kernel_size)
         kh, kw = self.kernel_size
         # Compute the size of the flattened patch for each source.
-        self.patch_dim = (ph * pw * in_channels) // self.num_heads
+        self.patch_dim = (ph * pw * channels) // self.num_heads
         # Create an embedding for the keys and queries.
         self.key_embedding = nn.Linear(self.patch_dim, attention_dim)
         self.query_embedding = nn.Linear(self.patch_dim, attention_dim)
@@ -63,8 +61,8 @@ class MultisourceConvAttention(nn.Module):
         # The mbconv block is modified to use grouped convolutions, so that the
         # heads are processed in parallel and separately.
         self.mbconv = MBConv(
-            self.in_channels * self.num_heads * self.n_keys,
-            self.out_channels,
+            self.channels * self.num_heads * self.n_keys,
+            self.channels,
             downsample=False,
             groups=self.num_heads,
         )
@@ -78,10 +76,16 @@ class MultisourceConvAttention(nn.Module):
             queries (list of torch.Tensor): List of query images of shape (B, C, H, W).
                 H and W may vary, while C must be the same as for the keys.
         Returns:
-            list of torch.Tensor: List of output images of shape (B, out_channels, H, W).
+            list of torch.Tensor: List of output images of shape (B, channels, H, W).
                 H and W will have the same shape as their corresponding queries.
         """
-        # Store the spatial sizes of the queries.
+        # Store the original sizes of the queries.
+        original_query_sizes = [query.shape[-2:] for query in queries]
+        # Pad the queries and keys to the next multiple of the patch size.
+        ph, pw = self.patch_size
+        keys = [pad_to_next_multiple_of(key, (ph, pw)) for key in keys]
+        queries = [pad_to_next_multiple_of(query, (ph, pw)) for query in queries]
+        # Store the spatial sizes of the queries after padding.
         query_sizes = [query.shape[-2:] for query in queries]
         # Patchify the keys and queries.
         keys_patches = [self.to_patches(key) for key in keys]
@@ -111,7 +115,6 @@ class MultisourceConvAttention(nn.Module):
         # Split the weighted values by query image.
         weighted_v_grouped_queries = torch.split(weighted_v, n_queries_patches, dim=3)
         # Reshape each group of weighted values into an image of the size of the query.
-        ph, pw = self.patch_size
         weighted_v_grouped_queries = [
             rearrange(
                 v,
@@ -125,4 +128,8 @@ class MultisourceConvAttention(nn.Module):
         ]  # list of (b, (hd k c), H, W) tensors
         # Apply the MBConv block to each group of weighted values.
         outputs = [self.mbconv(v) for v in weighted_v_grouped_queries]
+        # Remove the padding from the outputs.
+        outputs = [
+            output[..., :h, :w] for output, (h, w) in zip(outputs, original_query_sizes)
+        ]
         return outputs

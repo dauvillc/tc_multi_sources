@@ -1,6 +1,5 @@
 """Implements small utility functions for models."""
 
-import torch
 import torch.nn.functional as F
 
 
