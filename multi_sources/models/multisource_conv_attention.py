@@ -50,6 +50,9 @@ class MultisourceConvAttention(nn.Module):
         kh, kw = self.kernel_size
         # Compute the size of the flattened patch for each source.
         self.patch_dim = (ph * pw * channels) // self.num_heads
+        # Create layernorms for the keys and queries.
+        self.key_ln = nn.LayerNorm(self.patch_dim)
+        self.query_ln = nn.LayerNorm(self.patch_dim)
         # Create an embedding for the keys and queries.
         self.key_embedding = nn.Linear(self.patch_dim, attention_dim)
         self.query_embedding = nn.Linear(self.patch_dim, attention_dim)
@@ -61,7 +64,7 @@ class MultisourceConvAttention(nn.Module):
         # The mbconv block is modified to use grouped convolutions, so that the
         # heads are processed in parallel and separately.
         self.mbconv = MBConv(
-            self.channels * self.num_heads * self.n_keys,
+            self.channels * self.n_keys,
             self.channels,
             downsample=False,
             groups=self.num_heads,
@@ -96,9 +99,12 @@ class MultisourceConvAttention(nn.Module):
         # Form the sequences of patches.
         keys_seq = torch.cat(keys_patches, dim=1)  # (b, n_keys_seq, patch_dim)
         queries_seq = torch.cat(queries_patches, dim=1)  # (b, n_queries_seq, patch_dim)
-        # Reshape to add the heads dimension.
         keys_seq = self.to_heads(keys_seq)  # (b, hd, n_keys_seq, patch_dim)
         queries_seq = self.to_heads(queries_seq)  # (b, hd, n_queries_seq, patch_dim)
+        # Apply layer normalization to the keys and queries.
+        keys_seq = self.key_ln(keys_seq)
+        queries_seq = self.query_ln(queries_seq)
+        # Reshape to add the heads dimension.
         # Embed the keys and queries.
         keys_emb = self.key_embedding(keys_seq)  # (b, hd, n_keys_seq, attention_dim)
         queries_emb = self.query_embedding(queries_seq)  # (b, hd, n_queries_seq, attention_dim)
@@ -108,7 +114,8 @@ class MultisourceConvAttention(nn.Module):
         # Split the columns of the attention matrix by key image.
         attn_grouped_keys = torch.split(attn, n_keys_patches, dim=3)
         # Compute the weighted sum of the values with each group of keys.
-        weighted_v = [torch.matmul(a, v) for a, v in zip(attn_grouped_keys, keys_patches)]
+        values = torch.split(keys_seq, n_keys_patches, dim=2)
+        weighted_v = [torch.matmul(a, v) for a, v in zip(attn_grouped_keys, values)]
         # weighted_v is a list of (b, hd, n_queries_seq, patch_dim) tensors.
         # Stack back the weighted values
         weighted_v = torch.stack(weighted_v, dim=1)  # (n, n_keys, hd, n_queries_seq, patch_dim)
