@@ -7,6 +7,7 @@ from einops import rearrange
 from einops.layers.torch import Rearrange
 from multi_sources.models.utils import pad_to_next_multiple_of, pair
 from multi_sources.models.mbconv import MBConv
+from multi_sources.models.small_layers import NonLinearEmbedding
 
 
 class MultisourceConvAttention(nn.Module):
@@ -57,13 +58,11 @@ class MultisourceConvAttention(nn.Module):
         self.keys_patch_dim = (ph * pw * keys_channels)
         self.values_patch_dim = (ph * pw * values_channels)
         self.queries_patch_dim = (ph * pw * queries_channels)
-        # Create layernorms
-        self.key_ln = nn.LayerNorm(self.keys_patch_dim)
+        # Create a layernorm for the values
         self.values_ln = nn.LayerNorm(self.values_patch_dim)
-        self.query_ln = nn.LayerNorm(self.queries_patch_dim)
         # Create an embedding for the keys and queries.
-        self.key_embedding = nn.Linear(self.keys_patch_dim, attention_dim)
-        self.query_embedding = nn.Linear(self.queries_patch_dim, attention_dim)
+        self.key_embedding = NonLinearEmbedding(self.keys_patch_dim, attention_dim)
+        self.query_embedding = NonLinearEmbedding(self.queries_patch_dim, attention_dim)
         # Rearrange layer to go from images to patches.
         self.to_patches = Rearrange("b c (h ph) (w pw) -> b (h w) (ph pw c)", ph=ph, pw=pw)
         # Rearrange layer to add a heads dimension to a sequence.
@@ -118,9 +117,7 @@ class MultisourceConvAttention(nn.Module):
         values_seq = torch.cat(values_patches, dim=1)  # (b, n_keys_seq, v_patch_dim)
         queries_seq = torch.cat(queries_patches, dim=1)  # (b, n_queries_seq, q_patch_dim)
         # Apply layer normalization
-        keys_seq = self.key_ln(keys_seq)
         values_seq = self.values_ln(values_seq)
-        queries_seq = self.query_ln(queries_seq)
         # Embed the keys and queries.
         keys_emb = self.key_embedding(keys_seq)  # (b, hd, n_keys_seq, attention_dim)
         queries_emb = self.query_embedding(queries_seq)  # (b, hd, n_queries_seq, attention_dim)
