@@ -12,6 +12,7 @@ class MultiSourceWriter(BasePredictionWriter):
     - The targets are of the form {source_name: A, S, DT, C, D, V}
         where V are the values to predict.
     - The outputs are of the form {source_name: V'} where V' are the predicted values.
+        A source may not be included in the outputs.
 
     The predictions are written to disk in the following format:
     root_dir/targets/source_name/<batch_idx>.npy
@@ -46,31 +47,35 @@ class MultiSourceWriter(BasePredictionWriter):
         # We're interested in C (lat, lon, land_mask) and V (values)
         for source_name, (_, _, _, c, _, v) in batch.items():
             source_target_dir = self.targets_dir / source_name
-            source_output_dir = self.outputs_dir / source_name
             source_target_dir.mkdir(parents=True, exist_ok=True)
-            source_output_dir.mkdir(parents=True, exist_ok=True)
-            source_outputs = prediction[source_name].detach().cpu().numpy()
             source_targets = v.detach().cpu().numpy()
             # Append the lat/lon to the targets
             latlon = c[:, :2].detach().cpu().numpy()
-            source_targets = np.concatenate([latlon, source_targets], axis=1)
-            np.save(source_target_dir / f"{batch_idx}.npy", source_targets)
+            source_targets_with_coords = np.concatenate([latlon, source_targets], axis=1)
+            np.save(source_target_dir / f"{batch_idx}.npy", source_targets_with_coords)
+
+            source_output_dir = self.outputs_dir / source_name
+            source_output_dir.mkdir(parents=True, exist_ok=True)
+            if source_name in prediction:
+                source_outputs = prediction[source_name].detach().cpu().numpy()
+            else:
+                # If the source was not included in the outputs, write zeros
+                source_outputs = np.zeros_like(source_targets)
             np.save(source_output_dir / f"{batch_idx}.npy", source_outputs)
 
             (a, _, dt, _, _, _) = masked_batch[source_name]
             # a is a tensor of shape (batch_size,) whose value is -1 if the source was
-            # not available, 0 if it was masked, and 1 if it was available.
+            # not available and 1 if it was available.
             # dt is a tensor of shape (batch_size,) whose value is the time delta, normalized
             # to the range [0, 1].
             available = a.detach().cpu().numpy()
-            masked = available == 0
             info_df = pd.DataFrame(
                 {
                     "source_name": [source_name] * len(available),
                     "batch_idx": batch_idx,
                     "dt": dt.detach().cpu().numpy(),
                     "available": available,
-                    "masked": masked,
+                    "masked": [source_name in prediction] * len(available)
                 },
             )
             include_header = not info_file.exists()
