@@ -62,8 +62,8 @@ class MultisourceConvAttention(nn.Module):
         self.values_ln = nn.LayerNorm(self.values_patch_dim)
         self.query_ln = nn.LayerNorm(self.queries_patch_dim)
         # Create an embedding for the keys and queries.
-        self.key_embedding = nn.Linear(self.keys_patch_dim // num_heads, attention_dim)
-        self.query_embedding = nn.Linear(self.queries_patch_dim // num_heads, attention_dim)
+        self.key_embedding = nn.Linear(self.keys_patch_dim, attention_dim)
+        self.query_embedding = nn.Linear(self.queries_patch_dim, attention_dim)
         # Rearrange layer to go from images to patches.
         self.to_patches = Rearrange("b c (h ph) (w pw) -> b (h w) (ph pw c)", ph=ph, pw=pw)
         # Rearrange layer to add a heads dimension to a sequence.
@@ -121,13 +121,13 @@ class MultisourceConvAttention(nn.Module):
         keys_seq = self.key_ln(keys_seq)
         values_seq = self.values_ln(values_seq)
         queries_seq = self.query_ln(queries_seq)
-        # Reshape to add the heads dimension.
-        keys_seq = self.to_heads(keys_seq)  # (b, hd, n_keys_seq, k_patch_dim)
-        values_seq = self.to_heads(values_seq)  # (b, hd, n_keys_seq, v_patch_dim)
-        queries_seq = self.to_heads(queries_seq)  # (b, hd, n_queries_seq, q_patch_dim)
         # Embed the keys and queries.
         keys_emb = self.key_embedding(keys_seq)  # (b, hd, n_keys_seq, attention_dim)
         queries_emb = self.query_embedding(queries_seq)  # (b, hd, n_queries_seq, attention_dim)
+        # Reshape to add the heads dimension.
+        keys_emb = self.to_heads(keys_emb)  # (b, hd, n_keys_seq, attention_dim)
+        values_seq = self.to_heads(values_seq)  # (b, hd, n_keys_seq, v_patch_dim)
+        queries_emb = self.to_heads(queries_emb)  # (b, hd, n_queries_seq, attention_dim)
         # Compute the attention weights.
         attn = torch.einsum("b h i d, b h j d -> b h i j", queries_emb, keys_emb)
         attn = F.softmax(attn / (self.dim_head**0.5), dim=-1)  # (b, hd, n_queries_seq, n_keys_seq)
