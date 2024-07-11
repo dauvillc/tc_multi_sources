@@ -5,6 +5,7 @@ similarly to the original transformer model.
 import torch.nn as nn
 from multi_sources.models.input_output_blocks import MultiSourceEntryConvBlock
 from multi_sources.models.input_output_blocks import MultiSourceExitConvBlock
+from multi_sources.models.utils import normalize_coords_across_sources
 
 
 class Encoder(nn.Module):
@@ -36,7 +37,9 @@ class Encoder(nn.Module):
         for block in self.blocks:
             # In the encoder, the keys and queries are the same
             # and come from the input (non-masked) sources
-            x = block(x, x, input_coords, input_coords)
+            y = block(x, x, input_coords, input_coords)
+            # Residual connection
+            x = [x_ + y_ for x_, y_ in zip(x, y)]
             outputs.append(x)
         return outputs
 
@@ -74,8 +77,10 @@ class Decoder(nn.Module):
         x = masked_pixels
         for blocks, output in zip(self.blocks, encoder_outputs):
             cross_att, self_att = blocks
-            x = cross_att(output, x, input_coords, masked_coords)
-            x = self_att(x, x, masked_coords, masked_coords)
+            y = cross_att(output, x, input_coords, masked_coords)
+            x = [x_ + y_ for x_, y_ in zip(x, y)]
+            y = self_att(x, x, masked_coords, masked_coords)
+            x = [x_ + y_ for x_, y_ in zip(x, y)]
         return x
 
 
@@ -126,7 +131,7 @@ class EncoderDecoderTransformer(nn.Module):
             input_sources_channels, inner_channels, downsample=False
         )
         self.entry_masked_sources = MultiSourceEntryConvBlock(
-            [3] * n_masked_sources, inner_channels, downsample=False
+            [1] * n_masked_sources, inner_channels, downsample=False
         )
         self.encoder = Encoder(n_input_sources, inner_channels, n_blocks, **block_kwargs)
         self.decoder = Decoder(
@@ -153,14 +158,17 @@ class EncoderDecoderTransformer(nn.Module):
             list of tensors of shape (b, c, H, W).
         """
         input_pixels = [v for _, _, _, _, v in input_sources]
-        input_coords = [c for _, _, _, c, _ in input_sources]
-        masked_coords = [c for _, _, c in masked_sources_coords]
+        # Since there are no pixels for the masked sources, we'll start with
+        # the land mask only.
+        masked_pixels = [c[:, 2:3] for _, _, c in masked_sources_coords]
+        # Use only the lat/lon coordinates
+        input_coords = [c[:, :2] for _, _, _, c, _ in input_sources]
+        masked_coords = [c[:, :2] for _, _, c in masked_sources_coords]
+        input_coords = normalize_coords_across_sources(input_coords)
+        masked_coords = normalize_coords_across_sources(masked_coords)
         # Project the input pixels to inner_channel
         input_pixels = self.entry_input_sources(input_pixels)
-        # There are no pixels for the masked sources (since they're "masked").
-        # So at least for the first blocks, we'll use their coordinates projected
-        # to inner_channels.
-        masked_pixels = self.entry_masked_sources(masked_coords)
+        masked_pixels = self.entry_masked_sources(masked_pixels)
         # Compute the encoder outputs
         encoder_outputs = self.encoder(input_pixels, input_coords)
         # Compute the decoder outputs

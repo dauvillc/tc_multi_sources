@@ -157,14 +157,14 @@ class MultisourceAttBlock(nn.Module):
             channels (int): Number of channels in the images.
             use_coordinates_attention (bool): Whether to use the coordinates attention.
                 If True, the attention map is computed using the coordinates of the patches
-                (latitude, longitude, land mask), instead of their content (pixels).
+                (latitude, longitude), instead of their content (pixels).
                 The values are always the pixels.
             **kwargs: Additional arguments to pass to the MultisourceConvAttention constructor.
         """
         super().__init__()
         self.use_coordinates_attention = use_coordinates_attention
         if use_coordinates_attention:
-            key_channels, query_channels = 3, 3
+            key_channels, query_channels = 2, 2
         else:
             key_channels, query_channels = channels, channels
         self.attention = MultisourceAttention(
@@ -181,8 +181,8 @@ class MultisourceAttBlock(nn.Module):
         Args:
             key_pixels (list of torch.Tensor): List of key images of shape (B, Ck H, W).
             query_pixels (list of torch.Tensor): List of query images of shape (B, Cq, H, W).
-            key_coords (list of torch.Tensor): List of key coordinates of shape (B, 3, H, W).
-            query_coords (list of torch.Tensor): List of query coordinates of shape (B, 3, H, W).
+            key_coords (list of torch.Tensor): List of key coordinates of shape (B, 2, H, W).
+            query_coords (list of torch.Tensor): List of query coordinates of shape (B, 2, H, W).
         Returns:
             list of torch.Tensor: List of output images of shape (B, Ck, H, W).
         """
