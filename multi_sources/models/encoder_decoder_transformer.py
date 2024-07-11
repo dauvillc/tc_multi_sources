@@ -30,10 +30,13 @@ class Encoder(nn.Module):
                 block = bclass(n_sources, n_sources, channels, **args)
                 self.blocks.append(block)
 
-    def forward(self, x):
+    def forward(self, input_pixels, input_coords):
+        x = input_pixels
         outputs = []
         for block in self.blocks:
-            x = block(x, x)
+            # In the encoder, the keys and queries are the same
+            # and come from the input (non-masked) sources
+            x = block(x, x, input_coords, input_coords)
             outputs.append(x)
         return outputs
 
@@ -67,11 +70,12 @@ class Decoder(nn.Module):
                 self_att = bclass(n_decoded_sources, n_decoded_sources, channels, **args)
                 self.blocks.append(nn.ModuleList([cross_att, self_att]))
 
-    def forward(self, encoder_outputs, x):
+    def forward(self, encoder_outputs, input_coords, masked_pixels, masked_coords):
+        x = masked_pixels
         for blocks, output in zip(self.blocks, encoder_outputs):
             cross_att, self_att = blocks
-            x = cross_att(output, x)
-            x = self_att(x, x)
+            x = cross_att(output, x, input_coords, masked_coords)
+            x = self_att(x, x, masked_coords, masked_coords)
         return x
 
 
@@ -108,7 +112,8 @@ class EncoderDecoderTransformer(nn.Module):
                 class in the list, in the specified order.
                 The constructors must be of the form
                 `block_class(n_keys, n_queries, channels, **block_kwargs)`.
-                The forward method must be of the form `forward(keys, queries)`.
+                The forward method must be of the form
+                `forward(key_pixels, query_pixels, key_coords, query_coords)`.
         """
         if len(input_sources_channels) != n_input_sources:
             raise ValueError("len(input_sources_channels) must be equal to n_input_sources")
@@ -147,13 +152,18 @@ class EncoderDecoderTransformer(nn.Module):
         Returns:
             list of tensors of shape (b, c, H, W).
         """
-        # Project the input sources and the masked sources coordinates to
-        # inner_channels
-        x = self.entry_input_sources([v for _, _, _, _, v in input_sources])
-        masked_sources_coords = self.entry_masked_sources([c for _, _, c in masked_sources_coords])
+        input_pixels = [v for _, _, _, _, v in input_sources]
+        input_coords = [c for _, _, _, c, _ in input_sources]
+        masked_coords = [c for _, _, c in masked_sources_coords]
+        # Project the input pixels to inner_channel
+        input_pixels = self.entry_input_sources(input_pixels)
+        # There are no pixels for the masked sources (since they're "masked").
+        # So at least for the first blocks, we'll use their coordinates projected
+        # to inner_channels.
+        masked_pixels = self.entry_masked_sources(masked_coords)
         # Compute the encoder outputs
-        encoder_outputs = self.encoder(x)
+        encoder_outputs = self.encoder(input_pixels, input_coords)
         # Compute the decoder outputs
-        x = self.decoder(encoder_outputs, masked_sources_coords)
+        x = self.decoder(encoder_outputs, input_coords, masked_pixels, masked_coords)
         # Project the output features to the number of channels of the output sources
         return self.exit_block(x)

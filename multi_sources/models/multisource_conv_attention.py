@@ -166,5 +166,48 @@ class MultisourceConvAttBlock(nn.Module):
     """Wrapper class that integrates the Multi-source Convolutional Attention module
     into the encoder-decoder transformer.
     """
-    def __init__(self, n_keys, n_queries):
-        pass
+    def __init__(self, n_keys, n_queries, channels, use_coordinates_attention=False, **kwargs):
+        """
+        Args:
+            n_keys (int): Number of key sources.
+            n_queries (int): Number of query sources.
+            channels (int): Number of channels in the images.
+            use_coordinates_attention (bool): Whether to use the coordinates attention.
+                If True, the attention map is computed using the coordinates of the patches
+                (latitude, longitude, land mask), instead of their content (pixels).
+                The values are always the pixels.
+            **kwargs: Additional arguments to pass to the MultisourceConvAttention constructor.
+        """
+        super().__init__()
+        self.use_coordinates_attention = use_coordinates_attention
+        if use_coordinates_attention:
+            key_channels, query_channels = 3, 3
+        else:
+            key_channels, query_channels = channels, channels
+        self.attention = MultisourceConvAttention(
+            n_keys=n_keys,
+            n_queries=n_queries,
+            keys_channels=key_channels,
+            values_channels=channels,
+            queries_channels=query_channels,
+            **kwargs,
+        )
+
+    def forward(self, key_pixels, query_pixels, key_coords, query_coords):
+        """
+        Args:
+            key_pixels (list of torch.Tensor): List of key images of shape (B, Ck H, W).
+            query_pixels (list of torch.Tensor): List of query images of shape (B, Cq, H, W).
+            key_coords (list of torch.Tensor): List of key coordinates of shape (B, 3, H, W).
+            query_coords (list of torch.Tensor): List of query coordinates of shape (B, 3, H, W).
+        Returns:
+            list of torch.Tensor: List of output images of shape (B, Ck, H, W).
+        """
+        values = key_pixels
+        if self.use_coordinates_attention:
+            keys = key_coords
+            queries = query_coords
+        else:
+            keys = key_pixels
+            queries = query_pixels
+        return self.attention(keys, values, queries)
