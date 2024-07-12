@@ -21,11 +21,13 @@ class SourcesReconstruction(pl.LightningModule):
     """
 
     def __init__(
-        self, model, masked_sources, lr_scheduler_kwargs, metrics={}
+        self, model, cfg, masked_sources, lr_scheduler_kwargs, metrics={}
     ):
         """
         Args:
             model (torch.nn.Module): The model to wrap.
+            cfg (dict): The whole configuration of the experiment. This will be saved
+                within the checkpoints and can be used to rebuild the exact experiment.
             masked_sources (list of str): The sources to mask during training.
             lr_scheduler_kwargs (dict): The keyword arguments to pass to the learning rate
                 scheduler.
@@ -37,7 +39,7 @@ class SourcesReconstruction(pl.LightningModule):
         self.masked_sources = masked_sources
         self.lr_scheduler_kwargs = lr_scheduler_kwargs
         self.metrics = metrics
-        self.save_hyperparameters()
+        self.save_hyperparameters(ignore="model")
 
     def loss_fn(self, y_pred, y_true):
         """Computes the reconstruction loss over the masked source(s).

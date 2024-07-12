@@ -1,5 +1,6 @@
 import lightning.pytorch as pl
 import hydra
+import torch
 from torch.utils.data import DataLoader
 from pathlib import Path
 from hydra.utils import get_class, instantiate
@@ -12,11 +13,6 @@ def main(cfg: DictConfig):
     cfg = OmegaConf.to_object(cfg)
     run_id = cfg["run_id"]
 
-    # Create the validation dataset and dataloader
-    val_dataset = hydra.utils.instantiate(cfg["dataset"]["val"], _convert_="partial")
-    val_dataloader = DataLoader(val_dataset, **cfg["dataloader"])
-    print("Validation dataset size:", len(val_dataset))
-
     # Load the checkpoint. The checkpoints are stored as "epoch=xx.ckpt" files in the checkpoints
     # directory.
     # Use the latest checkpoint.
@@ -25,8 +21,36 @@ def main(cfg: DictConfig):
     checkpoint_files.sort(key=lambda x: x.stat().st_mtime)
     checkpoint_path = checkpoint_files[-1]
     print("Loading checkpoint:", checkpoint_path.stem)
+    # The checkpoint includes the whole configuration dict of the experiment, in
+    # checkpoint["hyper_parameters"]['cfg']. We'll use this to reproduce
+    # the exact configuration of the experiment.
+    checkpoint = torch.load(checkpoint_path)
+    exp_cfg = checkpoint["hyper_parameters"]["cfg"]
+
+    # Create the validation dataset and dataloader
+    val_dataset = hydra.utils.instantiate(exp_cfg["dataset"]["val"], _convert_="partial")
+    val_dataloader = DataLoader(val_dataset, **exp_cfg["dataloader"])
+    print("Validation dataset size:", len(val_dataset))
+    masked_sources = cfg["lightning_module"]["masked_sources"]
+    input_sources = [
+        source for source in val_dataset.get_source_names() if source not in masked_sources
+    ]
+    n_masked_sources = len(masked_sources)
+    n_input_sources = len(input_sources)
+    input_sources_channels = [val_dataset.get_n_variables(source) for source in input_sources]
+    masked_sources_channels = [val_dataset.get_n_variables(source) for source in masked_sources]
+
+    # Instantiate the model and the lightning module
+    model_cfg = exp_cfg["model"]
+    model = instantiate(
+        model_cfg,
+        n_input_sources,
+        n_masked_sources,
+        input_sources_channels,
+        masked_sources_channels,
+    )
     lightning_module_class = get_class(cfg["lightning_module"]["_target_"])
-    module = lightning_module_class.load_from_checkpoint(checkpoint_path)
+    module = lightning_module_class.load_from_checkpoint(checkpoint_path, model=model)
 
     # Create the results directory
     run_results_dir = Path(cfg["paths"]["predictions"]) / run_id

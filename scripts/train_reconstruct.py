@@ -44,12 +44,10 @@ def main(cfg: DictConfig):
         masked_sources_channels,
     ).float()
     # Create the lightning module
-    pl_module = instantiate(cfg["lightning_module"], model)
+    pl_module = instantiate(cfg["lightning_module"], model, cfg)
 
     # Create the logger
     logger = WandbLogger(dir=cfg["paths"]["wandb_logs"], log_model="all")
-    # Log the configuration
-    logger.log_hyperparams(cfg)
     # Model checkpoint
     checkpoint_callback = ModelCheckpoint(
         monitor="val_loss",
