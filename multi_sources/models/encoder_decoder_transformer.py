@@ -2,6 +2,7 @@
 similarly to the original transformer model.
 """
 
+import torch
 import torch.nn as nn
 from multi_sources.models.input_output_blocks import MultiSourceEntryConvBlock
 from multi_sources.models.input_output_blocks import MultiSourceExitConvBlock
@@ -127,9 +128,11 @@ class EncoderDecoderTransformer(nn.Module):
         super().__init__()
         # Create an entry convolutional block to project all input sources to a
         # common number of channels
+        # For the input sources, add two channels for the land mask and the availability mask
         self.entry_input_sources = MultiSourceEntryConvBlock(
-            input_sources_channels, inner_channels, downsample=False
+            [c + 2 for c in input_sources_channels], inner_channels, downsample=False
         )
+        # For the masked sources, only one channel for the land mask
         self.entry_masked_sources = MultiSourceEntryConvBlock(
             [1] * n_masked_sources, inner_channels, downsample=False
         )
@@ -144,12 +147,13 @@ class EncoderDecoderTransformer(nn.Module):
     def forward(self, input_sources, masked_sources_coords):
         """
         Args:
-            input_sources: list of tuples (a, s, dt, c, v) where:
+            input_sources: list of tuples (a, s, dt, c, pa, v) where:
                 - a is a tensor of shape (b,) whose value is 1 if the source is available
                     and -1 if it is not.
                 - s (b,) gives the source index of each sample.
                 - dt (b,) gives the relative time delta of each sample.
                 - c (b, 3, H, W) gives the coordinates (lat lon land_mask);
+                - pa (b, H, W) is a boolean mask which is True where the source is available.
                 - v (b, c, H, W) gives the values of each sample.
             masked_sources_coords: list of tuples (s, dt, c), same as above.
                 All masked sources are available and have no values since those
@@ -157,15 +161,24 @@ class EncoderDecoderTransformer(nn.Module):
         Returns:
             list of tensors of shape (b, c, H, W).
         """
-        input_pixels = [v for _, _, _, _, v in input_sources]
+        input_pixels = [v for _, _, _, _, _, v in input_sources]
+        # Use only the lat/lon coordinates
+        input_coords = [c[:, :2] for _, _, _, c, _, _ in input_sources]
+        masked_coords = [c[:, :2] for _, _, c in masked_sources_coords]
+        # Normalize the coordinates across sources so that they span from 0 to 1
+        input_coords = normalize_coords_across_sources(input_coords)
+        masked_coords = normalize_coords_across_sources(masked_coords)
+        # Where the input sources are not available, set the coordinates to -1
+        for coords, (_, _, _, _, pa, _) in zip(input_coords, input_sources):
+            coords[(~pa).unsqueeze(1).expand(coords.shape)] = -1
+        # For the input sources, concatenate the values with the land mask
+        # and the availability mask, which could be valuable information
+        # for the model.
+        for i, (_, _, _, c, pa, v) in enumerate(input_sources):
+            input_pixels[i] = torch.cat([v, c[:, 2:3].float(), pa.unsqueeze(1).float()], dim=1)
         # Since there are no pixels for the masked sources, we'll start with
         # the land mask only.
         masked_pixels = [c[:, 2:3] for _, _, c in masked_sources_coords]
-        # Use only the lat/lon coordinates
-        input_coords = [c[:, :2] for _, _, _, c, _ in input_sources]
-        masked_coords = [c[:, :2] for _, _, c in masked_sources_coords]
-        input_coords = normalize_coords_across_sources(input_coords)
-        masked_coords = normalize_coords_across_sources(masked_coords)
         # Project the input pixels to inner_channel
         input_pixels = self.entry_input_sources(input_pixels)
         masked_pixels = self.entry_masked_sources(masked_pixels)

@@ -1,4 +1,3 @@
-
 import lightning.pytorch as pl
 import torch
 from multi_sources.utils.scheduler import CosineAnnealingWarmupRestarts
@@ -20,9 +19,7 @@ class SourcesReconstruction(pl.LightningModule):
         model (torch.nn.Module): The model to wrap.
     """
 
-    def __init__(
-        self, model, cfg, masked_sources, lr_scheduler_kwargs, metrics={}
-    ):
+    def __init__(self, model, cfg, masked_sources, lr_scheduler_kwargs, metrics={}):
         """
         Args:
             model (torch.nn.Module): The model to wrap.
@@ -63,9 +60,10 @@ class SourcesReconstruction(pl.LightningModule):
             pred = y_pred[source_name]
             # Compute the MSE loss element-wise
             loss = (pred - v) ** 2
-            # Ignore all pixels for which d > 1100 km. Note that this also
-            # excludes the pixels for which d = inf.= (padding)
-            mask = (d <= 1100).unsqueeze(1).expand(loss.shape)
+            # Ignore all pixels for which d > 1000 km. Note that this also
+            # excludes the pixels for which the target is missing, as for
+            # those pixels d = +inf.
+            mask = (d <= 1000).unsqueeze(1).expand(loss.shape)
             masked_loss = loss[mask]
             if masked_loss.numel() == 0:
                 continue
@@ -153,9 +151,14 @@ class SourcesReconstruction(pl.LightningModule):
         """Computes the forward pass of the model"""
         # The batches are given as dict {source_name: (A, S, DT, C, D, V)}
         # and {source_name: (S, DT, C, D)}, respectively.
-        # but the model should receive two lists of (A, S, DT, C, V) and
+        # but the model should receive two lists of (A, S, DT, C, PA, V) and
         # (S, DT, C) tensors.
-        input_batch = [(a, s, dt, c, v) for k, (a, s, dt, c, _, v) in input_sources.items()]
+        # PA means 'pixel available' and is a boolean tensor indicating whether
+        # each pixel is available or not in the source.
+        input_batch = [
+            (a, s, dt, c, (d != float("+inf")), v)
+            for k, (a, s, dt, c, d, v) in input_sources.items()
+        ]
         masked_batch = [(s, dt, c) for k, (s, dt, c, _, _) in masked_sources.items()]
         outputs = self.model(input_batch, masked_batch)
         # The model outputs a list of tensors, one for each masked source.
