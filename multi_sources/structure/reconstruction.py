@@ -40,11 +40,6 @@ class SourcesReconstruction(pl.LightningModule):
 
     def loss_fn(self, y_pred, y_true):
         """Computes the reconstruction loss over the masked source(s).
-        The reconstruction loss is computed as the average over all pixels of:
-          (ŷ - y)^2 * 1_{dist_to_center(pixel) < R} * (1 - land_mask(pixel)),
-        where ŷ is the predicted value, y is the true value, and R is an arbitrary radius.
-        Currently, R is chosen as 1100 km, which is enough to cover the largest storm
-        ever recorded (Typhoon Tip, 1979, 2170 km diameter).
 
         Args:
             y_pred (dict of str to tensor): The predicted values, as a dict
@@ -60,10 +55,11 @@ class SourcesReconstruction(pl.LightningModule):
             pred = y_pred[source_name]
             # Compute the MSE loss element-wise
             loss = (pred - v) ** 2
-            # Ignore all pixels for which d > 1000 km. Note that this also
-            # excludes the pixels for which the target is missing, as for
-            # those pixels d = +inf.
-            mask = (d <= 1000).unsqueeze(1).expand(loss.shape)
+            # Ignore the pixels that are at least 1100km away from the center
+            # of the storm.
+            # This also ignores the pixels for which the distance is +inf, i.e. pixels
+            # for which the target is not available.
+            mask = (d <= 1100).unsqueeze(1).expand(loss.shape)
             masked_loss = loss[mask]
             if masked_loss.numel() == 0:
                 continue

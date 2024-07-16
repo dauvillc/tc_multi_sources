@@ -5,6 +5,9 @@ defaults:
   - dataset: full_set
   - dataloader: local
   - lightning_module: reconstruction
-  - model: encoder_decoder_transformer
+  - model: coordinates_vit
   - trainer: 1xv100-32g
-  - lr_scheduler: cosine_warmup_150epochs
+  - lr_scheduler: cosine_warmup_300epochs
+  - _self_
+
+seed: 42

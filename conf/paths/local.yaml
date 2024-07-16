@@ -7,7 +7,7 @@ preprocessed_dataset: "/home/cdauvill/scratch/data/multi_sources/preprocessed_re
 sources: "/home/cdauvill/scratch/data/multi_sources/sources/"
 # Path to the metadata regarding the preprocessed dataset
 # Indicate a json file
-metadata: "/home/cdauvill/scratch/data/multi_sources/preprocessed/metadata.json"
+metadata: "/home/cdauvill/scratch/data/multi_sources/preprocessed_regridded/metadata.json"
 # Path to a tmp directory for scripts
 tmp_dir: "/tmp"
 # Checkpoints directory

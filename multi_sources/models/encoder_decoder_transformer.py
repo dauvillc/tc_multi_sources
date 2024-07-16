@@ -162,9 +162,15 @@ class EncoderDecoderTransformer(nn.Module):
             list of tensors of shape (b, c, H, W).
         """
         input_pixels = [v for _, _, _, _, _, v in input_sources]
-        # Use only the lat/lon coordinates
+        # Split the latlon coordinates from the land mask. Note:
+        # For the masked sources, the land mask will be the initial input.
         input_coords = [c[:, :2] for _, _, _, c, _, _ in input_sources]
         masked_coords = [c[:, :2] for _, _, c in masked_sources_coords]
+        input_masks = [c[:, 2:3] for _, _, _, c, _, _ in input_sources]
+        masked_pixels = [c[:, 2:3] for _, _, c in masked_sources_coords]
+        # Add some noise to the land masks to avoid zero std
+        input_masks = [m + torch.randn_like(m) * 1e-4 for m in input_masks]
+        masked_pixels = [m + torch.randn_like(m) * 1e-4 for m in masked_pixels]
         # Normalize the coordinates across sources so that they span from 0 to 1
         input_coords = normalize_coords_across_sources(input_coords)
         masked_coords = normalize_coords_across_sources(masked_coords)
@@ -176,9 +182,6 @@ class EncoderDecoderTransformer(nn.Module):
         # for the model.
         for i, (_, _, _, c, pa, v) in enumerate(input_sources):
             input_pixels[i] = torch.cat([v, c[:, 2:3].float(), pa.unsqueeze(1).float()], dim=1)
-        # Since there are no pixels for the masked sources, we'll start with
-        # the land mask only.
-        masked_pixels = [c[:, 2:3] for _, _, c in masked_sources_coords]
         # Project the input pixels to inner_channel
         input_pixels = self.entry_input_sources(input_pixels)
         masked_pixels = self.entry_masked_sources(masked_pixels)

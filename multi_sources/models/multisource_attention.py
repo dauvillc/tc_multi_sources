@@ -59,8 +59,10 @@ class MultisourceAttention(nn.Module):
         self.key_embedding = NonLinearEmbedding(self.keys_patch_dim, embedding_dim)
         self.query_embedding = NonLinearEmbedding(self.queries_patch_dim, embedding_dim)
         self.values_embedding = nn.Linear(self.values_patch_dim, embedding_dim)
-        # Create a layernorm for the values
+        # Create layernorms
+        self.keys_ln = nn.LayerNorm(self.keys_patch_dim)
         self.values_ln = nn.LayerNorm(self.values_patch_dim)
+        self.queries_ln = nn.LayerNorm(self.queries_patch_dim)
         # Rearrange layer to go from images to patches.
         self.to_patches = Rearrange("b c (h ph) (w pw) -> b (h w) (ph pw c)", ph=ph, pw=pw)
         # Rearrange layer to add a heads dimension to a sequence.
@@ -108,6 +110,8 @@ class MultisourceAttention(nn.Module):
         queries_seq = torch.cat(queries_patches, dim=1)  # (b, n_queries_seq, q_patch_dim)
         # Apply layer normalization
         values_seq = self.values_ln(values_seq)
+        keys_seq = self.keys_ln(keys_seq)
+        queries_seq = self.keys_ln(queries_seq)
         # Embed the keys, queries and values.
         keys_emb = self.key_embedding(keys_seq)  # (b, hd, n_keys_seq, emb_dim)
         values_emb = self.values_embedding(values_seq)  # (b, hd, n_keys_seq, emb_dim)
@@ -159,7 +163,7 @@ class MultisourceAttBlock(nn.Module):
                 If True, the attention map is computed using the coordinates of the patches
                 (latitude, longitude), instead of their content (pixels).
                 The values are always the pixels.
-            **kwargs: Additional arguments to pass to the MultisourceConvAttention constructor.
+            **kwargs: Additional arguments to pass to the MultisourceAttention constructor.
         """
         super().__init__()
         self.use_coordinates_attention = use_coordinates_attention
@@ -194,3 +198,38 @@ class MultisourceAttBlock(nn.Module):
             keys = key_pixels
             queries = query_pixels
         return self.attention(keys, values, queries)
+
+
+class MultisourceSelfAttBlock(nn.Module):
+    """Wrapper class that applies the MultisourceAttBlock with the keys and queries
+    being the same images.
+    """
+    def __init__(self, n_sources, channels, use_coordinates_attention=False, **kwargs):
+        """
+        Args:
+            n_sources (int): Number of sources.
+            channels (int): Number of channels in the images.
+            use_coordinates_attention (bool): Whether to use the coordinates attention.
+                If True, the attention map is computed using the coordinates of the patches
+                (latitude, longitude), instead of their content (pixels).
+                The values are always the pixels.
+            **kwargs: Additional arguments to pass to the MultisourceConvAttention constructor.
+        """
+        super().__init__()
+        self.attention = MultisourceAttBlock(
+            n_keys=n_sources,
+            n_queries=n_sources,
+            channels=channels,
+            use_coordinates_attention=use_coordinates_attention,
+            **kwargs,
+        )
+
+    def forward(self, pixels, coords):
+        """
+        Args:
+            pixels (list of torch.Tensor): List of images of shape (B, C, H, W).
+            coords (list of torch.Tensor): List of coordinates of shape (B, 2, H, W).
+        Returns:
+            list of torch.Tensor: List of output images of shape (B, C, H, W).
+        """
+        return self.attention(pixels, pixels, coords, coords)

@@ -4,8 +4,8 @@ defaults:
   - sources: test
   - dataset: full_set
   - dataloader: local
-  - lightning_module: mae
-  - model: regridding_vit
+  - lightning_module: reconstruction
+  - model: encoder_decoder_transformer
   - lr_scheduler: test
   - _self_
 
