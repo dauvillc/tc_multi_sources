@@ -149,10 +149,10 @@ class SourcesReconstruction(pl.LightningModule):
         # and {source_name: (S, DT, C, D)}, respectively.
         # but the model should receive two lists of (A, S, DT, C, PA, V) and
         # (S, DT, C) tensors.
-        # PA means 'pixel available' and is a boolean tensor indicating whether
+        # PA means 'pixel availability' and is a boolean tensor indicating whether
         # each pixel is available or not in the source.
         input_batch = [
-            (a, s, dt, c, (d != float("+inf")), v)
+            (a, s, dt, c, (d < float("+inf")), v)
             for k, (a, s, dt, c, d, v) in input_sources.items()
         ]
         masked_batch = [(s, dt, c) for k, (s, dt, c, _, _) in masked_sources.items()]
