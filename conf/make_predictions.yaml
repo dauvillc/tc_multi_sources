@@ -5,7 +5,6 @@ defaults:
   - dataset: full_set
   - dataloader: local
   - lightning_module: reconstruction
-  - model: encoder_decoder_transformer
   - lr_scheduler: test
   - _self_
 
