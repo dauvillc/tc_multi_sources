@@ -6,6 +6,7 @@ train:
   sources:
     _target_: multi_sources.data_processing.utils.read_sources
     sources_dict: ${sources}
+  single_channel_sources: True
   # Seasons to include (indicate a list of integers)
   include_seasons: [2012, 2013, 2015, 2016, 2018, 2019]
   # Maximum number of hours between the sample synoptic time
@@ -24,6 +25,7 @@ val:
   sources:
     _target_: multi_sources.data_processing.utils.read_sources
     sources_dict: ${sources}
+  single_channel_sources: True
   include_seasons: [2014, 2017]
   dt_max: 24
   min_available_sources_prop: 1.0
