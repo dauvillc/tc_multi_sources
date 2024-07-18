@@ -1,4 +1,0 @@
-_target_: multi_sources.models.unet.UNet
-n_blocks: 4
-kernel_size: 3
-base_filters: 8

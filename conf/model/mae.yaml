@@ -6,5 +6,6 @@ coordinates_attention:
     _target_: hydra.utils.get_class
     path: multi_sources.models.attention.CoordinatesAttention
   inner_dim: 512
-  num_heads: 8 
+  num_heads: 8
+
 
