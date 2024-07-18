@@ -1,5 +1,6 @@
 # @package _global_
 defaults:
+  - override /paths: jz
   - override /lightning_module: mae
   - override /trainer: 4xv100-32g
 
