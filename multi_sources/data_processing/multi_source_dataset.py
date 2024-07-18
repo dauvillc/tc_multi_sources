@@ -31,6 +31,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         metadata_path,
         dataset_dir,
         sources,
+        single_channel_sources=True,
         include_seasons=None,
         exclude_seasons=None,
         dt_max=24,
@@ -44,6 +45,8 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                 columns 'sid', 'source_name', 'season', 'basin', 'cyclone_number', 'time'.
             dataset_dir (str): The directory containing the preprocessed dataset.
             sources (list of :obj:`Source`): The sources to include in the dataset.
+            single_channel_sources (bool): If True, sources with multiple channels will
+                be split into multiple sources with a single channel each.
             include_seasons (list of int): The years to include in the dataset.
                 If None, all years are included.
             exclude_seasons (list of int): The years to exclude from the dataset.
@@ -58,6 +61,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         self.dt_max = pd.Timedelta(dt_max, unit="h")
         self.dataset_dir = Path(dataset_dir)
         self.sources = sources
+        self.single_channel_sources = single_channel_sources
         self.enable_data_augmentation = enable_data_augmentation
         # Load the metadata file
         self.df = pd.read_json(metadata_path, orient="records", lines=True, convert_dates=["time"])
@@ -176,7 +180,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                 avail_tensor = torch.tensor(-1, dtype=torch.float32)
                 source_shape = self.source_shapes[source_name]
                 source_channels = self.get_n_variables()[source_name]
-                output[source_name] = (
+                source_output = (
                     avail_tensor,  # A
                     source_tensor,  # S
                     torch.tensor(float("nan"), dtype=torch.float32),  # DT
@@ -229,8 +233,16 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                     # Apply the same transformation to C, D, and V
                     C, D, V = self.transform(C, D, V)
                     D = D.squeeze(0)
-                output[source_name] = (avail_tensor, source_tensor, dt_tensor, C, D, V)
-
+                source_output = (avail_tensor, source_tensor, dt_tensor, C, D, V)
+            # Split the sources with multiple channels into multiple sources with a single channel
+            # if needed
+            if self.single_channel_sources:
+                a, s, dt, c, d, v = source_output
+                for i, var in enumerate(self.source_variables[source_name]):
+                    output[f"{source_name}.{var}"] = (
+                            a, s, dt, c, d, v[i:i+1])
+            else:
+                output[source_name] = source_output
         return output
 
     def get_data_filepath(self, season, basin, sid, time, source_name):
