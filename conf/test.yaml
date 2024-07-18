@@ -1,0 +1,8 @@
+defaults:
+  - paths: local
+  - sources: test_multiple_channels
+  - dataset: full_set
+  - dataloader: local
+  - _self_
+
+seed: 42
