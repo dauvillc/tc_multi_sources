@@ -63,7 +63,7 @@ class MultisourceGeneralBackbone(nn.Module):
             block = nn.ModuleList()
             for layer_name, layer_kwargs in layer_kwargs.items():
                 layer_class = layer_kwargs.pop("layer_class")
-                block.append(layer_class(**layer_kwargs))
+                block.append(layer_class(self.pixels_dim, self.coords_dim, **layer_kwargs))
             self.blocks.append(block)
         # Output embedding layer to project the predicted pixels back to their
         # original dimension

@@ -1,3 +1,10 @@
 _target_: multi_sources.models.general_backbone.MultisourceGeneralBackbone
-n_blocks: 0
+n_blocks: 1
 patch_size: ${lightning_module.patch_size}
+coordinates_attention:
+  layer_class:
+    _target_: hydra.utils.get_class
+    path: multi_sources.models.attention.CoordinatesAttention
+  inner_dim: 512
+  num_heads: 8 
+
