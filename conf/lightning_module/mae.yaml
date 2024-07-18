@@ -1,5 +1,4 @@
-# Defines the arguments for the MultisourceMaskedAutoencoder lightning module
-_target_: multi_sources.structure.mae.MultisourceMaskedAutoencoder
+_target_: multi_sources.structure.mae.MultisourceMAE
+patch_size: 16
+masking_ratio: 0.1
 lr_scheduler_kwargs: ${lr_scheduler}
-enable_masking: true
-only_mask_sources: ['tc_primed.microwave.AMSR2_GCOMW1.S2']

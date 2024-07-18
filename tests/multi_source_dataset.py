@@ -5,7 +5,7 @@ import hydra
 from omegaconf import DictConfig, OmegaConf
 from torch.utils.data import DataLoader
 from tqdm import trange
-from multi_sources.data_processing.multi_source_dataset import MultiSourceDataset
+from multi_sources.data_processing.multi_source_dataset_new import MultiSourceDataset
 from multi_sources.data_processing.utils import read_sources
 from pyinstrument import Profiler
 
