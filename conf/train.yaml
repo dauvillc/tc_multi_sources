@@ -5,7 +5,7 @@ defaults:
   - dataset: full_set
   - dataloader: local
   - lightning_module: mae
-  - model: mae
+  - model: general_backbone
   - trainer: 1xv100-32g
   - lr_scheduler: cosine_warmup_300epochs
   - _self_
