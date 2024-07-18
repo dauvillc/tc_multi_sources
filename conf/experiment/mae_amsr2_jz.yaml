@@ -1,6 +1,7 @@
 # @package _global_
 defaults:
   - override /lightning_module: mae
+  - override /trainer: 4xv100-32g
 
 dataloader:
   batch_size: 8
