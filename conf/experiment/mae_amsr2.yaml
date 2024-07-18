@@ -1,0 +1,17 @@
+# @package _global_
+defaults:
+  - override /lightning_module: mae
+
+dataloader:
+  batch_size: 8
+
+model:
+  coordinates_attention:
+    layer_class:
+      _target_: hydra.utils.get_class
+      path: multi_sources.models.attention.CoordinatesAttention
+    inner_dim: 512
+    num_heads: 8
+
+wandb:
+  name: amsr2_cvit_coords_only
