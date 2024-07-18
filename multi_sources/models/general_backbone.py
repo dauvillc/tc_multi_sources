@@ -85,6 +85,8 @@ class MultisourceGeneralBackbone(nn.Module):
         pixels_seq = self.pixel_embedding(pixels_seq)
         landmask_seq = self.landmask_embedding(landmask_seq)
         mask_seq = self.mask_embedding(mask_seq)
+        # Sum the mask embeddings to the pixel embeddings
+        pixels_seq = pixels_seq + mask_seq
         # Apply the blocks
         for block in self.blocks:
             for layer in block:
