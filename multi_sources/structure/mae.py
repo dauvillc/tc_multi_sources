@@ -165,25 +165,28 @@ class MultisourceMAE(pl.LightningModule):
         token_perms, n_tokens_map = {}, {}
         masked_tokens_indices = {}
         for source, (s, dt, c, d, lm, v, m) in x.items():
+            B, L, D = v.shape  # batch size, sequence length, model dimension
             # Compute the number of tokens to keep based on the size of the input
             # and the masking ratio
             n_tokens = c.shape[1]
-            n_masked = int(n_tokens * self.masking_ratio)
+            n_kept = int(n_tokens * (1 - self.masking_ratio))
             # Randomly select the tokens to keep using the method from
             # "Masked Autoencoders Are Scalable Vision Learners" He et al. 2021
-            # Shuffle the tokens and keep the first n_masked.
-            perm = torch.randperm(n_tokens)
-            c = c[:, perm][:, :-n_masked]
-            lm = lm[:, perm][:, :-n_masked]
-            v = v[:, perm][:, :-n_masked]
-            m = m[:, perm][:, :-n_masked]
+            # Shuffle the tokensnd keep the first n_masked.
+            noise = torch.rand(B, L, device=c.device)
+            perm = torch.argsort(noise, dim=1)
+            kept_indices = perm[:, :n_kept].unsqueeze(-1).expand(-1, -1, D)
+            c = torch.gather(c, dim=1, index=kept_indices)
+            lm = torch.gather(lm, dim=1, index=kept_indices)
+            v = torch.gather(v, dim=1, index=kept_indices)
+            m = torch.gather(m, dim=1, index=kept_indices)
             # Save the permutation and the original number of tokens for later
             # reconstruction of the original shape
             token_perms[source] = perm
             n_tokens_map[source] = n_tokens
             encoder_x.append((s, dt, c, lm, v, m))
             # Deduce the indices of the masked tokens
-            masked_tokens_indices[source] = perm[-n_masked:]
+            masked_tokens_indices[source] = perm[:, n_kept:]
 
         return encoder_x, token_perms, n_tokens_map, masked_tokens_indices
 
@@ -199,6 +202,7 @@ class MultisourceMAE(pl.LightningModule):
         """
         decoder_x = []
         for y, (source, (s, dt, c, d, lm, _, m)) in zip(encoder_y, x.items()):
+            B, L, D = y.shape
             # Get the permutation used to shuffle the tokens in the encoder input
             perm = token_perms[source]
             # Compute the number of tokens to add to retrieve the original shape
@@ -207,8 +211,8 @@ class MultisourceMAE(pl.LightningModule):
             mask_tokens = self.mask_token.expand(c.shape[0], n_tokens_to_add, -1)
             y = torch.cat((y, mask_tokens), dim=1)  # (b, n_tokens, d_model)
             # Unshuffle the tokens
-            reverse_perm = torch.argsort(perm)
-            y = y[:, reverse_perm]
+            reverse_perm = torch.argsort(perm, dim=1).unsqueeze(-1).expand(-1, -1, D)
+            y = torch.gather(y, dim=1, index=reverse_perm)
             # Since the input to the decoder is not the initial pixels, but the tokens
             # processed by the encoder, the availability tensor is not needed.
             m = torch.zeros_like(m)
@@ -253,9 +257,11 @@ class MultisourceMAE(pl.LightningModule):
         losses = []
         for source, (_, _, _, _, _, v, m) in y_true.items():
             pred = y_pred[source]
+            B, L, D = pred.shape
             # Compute the loss only for the masked tokens
-            pred = pred[:, masked_token_indices[source]]
-            v = v[:, masked_token_indices[source]]
+            masked_indices = masked_token_indices[source].unsqueeze(-1).expand(-1, -1, D)
+            pred = pred.gather(1, masked_indices)
+            v = v.gather(1, masked_indices)
             loss = nn.functional.mse_loss(pred, v, reduction="none")
             # Mask the loss where the tokens are not available
             m = m[:, masked_token_indices[source]]
@@ -284,8 +290,10 @@ class MultisourceMAE(pl.LightningModule):
         output = {}
         for source, (_, _, _, _, _, v, _) in x.items():
             output[source] = v.clone()
-            pred_masked = pred[source][:, masked_tokens_indices[source]]
-            output[source][:, masked_tokens_indices[source]] = pred_masked
+            B, L, D = pred[source].shape
+            masked_indices = masked_tokens_indices[source].unsqueeze(-1).expand(-1, -1, D)
+            pred_masked = pred[source].gather(1, masked_indices)
+            output[source].gather(1, masked_indices).copy_(pred_masked)
         # Convert the predictions back to images
         for source, v in output.items():
             pH, pW = padded_shapes[source]

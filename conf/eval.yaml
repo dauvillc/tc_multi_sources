@@ -1,8 +1,8 @@
 # Configuration for scripts/eval.py
 
 defaults:
+  - paths: jz
   - _self_
-  - paths/jz
 
 run_id: ???
 num_workers: 4
