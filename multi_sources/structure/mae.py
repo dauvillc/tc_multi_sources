@@ -264,9 +264,9 @@ class MultisourceMAE(pl.LightningModule):
             v = v.gather(1, masked_indices)
             loss = nn.functional.mse_loss(pred, v, reduction="none")
             # Mask the loss where the tokens are not available
-            m = m[:, masked_token_indices[source]]
-            loss = loss * m
-            losses.append(loss.mean())
+            m = m.gather(1, masked_indices).float()
+            loss = (loss * m).sum() / m.sum()
+            losses.append(loss)
         return torch.stack(losses).mean()
 
     def training_step(self, batch, batch_idx):
@@ -289,11 +289,11 @@ class MultisourceMAE(pl.LightningModule):
         # For the tokens that were NOT masked, set them to the true values
         output = {}
         for source, (_, _, _, _, _, v, _) in x.items():
-            output[source] = v.clone()
+            otp = v.clone()
             B, L, D = pred[source].shape
             masked_indices = masked_tokens_indices[source].unsqueeze(-1).expand(-1, -1, D)
-            pred_masked = pred[source].gather(1, masked_indices)
-            output[source].gather(1, masked_indices).copy_(pred_masked)
+            otp.scatter_(1, masked_indices, pred[source])
+            output[source] = otp
         # Convert the predictions back to images
         for source, v in output.items():
             pH, pW = padded_shapes[source]
