@@ -6,6 +6,20 @@ import torch.nn.functional as F
 from einops import rearrange
 
 
+class AttentionMap(nn.Module):
+    """Computes the attention map from the embedded keys and queries.
+    Using this intermediary Module allows to retrieve the attention maps
+    with register_forward_hook."""
+
+    def __init__(self, key_dim, query_dim):
+        super().__init__()
+        self.scale = key_dim**-0.5
+
+    def forward(self, keys, queries):
+        dots = torch.matmul(queries, keys.transpose(-2, -1)) * self.scale
+        return F.softmax(dots, dim=-1)
+
+
 class SelfAttention(nn.Module):
     """A self-attention block that can use values that are different from the keys/queries."""
 
@@ -25,7 +39,8 @@ class SelfAttention(nn.Module):
         self.to_qk = nn.Linear(key_dim, inner_dim * 2, bias=False)
         self.to_v = nn.Linear(value_dim, inner_dim, bias=False)
         self.num_heads = num_heads
-        self.scale = inner_dim**-0.5
+
+        self.attention_map = AttentionMap(inner_dim, inner_dim)
 
         self.output_proj = nn.Sequential(nn.Linear(inner_dim, value_dim), nn.Dropout(dropout))
 
@@ -40,8 +55,7 @@ class SelfAttention(nn.Module):
         v = self.to_v(values)
         v = rearrange(v, "b n (h d) -> b h n d", h=self.num_heads)
 
-        dots = torch.matmul(q, k.transpose(-2, -1)) * self.scale
-        attn = F.softmax(dots, dim=-1)
+        attn = self.attention_map(k, q)
         out = torch.matmul(attn, v)
         out = rearrange(out, "b h n d -> b n (h d)")
         return self.output_proj(out)
