@@ -8,6 +8,7 @@ import torch.nn as nn
 from multi_sources.utils.scheduler import CosineAnnealingWarmupRestarts
 from multi_sources.utils.image_processing import img_to_patches, pad_to_next_multiple_of, pair
 from multi_sources.utils.image_processing import patches_to_img
+from multi_sources.models.utils import normalize_coords_across_sources
 
 
 class MultisourceMAE(pl.LightningModule):
@@ -86,29 +87,26 @@ class MultisourceMAE(pl.LightningModule):
 
     def preproc_input(self, x):
         # x is a map {source_name: A, S, DT, C, D, V}
-        # - Discard A, which is not needed as its info can be inferred from C or D.
-        # - Fill NaN values (masked / missing) in DT, C and V with zeros
-        #   (which is also the mean value of the data after normalization)
+        # Normalize the coordinates across sources to make them relative instead of absolute
+        # (i.e the min coord across all sources of a sample is always 0 and the max is 1).
+        latlon = [x[3][:, :2] for x in x.values()]  # 3rd channel is the land mask
+        normed_coords = normalize_coords_across_sources(latlon)
         input_ = {}
-        for source, (a, s, dt, c, d, v) in x.items():
+        for i, (source, (a, s, dt, c, d, v)) in enumerate(x.items()):
+            # C[:, 2:3] is the land mask, which we'll split from the latitude and longitude
+            lm = c[:, 2:3]
             # Pad the image tensors to the next multiple of the patch size
-            c = pad_to_next_multiple_of(c, self.patch_size, value=float("nan"))
+            c = pad_to_next_multiple_of(normed_coords[i], self.patch_size, value=float("nan"))
+            lm = pad_to_next_multiple_of(lm, self.patch_size, value=float("nan"))
             v = pad_to_next_multiple_of(v, self.patch_size, value=float("nan"))
             d = pad_to_next_multiple_of(d, self.patch_size, value=float("nan"))
-            # C[:, 2:3] is the land mask, which we'll split from the latitude and longitude
-            c, lm = c[:, :2], c[:, 2:3]
             # Don't modify the tensors in-place, as we need to keep the NaN values
             # for the loss computation
             dt = torch.nan_to_num(dt, nan=-1.0)
             v = torch.nan_to_num(v, nan=0)
-            # Where the coords are NaN, set them to 90 for the latitude and 0
-            # for the longitude (90 being an extreme value).
-            # Also, divide the latitude by 90 and the longitude by 180 to normalize them
-            # to [-1, 1].
-            c = torch.stack(
-                (torch.nan_to_num(c[:, 0], nan=90) / 90, torch.nan_to_num(c[:, 1], nan=0) / 180),
-                dim=1,
-            )
+            # Where the coords are NaN, set them to -1, as the normalization set the non-nan values
+            # to [0, 1]
+            c = torch.nan_to_num(c, nan=-1)
             # Where the land mask is NaN, set it to 0
             lm = torch.nan_to_num(lm, nan=0)
             # For the distance tensor, fill the nan values with +inf

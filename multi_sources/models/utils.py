@@ -1,5 +1,6 @@
 """Implements small utility functions for models."""
 
+import torch
 import torch.nn.functional as F
 
 
@@ -33,19 +34,26 @@ def pad_to_next_multiple_of(tensor, multiple_of, **kwargs):
 def normalize_coords_across_sources(coords):
     """Normalizes the coordinates across multiple sources, by setting
     their min to 0 and their max to 1.
+    The coordinates are assumed to be in the range [-180, 180] for
+    longitudes and [-90, 90] for latitudes. NaNs are ignored in the
+    computation of the min and max and are left so in the output.
     Args:
         coords (list of torch.Tensor): list of tensors of shape (B, 2, H, W).
     Returns:
         list of torch.Tensor: the normalized coordinates.
     """
     shapes = [c.shape for c in coords]
-    coords = [c.view(c.shape[0], 2, -1) for c in coords]
-    # Compute the min and max values of the latitudes and longitudes.
-    min_vals = [c.min(dim=-1, keepdim=True)[0] for c in coords]
-    max_vals = [c.max(dim=-1, keepdim=True)[0] for c in coords]
-    # Normalize the latitudes and longitudes.
-    coords = [(c - min_vals[i]) / (max_vals[i] - min_vals[i])
-              for i, c in enumerate(coords)]
+    flat_coords = [c.view(c.shape[0], 2, -1) for c in coords]
+    # Compute the min and max of each source. The coordinates may contain NaNs.
+    # to avoid them, we'll replace them with +190 in the min computation (which
+    # is higher than any valid latitude or longitude), and with -190 in the max
+    # computation.
+    min_vals = [torch.nan_to_num(c, 190.).min(dim=-1)[0] for c in flat_coords]  # list of (B, 2)
+    max_vals = [torch.nan_to_num(c, -190.).max(dim=-1)[0] for c in flat_coords]
+    cross_source_min = torch.stack(min_vals, dim=0).min(dim=0)[0].view(-1, 2, 1, 1)
+    cross_source_max = torch.stack(max_vals, dim=0).max(dim=0)[0].view(-1, 2, 1, 1)
+    # Normalize the latitudes and longitudes. NaNs remain NaNs.
+    coords = [(c - cross_source_min) / (cross_source_max - cross_source_min) for c in coords]
     # Reshape the coordinates.
     coords = [c.view(*s) for c, s in zip(coords, shapes)]
     return coords
