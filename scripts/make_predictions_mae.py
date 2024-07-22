@@ -32,7 +32,8 @@ def main(cfg: DictConfig):
 
     # Create the validation dataset and dataloader
     val_dataset = hydra.utils.instantiate(exp_cfg["dataset"]["val"], _convert_="partial")
-    val_dataloader = DataLoader(val_dataset, **exp_cfg["dataloader"])
+    exp_cfg['dataloader'].update(cfg['dataloader'])
+    val_dataloader = DataLoader(val_dataset, **exp_cfg['dataloader'])
     print("Validation dataset size:", len(val_dataset))
 
     # Create the results directory
