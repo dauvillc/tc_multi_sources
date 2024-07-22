@@ -20,7 +20,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import hydra
 import pandas as pd
-from tqdm import tqdm
+from tqdm import trange, tqdm
 from omegaconf import DictConfig, OmegaConf
 from concurrent.futures import ProcessPoolExecutor
 
@@ -110,10 +110,28 @@ def main(cfg: DictConfig):
     info_df = pd.read_csv(info_filepath)
     # Keep only the first n_displayed_batches batches
     info_df = info_df[info_df.batch_idx < n_displayed_batches]
-    # Process the batch sequentially
-    for batch in range(n_displayed_batches):
-        batch_df = info_df[info_df.batch_idx == batch]
-        process_batch(batch, batch_df, results_dir, targets_dir, outputs_dir, source_names)
+    if num_workers < 2:
+        # Process the batch sequentially
+        for batch in trange(n_displayed_batches):
+            batch_df = info_df[info_df.batch_idx == batch]
+            process_batch(batch, batch_df, results_dir, targets_dir, outputs_dir, source_names)
+    else:
+        # Process the batch in parallel
+        with ProcessPoolExecutor(max_workers=num_workers) as executor:
+            futures = [
+                executor.submit(
+                    process_batch,
+                    batch,
+                    info_df[info_df.batch_idx == batch],
+                    results_dir,
+                    targets_dir,
+                    outputs_dir,
+                    source_names,
+                )
+                for batch in range(n_displayed_batches)
+            ]
+            for future in tqdm(futures, total=n_displayed_batches):
+                future.result()
 
 
 if __name__ == "__main__":
