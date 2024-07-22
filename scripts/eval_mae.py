@@ -25,7 +25,9 @@ from omegaconf import DictConfig, OmegaConf
 from concurrent.futures import ProcessPoolExecutor
 
 
-def process_batch(batch_idx, batch_df, results_dir, targets_dir, outputs_dir, source_names):
+def process_batch(
+    batch_idx, batch_df, results_dir, targets_dir, outputs_dir, attention_maps_dir, source_names
+):
     """Processes a single batch, by displaying the inputs, target and prediction
     on a single figure for each element in the batch."""
     # Load the batch for every source
@@ -79,6 +81,24 @@ def process_batch(batch_idx, batch_df, results_dir, targets_dir, outputs_dir, so
         plt.savefig(results_dir / f"{batch_idx}_{i}.png")
         plt.close()
 
+    # If results_dir/attention_maps exists, it contains the attention maps for every batch
+    # as <batch_idx>.npy, of shape (B, head, n_tokens, n_tokens)
+    if attention_maps_dir.exists():
+        attention_maps = np.load(attention_maps_dir / f"{batch_idx}.npy")
+        # Display the attention maps for the first element in the batch,
+        # with at most 4 columns
+        n_heads = attention_maps.shape[1]
+        n_cols = min(n_heads, 4)
+        n_rows = (n_heads + n_cols - 1) // n_cols
+        fig, axes = plt.subplots(n_rows, n_cols, figsize=(n_cols * 5, n_rows * 5), squeeze=False)
+        for i in range(n_heads):
+            ax = axes[i // n_cols, i % n_cols]
+            ax.imshow(attention_maps[0, i], cmap="viridis")
+            ax.set_title(f"Head {i}")
+            ax.axis("off")
+        plt.tight_layout()
+        plt.savefig(results_dir / f"{batch_idx}_attention_maps.png")
+
 
 @hydra.main(version_base=None, config_path="../conf", config_name="eval")
 def main(cfg: DictConfig):
@@ -95,6 +115,7 @@ def main(cfg: DictConfig):
         )
     targets_dir = root_dir / "targets"
     outputs_dir = root_dir / "outputs"
+    attention_maps_dir = root_dir / "attention_maps"
     info_filepath = root_dir / "info.csv"
     # Fetch the list of source names
     source_names = [source_name.name for source_name in targets_dir.iterdir()]
@@ -114,7 +135,15 @@ def main(cfg: DictConfig):
         # Process the batch sequentially
         for batch in trange(n_displayed_batches):
             batch_df = info_df[info_df.batch_idx == batch]
-            process_batch(batch, batch_df, results_dir, targets_dir, outputs_dir, source_names)
+            process_batch(
+                batch,
+                batch_df,
+                results_dir,
+                targets_dir,
+                outputs_dir,
+                attention_maps_dir,
+                source_names,
+            )
     else:
         # Process the batch in parallel
         with ProcessPoolExecutor(max_workers=num_workers) as executor:
@@ -126,6 +155,7 @@ def main(cfg: DictConfig):
                     results_dir,
                     targets_dir,
                     outputs_dir,
+                    attention_maps_dir,
                     source_names,
                 )
                 for batch in range(n_displayed_batches)

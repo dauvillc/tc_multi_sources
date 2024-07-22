@@ -6,6 +6,7 @@ from pathlib import Path
 from hydra.utils import get_class, instantiate
 from omegaconf import DictConfig, OmegaConf
 from multi_sources.data_processing.writer_mae import MultiSourceWriter
+from multi_sources.models.recorder import AttentionRecorder
 
 
 @hydra.main(version_base=None, config_path="../conf", config_name="make_predictions")
@@ -34,6 +35,12 @@ def main(cfg: DictConfig):
     val_dataloader = DataLoader(val_dataset, **exp_cfg["dataloader"])
     print("Validation dataset size:", len(val_dataset))
 
+    # Create the results directory
+    run_results_dir = Path(cfg["paths"]["predictions"]) / run_id
+    # Remove run_results_dir / info.csv if it exists
+    if (run_results_dir / "info.csv").exists():
+        (run_results_dir / "info.csv").unlink()
+
     # Instantiate the model and the lightning module
     encoder = instantiate(exp_cfg["model"]["encoder"])
     decoder = instantiate(exp_cfg["model"]["decoder"])
@@ -42,11 +49,11 @@ def main(cfg: DictConfig):
         checkpoint_path, encoder=encoder, decoder=decoder, cfg=exp_cfg
     )
 
-    # Create the results directory
-    run_results_dir = Path(cfg["paths"]["predictions"]) / run_id
-    # Remove run_results_dir / info.csv if it exists
-    if (run_results_dir / "info.csv").exists():
-        (run_results_dir / "info.csv").unlink()
+    # If we are saving the attention maps, wrap the decoder with the AttentionRecorder class
+    if cfg['save_attention_maps']:
+        maps_dir = run_results_dir / "attention_maps"
+        maps_dir.mkdir(parents=True, exist_ok=True)
+        module.decoder = AttentionRecorder(module.decoder, maps_dir)
 
     # Make predictions using the MultiSourceWriter class, which is a custom implementation of
     # BasePredictionWriter.

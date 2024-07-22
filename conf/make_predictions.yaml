@@ -7,4 +7,5 @@ trainer:
   accelerator: gpu
   devices: 1
 
+save_attention_maps: True
 run_id: ???
