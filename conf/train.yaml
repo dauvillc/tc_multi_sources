@@ -7,7 +7,7 @@ defaults:
   - lightning_module: mae
   - model: general_backbone
   - trainer: 1xv100-32g
-  - lr_scheduler: cosine_warmup_300epochs
+  - lr_scheduler: cosine_warmup_150epochs
   - _self_
 
 seed: 42

@@ -1,22 +1,22 @@
 # @package _global_
 defaults:
-  - override /paths: jz
+  - override /paths: local
   - override /lightning_module: mae
-  - override /trainer: 4xv100
+  - override /trainer: 1xv100-32g
 
 wandb:
-  name: amsr2_vit
+  name: amsr2
 
 dataloader:
   batch_size: 16
 
 lightning_module:
-  coords_dim: 1024
-  pixels_dim: 1024
+  coords_dim: 512
+  pixels_dim: 512
 
 model:
   encoder:
-    n_blocks: 6
+    n_blocks: 12
     layers:
       self_attention:
         layer_class:
@@ -30,13 +30,13 @@ model:
           path: multi_sources.models.small_layers.FeedForward
         inner_dim: 1024
   decoder:
-    n_blocks: 6
+    n_blocks: 4
     layers:
       self_attention:
         layer_class:
           _target_: hydra.utils.get_class
           path: multi_sources.models.attention.PixelsAttention
-        inner_dim: 1024
+        inner_dim: 512
         num_heads: 8
       ff2:
         layer_class:

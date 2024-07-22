@@ -15,8 +15,12 @@ class SelfAttention(nn.Module):
             raise ValueError(
                 f"Inner dimension {inner_dim} must be divisible by the number of heads {num_heads}"
             )
-        self.norm_key = nn.LayerNorm(key_dim)
+        self.qk_norm = nn.LayerNorm(key_dim)
         self.norm_value = nn.LayerNorm(value_dim)
+        # To avoid the keys and queries becoming too large, we normalize them after
+        # the linear transformation.
+        self.key_norm = nn.LayerNorm(inner_dim)
+        self.query_norm = nn.LayerNorm(inner_dim)
 
         self.to_qk = nn.Linear(key_dim, inner_dim * 2, bias=False)
         self.to_v = nn.Linear(value_dim, inner_dim, bias=False)
@@ -26,11 +30,12 @@ class SelfAttention(nn.Module):
         self.output_proj = nn.Sequential(nn.Linear(inner_dim, value_dim), nn.Dropout(dropout))
 
     def forward(self, keys, values):
-        keys = self.norm_key(keys)
+        keys = self.qk_norm(keys)
         values = self.norm_value(values)
 
-        qk = self.to_qk(keys).chunk(2, dim=-1)
-        q, k = map(lambda x: rearrange(x, "b n (h d) -> b h n d", h=self.num_heads), qk)
+        q, k = self.to_qk(keys).chunk(2, dim=-1)
+        q, k = self.query_norm(q), self.key_norm(k)
+        q, k = map(lambda x: rearrange(x, "b n (h d) -> b h n d", h=self.num_heads), (q, k))
 
         v = self.to_v(values)
         v = rearrange(v, "b n (h d) -> b h n d", h=self.num_heads)

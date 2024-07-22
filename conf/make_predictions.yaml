@@ -1,11 +1,6 @@
 # Config for scripts/make_predictions.py
 defaults:
-  - paths: local
-  - sources: test
-  - dataset: full_set
-  - dataloader: local
-  - lightning_module: reconstruction
-  - lr_scheduler: test
+  - paths: jz
   - _self_
 
 trainer:

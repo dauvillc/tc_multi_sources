@@ -4,6 +4,7 @@ the masked tokens."""
 
 import lightning.pytorch as pl
 import torch
+import torch.nn as nn
 from multi_sources.utils.scheduler import CosineAnnealingWarmupRestarts
 from multi_sources.utils.image_processing import img_to_patches, pad_to_next_multiple_of, pair
 from multi_sources.utils.image_processing import patches_to_img
@@ -21,31 +22,67 @@ class MultisourceMAE(pl.LightningModule):
     - C is a tensor of shape (3, H, W) containing the latitude, longitude, and land-sea mask.
     - D is a tensor of shape (H, W) containing the distance to the center of the storm.
     - V is a tensor of shape (n_variables, H, W) containing the variables for the source.
-    The structure gives to its backbone the inputs as a map {source_name: (S, DT, C, V, M)},
-    where C and V have been tokenized to (batch, n_tokens, d) and:
-    - M is a tensor of shape (batch, n_tokens, 1) containing 0 if the token is masked (or was
-      missing) and 1 otherwise.
+    The structure uses an encoder and a decoder. The encoder receives the tokens as
+    a list of tuples (S, DT, C, LM, V) and outputs a tensor of shape (b, n_tokens, d_model).
+    Masked tokens are not included in the encoder's input nor output.
+    The decoder receives the encoder's output as well as the masked tokens (whose value has been
+    set to a learnable [MASK] token) and outputs a tensor of shape (b, n_tokens, n_variables).
     """
 
-    def __init__(self, model, cfg, masking_ratio, patch_size, lr_scheduler_kwargs, metrics={}):
+    def __init__(
+        self,
+        encoder,
+        decoder,
+        cfg,
+        masking_ratio,
+        patch_size,
+        pixels_dim,
+        coords_dim,
+        lr_scheduler_kwargs,
+        metrics={},
+    ):
         """
         Args:
-            model (torch.nn.Module): The model to wrap.
+            encoder (nn.Module): The encoder model.
+            decoder (nn.Module): The decoder model.
             cfg (dict): The whole configuration of the experiment. This will be saved
                 within the checkpoints and can be used to rebuild the exact experiment.
             masking_ratio (float): The ratio of tokens to mask.
             patch_size (tuple of int): The size of the patches to split the images into.
+            pixels_dim (int): The dimension of the pixel embeddings.
+            coords_dim (int): The dimension of the coordinate embeddings.
             lr_scheduler_kwargs (dict): The arguments to pass to the learning rate scheduler.
             metrics (dict of str: callable): The metrics to compute during training and validation.
                 A metric should have the signature metric(y_pred, y_true) -> torch.Tensor.
         """
         super().__init__()
-        self.model = model
+        self.encoder = encoder
+        self.decoder = decoder
         self.masking_ratio = masking_ratio
         self.patch_size = pair(patch_size)
+        self.pixels_dim = pixels_dim
+        self.coords_dim = coords_dim
         self.lr_scheduler_kwargs = lr_scheduler_kwargs
         self.metrics = metrics
-        self.save_hyperparameters(ignore="model")
+        self.save_hyperparameters(ignore=["encoder", "decoder", "metrics"])
+
+        # Linear embeddings for the patches (c, lm, v and m)
+        in_dim = self.patch_size[0] * self.patch_size[1]
+        self.coord_embedding = nn.Linear(in_dim * 2, coords_dim)  # latitude and longitude
+        self.landmask_embedding = nn.Linear(in_dim, pixels_dim)
+        self.value_embedding = nn.Linear(in_dim, pixels_dim)
+        self.mask_embedding = nn.Linear(in_dim, pixels_dim)
+        # Layernorm layers for the embeddings
+        self.coord_layernorm = nn.LayerNorm(coords_dim)
+        self.landmask_layernorm = nn.LayerNorm(pixels_dim)
+        self.value_layernorm = nn.LayerNorm(pixels_dim)
+        self.mask_layernorm = nn.LayerNorm(pixels_dim)
+
+        # Projection of the predicted values to the original space
+        self.output_proj = nn.Linear(self.pixels_dim, in_dim)
+
+        # learnable [MASK] token
+        self.mask_token = nn.Parameter(torch.randn(1, 1, self.pixels_dim))
 
     def preproc_input(self, x):
         # x is a map {source_name: A, S, DT, C, D, V}
@@ -66,14 +103,23 @@ class MultisourceMAE(pl.LightningModule):
             v = torch.nan_to_num(v, nan=0)
             # Where the coords are NaN, set them to 90 for the latitude and 0
             # for the longitude (90 being an extreme value).
+            # Also, divide the latitude by 90 and the longitude by 180 to normalize them
+            # to [-1, 1].
             c = torch.stack(
-                (torch.nan_to_num(c[:, 0], nan=90), torch.nan_to_num(c[:, 1], nan=0)), dim=1
+                (torch.nan_to_num(c[:, 0], nan=90) / 90, torch.nan_to_num(c[:, 1], nan=0) / 180),
+                dim=1,
             )
+            # Where the land mask is NaN, set it to 0
+            lm = torch.nan_to_num(lm, nan=0)
             # For the distance tensor, fill the nan values with +inf
             d = torch.nan_to_num(d, nan=float("inf"))
             # Deduce the availability tensor from the distance tensor
             m = d != float("inf")
             input_[source] = (s, dt, c, d, lm, v, m)
+            # Check for NaN values in the tensors
+            for k, tensor in enumerate(input_[source]):
+                if torch.isnan(tensor).any():
+                    raise ValueError(f"NaN values found in source {source} tensor {k}")
         return input_
 
     def tokenize(self, x):
@@ -91,95 +137,136 @@ class MultisourceMAE(pl.LightningModule):
             output[source] = (s, dt, c, d, lm, v, m)
         return output
 
-    def mask(self, x):
-        """Masks a portion of the tokens in the input.
-        Returns a dict {source_name: s, dt, c, d, lm, v, m}
-        where m is a tensor of shape (b, n_tokens, 1) whose value
-        is 0 if the token is masked or missing, and 1 otherwise.
-        """
-        masked_sources, masked_and_avail = {}, {}
+    def embed(self, x):
+        """Embeds the input sources."""
+        output = {}
         for source, (s, dt, c, d, lm, v, m) in x.items():
-            # Randomly mask a portion of the tokens in v
-            mask = (torch.rand(v.shape[1]) < self.masking_ratio).to(v.device)
-            masked_v = v.clone()
-            masked_v[:, mask] = 0
-            # At this point, m is as mask whose value is 0 if the token is missing
-            # and 1 otherwise. We'll make it so that it's 0 if the token is masked
-            # or missing, and 1 otherwise (i.e. for the model a missing token is
-            # the same as a masked token).
-            mask = mask.view(1, -1, 1).expand(m.shape)
-            avail_for_model = (m & (~mask)).float()
-            masked_sources[source] = (s, dt, c, d, lm, masked_v, avail_for_model)
-            # For the loss function, we'll need a mask where the value is 1 if and only
-            # if the token is masked and it was available.
-            masked_and_avail[source] = m & mask
-        return masked_sources, masked_and_avail
+            c = self.coord_layernorm(self.coord_embedding(c))
+            lm = self.landmask_layernorm(self.landmask_embedding(lm))
+            v = self.value_layernorm(self.value_embedding(v))
+            m = self.mask_layernorm(self.mask_embedding(m.float()))
+            output[source] = (s, dt, c, d, lm, v, m)
+        return output
+
+    def to_encoder_input(self, x):
+        """Masks a portion of the tokens in the input sources.
+        Args:
+            x (dict of str to tuple of tensors): The input sources, tokenized.
+        Returns:
+            encoder_x (list of tuple of tensors): Fraction of the input tokens,
+                which can be fed to the encoder.
+            token_perms (dict of str to tensor): The permutation of the full sequence used
+                to shuffle the tokens.
+            n_tokens (dict of str to int): The number of tokens in the original input.
+            masked_tokens_indices (dict of str to tensor): The indices of the masked tokens, in
+                a random order.
+        """
+        encoder_x = []
+        token_perms, n_tokens_map = {}, {}
+        masked_tokens_indices = {}
+        for source, (s, dt, c, d, lm, v, m) in x.items():
+            # Compute the number of tokens to keep based on the size of the input
+            # and the masking ratio
+            n_tokens = c.shape[1]
+            n_masked = int(n_tokens * self.masking_ratio)
+            # Randomly select the tokens to keep using the method from
+            # "Masked Autoencoders Are Scalable Vision Learners" He et al. 2021
+            # Shuffle the tokens and keep the first n_masked.
+            perm = torch.randperm(n_tokens)
+            c = c[:, perm][:, :-n_masked]
+            lm = lm[:, perm][:, :-n_masked]
+            v = v[:, perm][:, :-n_masked]
+            m = m[:, perm][:, :-n_masked]
+            # Save the permutation and the original number of tokens for later
+            # reconstruction of the original shape
+            token_perms[source] = perm
+            n_tokens_map[source] = n_tokens
+            encoder_x.append((s, dt, c, lm, v, m))
+            # Deduce the indices of the masked tokens
+            masked_tokens_indices[source] = perm[-n_masked:]
+
+        return encoder_x, token_perms, n_tokens_map, masked_tokens_indices
+
+    def to_decoder_input(self, encoder_y, x, token_perms, n_tokens):
+        """Concatenates the [MASK] token to the encoder output as many times as needed
+        to obtain the original number of tokens.
+        Args:
+            encoder_y (list of tensors): The output of the encoder.
+            x (list of tuple of tensors): The input sources, tokenized.
+            token_perms (dict of str to tensor): The permutation of the full sequence used
+                to shuffle the tokens.
+            n_tokens (dict of str to int): The number of tokens in the original input.
+        """
+        decoder_x = []
+        for y, (source, (s, dt, c, d, lm, _, m)) in zip(encoder_y, x.items()):
+            # Get the permutation used to shuffle the tokens in the encoder input
+            perm = token_perms[source]
+            # Compute the number of tokens to add to retrieve the original shape
+            n_tokens_to_add = n_tokens[source] - y.shape[1]
+            # Concatenate the [MASK] token to the encoder output
+            mask_tokens = self.mask_token.expand(c.shape[0], n_tokens_to_add, -1)
+            y = torch.cat((y, mask_tokens), dim=1)  # (b, n_tokens, d_model)
+            # Unshuffle the tokens
+            reverse_perm = torch.argsort(perm)
+            y = y[:, reverse_perm]
+            # Since the input to the decoder is not the initial pixels, but the tokens
+            # processed by the encoder, the availability tensor is not needed.
+            m = torch.zeros_like(m)
+            decoder_x.append((s, dt, c, lm, y, m.float()))
+        return decoder_x
 
     def forward(self, x):
-        # Right now, the model receives the inputs as a map {source_name: (s, dt, c, d, lm, v, m)}
-        # But the model should receive a list of tuples (s, dt, c, lm, v, m)
-        input = [(s, dt, c, lm, v, m) for s, dt, c, _, lm, v, m in x.values()]
-        pred = self.model(input)
-        # Recreate the map {source_name: pred}
-        return {source: p for source, p in zip(x.keys(), pred)}
+        """Computes the forward pass of the model.
+        Returns:
+            pred (dict of str to tensor): The predicted values.
+            masked_tokens_indices (dict of str to tensor): The indices of the masked tokens, in
+                a random order.
+        """
+        x = self.embed(x)
+        encoder_x, token_perms, n_tokens, masked_tokens_indices = self.to_encoder_input(x)
+        encoder_y = self.encoder(encoder_x)
+        decoder_x = self.to_decoder_input(encoder_y, x, token_perms, n_tokens)
+        pred = self.decoder(decoder_x)
+        # Project the predicted values to the original space
+        pred = [self.output_proj(p) for p in pred]
+        # Rebuild a map {source_name: pred} from the list of predictions
+        pred = {source: v for source, v in zip(x.keys(), pred)}
+        return pred, masked_tokens_indices
 
     def step(self, batch, batch_idx, train_or_val):
         """Defines a training or validation step for the model."""
         batch = self.preproc_input(batch)
-        # Save the shapes after padding
-        padded_shapes = {source: x[-1].shape[-2:] for source, x in batch.items()}
-        # Tokenize, mask and predict
         x = self.tokenize(batch)
-        x, loss_masks = self.mask(x)
-        pred = self(x)
-        # Convert the predictions back to the original shape
-        for source, v in pred.items():
-            pH, pW = padded_shapes[source]
-            pred[source] = patches_to_img(v, pH, pW, self.patch_size)
-            # Do the same on the loss masks
-            loss_masks[source] = patches_to_img(loss_masks[source], pH, pW, self.patch_size)
+        pred, masked_tokens_indices = self.forward(x)
         # Compute and log the loss
-        loss = self.loss_fn(pred, batch, loss_masks)
+        loss = self.loss_fn(pred, x, masked_tokens_indices)
+
         self.log(f"{train_or_val}_loss", loss, prog_bar=True, on_epoch=True)
         # Compute metrics
         for metric_name, metric_fn in self.metrics.items():
-            metric_value = metric_fn(pred, batch)
+            metric_value = metric_fn(pred, x)
             self.log(f"{train_or_val}_{metric_name}", metric_value)
         return loss
 
-    def loss_fn(self, y_pred, y_true, loss_masks):
+    def loss_fn(self, y_pred, y_true, masked_token_indices):
         """Computes the MSE between the predicted and true values."""
         losses = []
         for source, (_, _, _, _, _, v, m) in y_true.items():
             pred = y_pred[source]
             # Compute the loss only for the masked tokens
-            loss = (pred - v) ** 2
-            loss = loss[loss_masks[source]]
+            pred = pred[:, masked_token_indices[source]]
+            v = v[:, masked_token_indices[source]]
+            loss = nn.functional.mse_loss(pred, v, reduction="none")
+            # Mask the loss where the tokens are not available
+            m = m[:, masked_token_indices[source]]
+            loss = loss * m
             losses.append(loss.mean())
         return torch.stack(losses).mean()
 
     def training_step(self, batch, batch_idx):
-        """Defines a training step for the model.
-
-        Args:
-            batch (dict): The input batch.
-            batch_idx (int): The index of the batch.
-
-        Returns:
-            torch.Tensor: The loss of the model.
-        """
         return self.step(batch, batch_idx, "train")
 
     def validation_step(self, batch, batch_idx):
-        """Defines a validation step for the model.
-
-        Args:
-            batch (dict): The input batch.
-            batch_idx (int): The index of the batch.
-
-        Returns:
-            torch.Tensor: The loss of the model.
-        """
         return self.step(batch, batch_idx, "val")
 
     def predict_step(self, batch, batch_idx):
@@ -189,9 +276,21 @@ class MultisourceMAE(pl.LightningModule):
             pred (dict of str to tensor): The predicted values.
         """
         batch = self.preproc_input(batch)
-        input_sources, masked_sources = self.mask(batch)
-        pred = self(input_sources, masked_sources)
-        return batch, pred
+        # Save the shapes of the padded tensors to reconstruct the images
+        padded_shapes = {source: x[2].shape[-2:] for source, x in batch.items()}
+        x = self.tokenize(batch)
+        pred, masked_tokens_indices = self.forward(x)
+        # For the tokens that were NOT masked, set them to the true values
+        output = {}
+        for source, (_, _, _, _, _, v, _) in x.items():
+            output[source] = v.clone()
+            pred_masked = pred[source][:, masked_tokens_indices[source]]
+            output[source][:, masked_tokens_indices[source]] = pred_masked
+        # Convert the predictions back to images
+        for source, v in output.items():
+            pH, pW = padded_shapes[source]
+            output[source] = patches_to_img(v, pH, pW, self.patch_size)
+        return batch, output
 
     def configure_optimizers(self):
         """Configures the optimizer for the model.

@@ -1,4 +1,6 @@
 _target_: multi_sources.structure.mae.MultisourceMAE
 patch_size: 16
+pixels_dim: 256
+coords_dim: 512
 masking_ratio: 0.1
 lr_scheduler_kwargs: ${lr_scheduler}
