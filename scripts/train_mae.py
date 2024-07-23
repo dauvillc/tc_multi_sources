@@ -36,7 +36,7 @@ def main(cfg: DictConfig):
     pl_module = instantiate(cfg['lightning_module'], encoder, decoder, cfg)
 
     # Create the logger
-    logger = WandbLogger(dir=cfg["paths"]["wandb_logs"], log_model="all")
+    logger = WandbLogger(dir=cfg["paths"]["wandb_logs"], log_model=True)
     # Model checkpoint
     checkpoint_callback = ModelCheckpoint(
         monitor="val_loss",
