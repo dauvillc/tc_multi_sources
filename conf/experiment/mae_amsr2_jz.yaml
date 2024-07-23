@@ -1,8 +1,10 @@
 # @package _global_
 defaults:
   - override /paths: jz
+  - override /sources: test
   - override /lightning_module: mae
-  - override /trainer: 4xv100
+  - override /trainer: 4gpus
+  - override /lr_scheduler: cosine_warmup_300epochs.yaml
 
 wandb:
   name: amsr2_vit
@@ -11,17 +13,18 @@ dataloader:
   batch_size: 16
 
 lightning_module:
+  patch_size: 16
   coords_dim: 1024
   pixels_dim: 1024
 
 model:
   encoder:
-    n_blocks: 6
+    n_blocks: 2
     layers:
       self_attention:
         layer_class:
           _target_: hydra.utils.get_class
-          path: multi_sources.models.attention.PixelsAttention
+          path: multi_sources.models.attention.PixelsCoordinatesAttention
         inner_dim: 1024
         num_heads: 8
       ff2:
@@ -30,12 +33,12 @@ model:
           path: multi_sources.models.small_layers.FeedForward
         inner_dim: 1024
   decoder:
-    n_blocks: 6
+    n_blocks: 8
     layers:
       self_attention:
         layer_class:
           _target_: hydra.utils.get_class
-          path: multi_sources.models.attention.PixelsAttention
+          path: multi_sources.models.attention.PixelsCoordinatesAttention
         inner_dim: 1024
         num_heads: 8
       ff2:
