@@ -11,12 +11,28 @@ class AttentionMap(nn.Module):
     Using this intermediary Module allows to retrieve the attention maps
     with register_forward_hook."""
 
-    def __init__(self, key_dim, query_dim):
+    def __init__(self, dim_head, relative_pos=False, rel_pos_dim_head=None):
         super().__init__()
-        self.scale = key_dim**-0.5
+        self.scale = dim_head ** -0.5
+        # Add LayerNorms to the keys and queries to avoid the dot products
+        # exploding.
+        self.key_norm = nn.LayerNorm(dim_head)
+        self.query_norm = nn.LayerNorm(dim_head)
 
-    def forward(self, keys, queries):
+        self.relative_pos = relative_pos
+        if self.relative_pos:
+            self.rel_pos_scale = rel_pos_dim_head ** -0.5
+            self.pos_key_norm = nn.LayerNorm(rel_pos_dim_head)
+            self.pos_query_norm = nn.LayerNorm(rel_pos_dim_head)
+
+    def forward(self, keys, queries, pos_key=None, pos_query=None):
+        keys, queries = self.key_norm(keys), self.query_norm(queries)
         dots = torch.matmul(queries, keys.transpose(-2, -1)) * self.scale
+        # Optional relative positional encodings
+        if self.relative_pos:
+            pos_key, pos_query = self.pos_key_norm(pos_key), self.pos_query_norm(pos_query)
+            rel_pos_dots = torch.matmul(pos_query, pos_key.transpose(-2, -1)) * self.rel_pos_scale
+            dots = dots + rel_pos_dots
         return F.softmax(dots, dim=-1)
 
 
@@ -31,16 +47,13 @@ class SelfAttention(nn.Module):
             )
         self.qk_norm = nn.LayerNorm(key_dim)
         self.norm_value = nn.LayerNorm(value_dim)
-        # To avoid the keys and queries becoming too large, we normalize them after
-        # the linear transformation.
-        self.key_norm = nn.LayerNorm(inner_dim)
-        self.query_norm = nn.LayerNorm(inner_dim)
 
         self.to_qk = nn.Linear(key_dim, inner_dim * 2, bias=False)
         self.to_v = nn.Linear(value_dim, inner_dim, bias=False)
         self.num_heads = num_heads
 
-        self.attention_map = AttentionMap(inner_dim, inner_dim)
+        dim_head = inner_dim // num_heads
+        self.attention_map = AttentionMap(dim_head)
 
         self.output_proj = nn.Sequential(nn.Linear(inner_dim, value_dim), nn.Dropout(dropout))
 
@@ -49,7 +62,6 @@ class SelfAttention(nn.Module):
         values = self.norm_value(values)
 
         q, k = self.to_qk(keys).chunk(2, dim=-1)
-        q, k = self.query_norm(q), self.key_norm(k)
         q, k = map(lambda x: rearrange(x, "b n (h d) -> b h n d", h=self.num_heads), (q, k))
 
         v = self.to_v(values)
@@ -84,3 +96,44 @@ class PixelsAttention(nn.Module):
 
     def forward(self, pixel_values, coords):
         return self.attention(pixel_values, pixel_values)
+
+
+class PixelsCoordinatesAttention(nn.Module):
+    """Self-attention block that uses the pixel values as well as the
+    coordinates to compute the attention weights,
+    as Softmax(QpKp^T + QcKc^T)."""
+
+    def __init__(self, pixel_dim, coords_dim, inner_dim, num_heads=8, dropout=0.0):
+        super().__init__()
+        assert inner_dim % num_heads == 0
+        self.num_heads = num_heads
+
+        self.pixel_norm = nn.LayerNorm(pixel_dim)
+        self.coords_norm = nn.LayerNorm(coords_dim)
+
+        self.pixels_to_qkv = nn.Linear(pixel_dim, inner_dim * 3, bias=False)
+        self.coords_to_qk = nn.Linear(coords_dim, inner_dim * 2, bias=False)
+
+        dim_head = inner_dim // num_heads
+        self.attention_map = AttentionMap(dim_head, relative_pos=True, rel_pos_dim_head=dim_head)
+        self.output_proj = nn.Sequential(nn.Linear(inner_dim, pixel_dim), nn.Dropout(dropout))
+
+    def forward(self, pixels, coords):
+        pixels = self.pixel_norm(pixels)
+        coords = self.coords_norm(coords)
+
+        # Project the pixel values and coordinates to the query, key and value spaces.
+        # The values come from the pixels.
+        qkv_pixels = self.pixels_to_qkv(pixels).chunk(3, dim=-1)
+        qk_coords = self.coords_to_qk(coords).chunk(2, dim=-1)
+        qp, kp, v = map(
+            lambda x: rearrange(x, "b n (h d) -> b h n d", h=self.num_heads), qkv_pixels
+        )
+        qc, kc = map(lambda x: rearrange(x, "b n (h d) -> b h n d", h=self.num_heads), qk_coords)
+
+        # Compute the attention map using two sets of keys and queries, one from the pixels
+        # and one from the coordinates.
+        attn = self.attention_map(kp, qp, kc, qc)
+        out = torch.matmul(attn, v)
+        out = rearrange(out, "b h n d -> b n (h d)")
+        return self.output_proj(out)
