@@ -47,7 +47,10 @@ def process_batch(
         for source_name in source_names
     }
     n_sources = len(source_names)
-    n_elements = len(targets[source_names[0]])
+    # The number of elements is the batch size that was used to write the predictions,
+    # but it can be reduced in the config via the 'n_samples_per_batch' parameter
+    batch_size = targets[source_names[0]].shape[0]
+    n_elements = min(batch_size, cfg["n_samples_per_batch"])
     # For each element in the batch, display it in an individual figure
     # such that:
     # - There are two columns, one for the prediction (left) and one for the target (right)
