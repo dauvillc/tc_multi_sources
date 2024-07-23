@@ -3,6 +3,7 @@ defaults:
   - override /paths: local
   - override /lightning_module: mae
   - override /trainer: 1gpu
+  - override /sources: amsr2_5freqs
 
 wandb:
   name: amsr2

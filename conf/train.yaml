@@ -1,7 +1,7 @@
 defaults:
   - paths: local
   - wandb: default
-  - sources: test
+  - sources: amsr2_5freqs
   - dataset: full_set
   - dataloader: local
   - lightning_module: mae

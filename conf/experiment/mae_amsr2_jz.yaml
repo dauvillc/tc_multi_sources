@@ -1,7 +1,7 @@
 # @package _global_
 defaults:
   - override /paths: jz
-  - override /sources: test
+  - override /sources: amsr2_5freqs
   - override /lightning_module: mae
   - override /trainer: 4gpus
   - override /lr_scheduler: cosine_warmup_300epochs.yaml
