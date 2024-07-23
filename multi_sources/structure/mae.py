@@ -291,7 +291,7 @@ class MultisourceMAE(pl.LightningModule):
             otp = v.clone()
             B, L, D = pred[source].shape
             masked_indices = masked_tokens_indices[source].unsqueeze(-1).expand(-1, -1, D)
-            otp.scatter_(1, masked_indices, pred[source])
+            otp.scatter_(1, masked_indices, pred[source].gather(1, masked_indices))
             output[source] = otp
         # Convert the predictions back to images
         for source, v in output.items():
