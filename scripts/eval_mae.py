@@ -26,7 +26,14 @@ from concurrent.futures import ProcessPoolExecutor
 
 
 def process_batch(
-    batch_idx, batch_df, results_dir, targets_dir, outputs_dir, attention_maps_dir, source_names
+    batch_idx,
+    batch_df,
+    results_dir,
+    targets_dir,
+    outputs_dir,
+    attention_maps_dir,
+    source_names,
+    cfg,
 ):
     """Processes a single batch, by displaying the inputs, target and prediction
     on a single figure for each element in the batch."""
@@ -83,7 +90,7 @@ def process_batch(
 
     # If results_dir/attention_maps exists, it contains the attention maps for every batch
     # as <batch_idx>.npy, of shape (B, head, n_tokens, n_tokens)
-    if attention_maps_dir.exists():
+    if attention_maps_dir.exists() and cfg["display_attention_maps"]:
         attention_maps = np.load(attention_maps_dir / f"{batch_idx}.npy")
         # Display the attention maps for the first element in the batch,
         # with at most 4 columns
@@ -143,6 +150,7 @@ def main(cfg: DictConfig):
                 outputs_dir,
                 attention_maps_dir,
                 source_names,
+                cfg,
             )
     else:
         # Process the batch in parallel
@@ -157,6 +165,7 @@ def main(cfg: DictConfig):
                     outputs_dir,
                     attention_maps_dir,
                     source_names,
+                    cfg,
                 )
                 for batch in range(n_displayed_batches)
             ]
