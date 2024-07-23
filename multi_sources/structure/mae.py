@@ -9,6 +9,7 @@ from multi_sources.utils.scheduler import CosineAnnealingWarmupRestarts
 from multi_sources.utils.image_processing import img_to_patches, pad_to_next_multiple_of, pair
 from multi_sources.utils.image_processing import patches_to_img
 from multi_sources.models.utils import normalize_coords_across_sources
+from multi_sources.models.embedding_layers import LinearEmbedding
 
 
 class MultisourceMAE(pl.LightningModule):
@@ -67,17 +68,17 @@ class MultisourceMAE(pl.LightningModule):
         self.metrics = metrics
         self.save_hyperparameters(ignore=["encoder", "decoder", "metrics"])
 
-        # Linear embeddings for the patches (c, lm, v and m)
+        # Linear embeddings
         in_dim = self.patch_size[0] * self.patch_size[1]
-        self.coord_embedding = nn.Linear(in_dim * 2, coords_dim)  # latitude and longitude
-        self.landmask_embedding = nn.Linear(in_dim, pixels_dim)
-        self.value_embedding = nn.Linear(in_dim, pixels_dim)
-        self.mask_embedding = nn.Linear(in_dim, pixels_dim)
-        # Layernorm layers for the embeddings
-        self.coord_layernorm = nn.LayerNorm(coords_dim)
-        self.landmask_layernorm = nn.LayerNorm(pixels_dim)
-        self.value_layernorm = nn.LayerNorm(pixels_dim)
-        self.mask_layernorm = nn.LayerNorm(pixels_dim)
+        self.coord_embedding = LinearEmbedding(in_dim * 2, coords_dim)  # latitude and longitude
+        self.landmask_embedding = LinearEmbedding(in_dim, pixels_dim)
+        self.value_embedding = LinearEmbedding(in_dim, pixels_dim)
+        self.mask_embedding = LinearEmbedding(in_dim, pixels_dim)
+        # Time and source embeddings, which will be added to the pixel and coord embeddings
+        self.time_to_pixel_embedding = LinearEmbedding(1, pixels_dim)
+        self.source_to_pixel_embedding = LinearEmbedding(1, pixels_dim)
+        self.time_to_coord_embedding = LinearEmbedding(1, coords_dim)
+        self.source_to_coord_embedding = LinearEmbedding(1, coords_dim)
 
         # Projection of the predicted values to the original space
         self.output_proj = nn.Linear(self.pixels_dim, in_dim)
@@ -139,10 +140,10 @@ class MultisourceMAE(pl.LightningModule):
         """Embeds the input sources."""
         output = {}
         for source, (s, dt, c, d, lm, v, m) in x.items():
-            c = self.coord_layernorm(self.coord_embedding(c))
-            lm = self.landmask_layernorm(self.landmask_embedding(lm))
-            v = self.value_layernorm(self.value_embedding(v))
-            m = self.mask_layernorm(self.mask_embedding(m.float()))
+            c = self.coord_embedding(c)
+            lm = self.landmask_embedding(lm)
+            v = self.value_embedding(v)
+            m = self.mask_embedding(m.float())
             output[source] = (s, dt, c, d, lm, v, m)
         return output
 
