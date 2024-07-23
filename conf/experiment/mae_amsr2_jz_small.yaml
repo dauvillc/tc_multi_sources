@@ -7,7 +7,7 @@ defaults:
   - override /lr_scheduler: cosine_warmup_300epochs.yaml
 
 wandb:
-  name: amsr2_vit
+  name: amsr2_vit_small
 
 dataloader:
   batch_size: 16
@@ -33,7 +33,7 @@ model:
           path: multi_sources.models.small_layers.FeedForward
         inner_dim: 1024
   decoder:
-    n_blocks: 8
+    n_blocks: 4
     layers:
       self_attention:
         layer_class:
