@@ -6,7 +6,7 @@ preprocessed_dataset: "/gpfsscratch/rech/xyw/ute68qj/data/multi_sources/preproce
 # as the normalization constants) 
 sources: "/gpfswork/rech/xyw/ute68qj/data/multi_sources/sources/"
 # Path to the metadata regarding the preprocessed dataset
-metadata: "/gpfsscratch/rech/xyw/ute68qj/data/multi_sources/preprocessed/metadata.json"
+metadata: "/gpfsscratch/rech/xyw/ute68qj/data/multi_sources/preprocessed_regridded/metadata.json"
 # Path to a tmp directory for scripts
 tmp_dir: "~/scratch/tmp"
 # Checkpoints directory
