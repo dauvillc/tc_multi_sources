@@ -14,7 +14,7 @@ from omegaconf import DictConfig, OmegaConf
 def main(cfg: DictConfig):
     cfg = OmegaConf.to_object(cfg)
     # Seed everything
-    pl.seed_everything(cfg["seed"])
+    pl.seed_everything(cfg["seed"], workers=True)
     # Initialize Wandb and log the configuration
     wandb.init(**cfg["wandb"], config=cfg, dir=cfg["paths"]["wandb_logs"])
     # Create the logs directory if it does not exist

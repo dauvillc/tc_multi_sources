@@ -28,7 +28,7 @@ def main(cfg: DictConfig):
     checkpoint = torch.load(checkpoint_path)
     exp_cfg = checkpoint["hyper_parameters"]["cfg"]
     # Seed everything with the seed used in the experiment
-    pl.seed_everything(exp_cfg["seed"])
+    pl.seed_everything(exp_cfg["seed"], workers=True)
 
     # Create the validation dataset and dataloader
     val_dataset = hydra.utils.instantiate(exp_cfg["dataset"]["val"], _convert_="partial")
