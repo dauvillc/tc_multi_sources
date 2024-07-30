@@ -14,23 +14,19 @@ class AttentionMap(nn.Module):
     def __init__(self, dim_head, relative_pos=False, rel_pos_dim_head=None):
         super().__init__()
         self.scale = dim_head ** -0.5
-        # Add LayerNorms to the keys and queries to avoid the dot products
-        # exploding.
-        self.key_norm = nn.LayerNorm(dim_head)
-        self.query_norm = nn.LayerNorm(dim_head)
 
         self.relative_pos = relative_pos
         if self.relative_pos:
             self.rel_pos_scale = rel_pos_dim_head ** -0.5
-            self.pos_key_norm = nn.LayerNorm(rel_pos_dim_head)
-            self.pos_query_norm = nn.LayerNorm(rel_pos_dim_head)
 
     def forward(self, keys, queries, pos_key=None, pos_query=None):
-        keys, queries = self.key_norm(keys), self.query_norm(queries)
+        # Clamp the keys and queries to avoid numerical instability
+        keys, queries = keys.clamp(-6, 6), queries.clamp(-6, 6)
         dots = torch.matmul(queries, keys.transpose(-2, -1)) * self.scale
+
         # Optional relative positional encodings
         if self.relative_pos:
-            pos_key, pos_query = self.pos_key_norm(pos_key), self.pos_query_norm(pos_query)
+            pos_key, pos_query = pos_key.clamp(-6, 6), pos_query.clamp(-6, 6)
             rel_pos_dots = torch.matmul(pos_query, pos_key.transpose(-2, -1)) * self.rel_pos_scale
             dots = dots + rel_pos_dots
         return F.softmax(dots, dim=-1)

@@ -8,6 +8,7 @@ defaults:
   - model: general_backbone
   - trainer: 1gpu
   - lr_scheduler: cosine_warmup_150epochs
+  - optimizer: default_adamw
   - _self_
 
 seed: 42

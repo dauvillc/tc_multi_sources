@@ -40,6 +40,7 @@ class MultisourceMAE(pl.LightningModule):
         patch_size,
         pixels_dim,
         coords_dim,
+        adamw_kwargs,
         lr_scheduler_kwargs,
         metrics={},
     ):
@@ -53,6 +54,7 @@ class MultisourceMAE(pl.LightningModule):
             patch_size (tuple of int): The size of the patches to split the images into.
             pixels_dim (int): The dimension of the pixel embeddings.
             coords_dim (int): The dimension of the coordinate embeddings.
+            adamw_kwargs (dict): The arguments to pass to torch.optim.AdamW (other than params).
             lr_scheduler_kwargs (dict): The arguments to pass to the learning rate scheduler.
             metrics (dict of str: callable): The metrics to compute during training and validation.
                 A metric should have the signature metric(y_pred, y_true) -> torch.Tensor.
@@ -65,6 +67,7 @@ class MultisourceMAE(pl.LightningModule):
         self.pixels_dim = pixels_dim
         self.coords_dim = coords_dim
         self.lr_scheduler_kwargs = lr_scheduler_kwargs
+        self.adamw_kwargs = adamw_kwargs
         self.metrics = metrics
         self.save_hyperparameters(ignore=["encoder", "decoder", "metrics"])
 
@@ -144,6 +147,11 @@ class MultisourceMAE(pl.LightningModule):
             lm = self.landmask_embedding(lm)
             v = self.value_embedding(v)
             m = self.mask_embedding(m.float())
+            # Embed the time and source information and sum
+            # them to the pixel and coord embeddings
+            dt, s = dt.view(-1, 1, 1), s.view(-1, 1, 1)
+            c = c + self.time_to_coord_embedding(dt) + self.source_to_coord_embedding(s)
+            v = v + self.time_to_pixel_embedding(dt) + self.source_to_pixel_embedding(s)
             output[source] = (s, dt, c, d, lm, v, m)
         return output
 
@@ -244,7 +252,7 @@ class MultisourceMAE(pl.LightningModule):
         # Compute and log the loss
         loss = self.loss_fn(pred, x, masked_tokens_indices)
 
-        self.log(f"{train_or_val}_loss", loss, prog_bar=True, on_epoch=True)
+        self.log(f"{train_or_val}_loss", loss, prog_bar=True, on_epoch=True, sync_dist=True)
         # Compute metrics
         for metric_name, metric_fn in self.metrics.items():
             metric_value = metric_fn(pred, x)
@@ -305,6 +313,7 @@ class MultisourceMAE(pl.LightningModule):
         The learning rate goes through a linear warmup phase, then follows a cosine
         annealing schedule.
         """
+        decay = self.adamw_kwargs.pop("weight_decay", 0.0)
         decay_params = {
             k: True for k, v in self.named_parameters() if "weight" in k and "norm" not in k
         }
@@ -313,9 +322,10 @@ class MultisourceMAE(pl.LightningModule):
                 {"params": [v for k, v in self.named_parameters() if k in decay_params]},
                 {
                     "params": [v for k, v in self.named_parameters() if k not in decay_params],
-                    "weight_decay": 0,
+                    "weight_decay": decay
                 },
-            ]
+            ],
+            **self.adamw_kwargs,
         )
 
         scheduler = CosineAnnealingWarmupRestarts(
