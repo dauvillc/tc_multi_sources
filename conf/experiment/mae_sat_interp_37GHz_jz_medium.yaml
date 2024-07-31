@@ -13,15 +13,12 @@ dataset:
   train:
     dt_max: 24
     min_available_sources_prop: 0.4
-  val:
-    dt_max: 24
-    min_available_sources_prop: 0.4
 
 dataloader:
   batch_size: 16
 
 lightning_module:
-  masking_ratio: 0.75
+  masking_ratio: 0.25
   patch_size: 16
   coords_dim: 1024
   pixels_dim: 1024
