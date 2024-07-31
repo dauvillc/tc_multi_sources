@@ -7,6 +7,7 @@ from hydra.utils import get_class, instantiate
 from omegaconf import DictConfig, OmegaConf
 from multi_sources.data_processing.writer_mae import MultiSourceWriter
 from multi_sources.models.recorder import AttentionRecorder
+from utils.checkpoints import load_experiment_cfg_from_checkpoint
 
 
 @hydra.main(version_base=None, config_path="../conf", config_name="make_predictions")
@@ -14,26 +15,17 @@ def main(cfg: DictConfig):
     cfg = OmegaConf.to_object(cfg)
     run_id = cfg["run_id"]
 
-    # Load the checkpoint. The checkpoints are stored as "epoch=xx.ckpt" files in the checkpoints
-    # directory.
-    # Use the latest checkpoint.
-    checkpoints_dir = Path(cfg["paths"]["checkpoints"]) / run_id
-    checkpoint_files = list(checkpoints_dir.glob("*.ckpt"))
-    checkpoint_files.sort(key=lambda x: x.stat().st_mtime)
-    checkpoint_path = checkpoint_files[-1]
-    print("Loading checkpoint:", checkpoint_path.stem)
-    # The checkpoint includes the whole configuration dict of the experiment, in
-    # checkpoint["hyper_parameters"]['cfg']. We'll use this to reproduce
-    # the exact configuration of the experiment.
-    checkpoint = torch.load(checkpoint_path)
-    exp_cfg = checkpoint["hyper_parameters"]["cfg"]
+    # Load the experiment configuration from the checkpoint
+    exp_cfg, checkpoint_path = load_experiment_cfg_from_checkpoint(
+        cfg["paths"]["checkpoints"], run_id
+    )
     # Seed everything with the seed used in the experiment
     pl.seed_everything(exp_cfg["seed"], workers=True)
 
     # Create the validation dataset and dataloader
     val_dataset = hydra.utils.instantiate(exp_cfg["dataset"]["val"], _convert_="partial")
-    exp_cfg['dataloader'].update(cfg['dataloader'])
-    val_dataloader = DataLoader(val_dataset, **exp_cfg['dataloader'])
+    exp_cfg["dataloader"].update(cfg["dataloader"])
+    val_dataloader = DataLoader(val_dataset, **exp_cfg["dataloader"])
     print("Validation dataset size:", len(val_dataset))
 
     # Create the results directory
@@ -51,7 +43,7 @@ def main(cfg: DictConfig):
     )
 
     # If we are saving the attention maps, wrap the decoder with the AttentionRecorder class
-    if cfg['save_attention_maps']:
+    if cfg["save_attention_maps"]:
         maps_dir = run_results_dir / "attention_maps"
         maps_dir.mkdir(parents=True, exist_ok=True)
         module.decoder = AttentionRecorder(module.decoder, maps_dir)
