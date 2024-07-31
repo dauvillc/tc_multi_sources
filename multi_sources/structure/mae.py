@@ -265,14 +265,23 @@ class MultisourceMAE(pl.LightningModule):
         for source, (_, _, _, _, _, v, m) in y_true.items():
             pred = y_pred[source]
             B, L, D = pred.shape
-            # Compute the loss only for the masked tokens
+            # Retrieve the indices of the masked tokens
             masked_indices = masked_token_indices[source].unsqueeze(-1).expand(-1, -1, D)
+            # For those tokens, retrieve the availability mask (as masked tokens can
+            # correspond to missing data in the ground truth).
+            m = m.gather(1, masked_indices).float()
+            m_sum = m.sum()
+            if m_sum.item() == 0:
+                # If all masked tokens are missing data, skip the loss computation
+                # for this source
+                continue
+            # Retrieve the predicted and true values for the masked tokens
             pred = pred.gather(1, masked_indices)
             v = v.gather(1, masked_indices)
+            # Compute the MSE loss
             loss = nn.functional.mse_loss(pred, v, reduction="none")
-            # Mask the loss where the tokens are not available
-            m = m.gather(1, masked_indices).float()
-            loss = (loss * m).sum() / m.sum()
+            # Mask the loss where the ground truth is missing
+            loss = (loss * m).sum() / m_sum
             losses.append(loss)
         return torch.stack(losses).mean()
 
