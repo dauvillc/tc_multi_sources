@@ -13,6 +13,6 @@ tmp_dir: "~/scratch/tmp"
 checkpoints: ${oc.env:NEWSCRATCH}/checkpoints/
 # Weights and Biases logs
 wandb_logs: ${oc.env:NEWSCRATCH}
-predictions: ${oc.env:NEWSCRATCH}data/multi_sources/predictions
+predictions: ${oc.env:NEWSCRATCH}/data/multi_sources/predictions
 results: ${oc.env:NEWSCRATCH}/data/multi_sources/results
 
