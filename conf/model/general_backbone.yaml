@@ -1,12 +1,14 @@
 encoder:
   _target_: multi_sources.models.general_backbone.MultisourceGeneralBackbone
   patch_size: ${lightning_module.patch_size}
-  n_blocks: 1
+  n_blocks: ???
   coords_dim: ${lightning_module.coords_dim}
   pixels_dim: ${lightning_module.pixels_dim}
+  layers: ???
 decoder:
   _target_: multi_sources.models.general_backbone.MultisourceGeneralBackbone
   patch_size: ${lightning_module.patch_size}
-  n_blocks: 1
+  n_blocks: ???
   coords_dim: ${lightning_module.coords_dim}
   pixels_dim: ${lightning_module.pixels_dim}
+  layers: ???

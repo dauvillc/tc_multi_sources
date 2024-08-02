@@ -1,0 +1,37 @@
+encoder:
+  _target_: multi_sources.models.general_backbone.MultisourceGeneralBackbone
+  patch_size: ${lightning_module.patch_size}
+  coords_dim: ${lightning_module.coords_dim}
+  pixels_dim: ${lightning_module.pixels_dim}
+  n_blocks: 24
+  layers:
+    self_attention:
+      layer_class:
+        _target_: hydra.utils.get_class
+        path: multi_sources.models.attention.PixelsCoordinatesAttention
+      inner_dim: 1024
+      num_heads: 8
+    ff2:
+      layer_class:
+        _target_: hydra.utils.get_class
+        path: multi_sources.models.small_layers.FeedForward
+      inner_dim: 1024
+
+decoder:
+  _target_: multi_sources.models.general_backbone.MultisourceGeneralBackbone
+  patch_size: ${lightning_module.patch_size}
+  coords_dim: ${lightning_module.coords_dim}
+  pixels_dim: ${lightning_module.pixels_dim}
+  n_blocks: 12
+  layers:
+    self_attention:
+      layer_class:
+        _target_: hydra.utils.get_class
+        path: multi_sources.models.attention.PixelsCoordinatesAttention
+      inner_dim: 1024
+      num_heads: 8
+    ff2:
+      layer_class:
+        _target_: hydra.utils.get_class
+        path: multi_sources.models.small_layers.FeedForward
+      inner_dim: 1024
