@@ -50,6 +50,7 @@ def main(cfg: DictConfig):
 
     # Make predictions using the MultiSourceWriter class, which is a custom implementation of
     # BasePredictionWriter.
+    module.use_groundtruth_for_unmasked_tokens(cfg["use_groundtruth_for_unmasked_tokens"])
     module.eval()
     writer = MultiSourceWriter(run_results_dir)
     trainer = pl.Trainer(

@@ -60,6 +60,7 @@ def process_batch(
     for i in range(n_elements):
         fig, axes = plt.subplots(n_rows, n_cols, figsize=(n_cols * 5, n_rows * 5), squeeze=False)
         for j, source_name in enumerate(source_names):
+            info = batch_df[batch_df.source_name == source_name].iloc[i]
             target = targets[source_name][i]
             # The target array has shape (3, height, width)
             # The first two channels are the latitude and longitude of each pixel
@@ -68,8 +69,9 @@ def process_batch(
             # Plot the target
             ax = axes[j, 0]
             ax.imshow(target, cmap="gray")
-            ax.set_title(f"{source_name} - target")
             ax.axis("off")
+            # In the title, display the source name and the dt
+            ax.set_title(f"{source_name} dt: {info['dt']:.2f}")
             # Set the ticks to the coordinates
             ax.set_xticks(np.arange(target.shape[1]))
             ax.set_xticklabels(coords[0, 0])
@@ -79,7 +81,6 @@ def process_batch(
             prediction = outputs[source_name][i][0]
             ax = axes[j, 1]
             ax.imshow(prediction, cmap="gray")
-            ax.set_title(f"{source_name} - prediction")
             ax.axis("off")
             # Set the ticks to the coordinates
             ax.set_xticks(np.arange(prediction.shape[1]))
@@ -88,6 +89,7 @@ def process_batch(
             ax.set_yticklabels(coords[1, :, 0])
 
         plt.tight_layout()
+        plt.suptitle("Target (left) vs Prediction (right)")
         plt.savefig(results_dir / f"{batch_idx}_{i}.png")
         plt.close()
 
