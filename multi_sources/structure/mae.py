@@ -42,6 +42,7 @@ class MultisourceMAE(pl.LightningModule):
         coords_dim,
         adamw_kwargs,
         lr_scheduler_kwargs,
+        loss_max_distance_from_center,
         metrics={},
     ):
         """
@@ -56,6 +57,9 @@ class MultisourceMAE(pl.LightningModule):
             coords_dim (int): The dimension of the coordinate embeddings.
             adamw_kwargs (dict): The arguments to pass to torch.optim.AdamW (other than params).
             lr_scheduler_kwargs (dict): The arguments to pass to the learning rate scheduler.
+            loss_max_distance_from_center (int or None): If specified, only pixels within this
+                distance from the center of the storm (in km) will be considered
+                in the loss computation.
             metrics (dict of str: callable): The metrics to compute during training and validation.
                 A metric should have the signature metric(y_pred, y_true) -> torch.Tensor.
         """
@@ -69,7 +73,11 @@ class MultisourceMAE(pl.LightningModule):
         self.lr_scheduler_kwargs = lr_scheduler_kwargs
         self.adamw_kwargs = adamw_kwargs
         self.metrics = metrics
+        self.loss_max_distance_from_center = loss_max_distance_from_center
         self.save_hyperparameters(ignore=["encoder", "decoder", "metrics"])
+
+        # Wether to use the ground truth for the unmasked tokens during prediction
+        self.unmasked_tokens_use_groundtruth = False
 
         # Linear embeddings
         in_dim = self.patch_size[0] * self.patch_size[1]
@@ -133,6 +141,8 @@ class MultisourceMAE(pl.LightningModule):
             c = img_to_patches(c, self.patch_size)
             v = img_to_patches(v, self.patch_size)
             lm = img_to_patches(lm, self.patch_size)
+            # m and d are image tensors of shape (b, h, w)
+            d = img_to_patches(d.unsqueeze(1), self.patch_size)
             m = img_to_patches(m.unsqueeze(1), self.patch_size)
             # d doesn't need to be tokenized, as it won't be fed to the model.
             # It's only used in the loss computation, which is done on the original shape.
@@ -262,7 +272,7 @@ class MultisourceMAE(pl.LightningModule):
     def loss_fn(self, y_pred, y_true, masked_token_indices):
         """Computes the MSE between the predicted and true values."""
         losses = []
-        for source, (_, _, _, _, _, v, m) in y_true.items():
+        for source, (_, _, _, d, _, v, m) in y_true.items():
             pred = y_pred[source]
             B, L, D = pred.shape
             # Retrieve the indices of the masked tokens
@@ -270,6 +280,11 @@ class MultisourceMAE(pl.LightningModule):
             # For those tokens, retrieve the availability mask (as masked tokens can
             # correspond to missing data in the ground truth).
             m = m.gather(1, masked_indices).float()
+            # If a max distance from the center is specified, mask the tokens
+            # that are too far from the center
+            if self.loss_max_distance_from_center is not None:
+                d_masked_tokens = d.gather(1, masked_indices)
+                m = m * (d_masked_tokens < self.loss_max_distance_from_center).float()
             m_sum = m.sum()
             if m_sum.item() == 0:
                 # If all masked tokens are missing data, skip the loss computation
@@ -302,19 +317,27 @@ class MultisourceMAE(pl.LightningModule):
         padded_shapes = {source: x[2].shape[-2:] for source, x in batch.items()}
         x = self.tokenize(batch)
         pred, masked_tokens_indices = self.forward(x)
-        # For the tokens that were NOT masked, set them to the true values
         output = {}
         for source, (_, _, _, _, _, v, _) in x.items():
-            otp = v.clone()
-            B, L, D = pred[source].shape
-            masked_indices = masked_tokens_indices[source].unsqueeze(-1).expand(-1, -1, D)
-            otp.scatter_(1, masked_indices, pred[source].gather(1, masked_indices))
-            output[source] = otp
+            if self.unmasked_tokens_use_groundtruth:
+                # If we want to use the ground truth for the unmasked tokens,
+                # we'll replace the predicted values with the true values
+                otp = v.clone()
+                B, L, D = pred[source].shape
+                masked_indices = masked_tokens_indices[source].unsqueeze(-1).expand(-1, -1, D)
+                otp.scatter_(1, masked_indices, pred[source].gather(1, masked_indices))
+                output[source] = otp
+            else:
+                output[source] = pred[source].clone()
         # Convert the predictions back to images
         for source, v in output.items():
             pH, pW = padded_shapes[source]
             output[source] = patches_to_img(v, pH, pW, self.patch_size)
         return batch, output
+
+    def use_groundtruth_for_unmasked_tokens(self, value):
+        """Sets whether to use the ground truth for the unmasked tokens during prediction."""
+        self.unmasked_tokens_use_groundtruth = value
 
     def configure_optimizers(self):
         """Configures the optimizer for the model.
