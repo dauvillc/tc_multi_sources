@@ -1,0 +1,20 @@
+# @package _global_
+defaults:
+  - override /paths: jz
+  - override /sources: amsr2_5freqs
+  - override /lightning_module: mae
+  - override /trainer: 4gpus
+  - override /lr_scheduler: cosine_warmup_300epochs.yaml
+  - override /model: vit_170M
+
+wandb:
+  name: amsr2_vit_170M
+
+dataloader:
+  batch_size: 16
+
+lightning_module:
+  masking_ratio: 0.1
+  patch_size: 16
+  coords_dim: 1024
+  pixels_dim: 1024

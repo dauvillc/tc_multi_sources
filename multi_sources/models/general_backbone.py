@@ -22,6 +22,7 @@ class MultisourceGeneralBackbone(nn.Module):
 
     def __init__(
         self, patch_size, n_blocks, coords_dim=None, pixels_dim=None, layers={},
+        output_block=None,
         sum_coords_to_pixels=False
     ):
         """
@@ -32,7 +33,7 @@ class MultisourceGeneralBackbone(nn.Module):
                 Defaults to patch_height * patch_width * 2.
             pixels_dim (int): Embedding dimension for the pixel values.
                 Defaults to patch_height * patch_width.
-            layers: Dict defining the successive layers that compose the backbone,
+            layers (dict) Dict defining the successive layers that compose the backbone,
                 as {layer_name: layer_kwargs}.
                 For each layer, the kwargs must include the key 'layer_class',
                 which should be a nn.Module class. The other keys are the arguments
@@ -43,6 +44,7 @@ class MultisourceGeneralBackbone(nn.Module):
                 `forward(pixels_seq, coords_seq) -> pixels_seq`.
                 Each block in the backbone will be composed of these layers, in the order
                 they appear in the dict.
+            output_block (nn.Module): Optional block to apply at the end of the backbone.
             sum_coords_to_pixels (bool): Whether to sum the coordinates embeddings to the
                 pixel embeddings at the beginning of the backbone.
         """
@@ -64,6 +66,8 @@ class MultisourceGeneralBackbone(nn.Module):
                 kwargs = {k: v for k, v in layer_kwargs.items() if k != 'layer_class'}
                 block.append(layer_class(self.pixels_dim, self.coords_dim, **kwargs))
             self.blocks.append(block)
+        # Output block
+        self.output_block = output_block
 
     def forward(self, inputs):
         """Forward pass. See the class docstring for the input/output format."""

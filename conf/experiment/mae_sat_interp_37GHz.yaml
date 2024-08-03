@@ -1,0 +1,24 @@
+# @package _global_
+defaults:
+  - override /paths: jz
+  - override /sources: sat_interp_37GHz
+  - override /lightning_module: mae
+  - override /trainer: 4gpus
+  - override /lr_scheduler: cosine_warmup_300epochs.yaml
+
+wandb:
+  name: sat_interp_37GHz
+
+dataset:
+  train:
+    dt_max: 24
+    min_available_sources_prop: 0.4
+
+dataloader:
+  batch_size: 16
+
+lightning_module:
+  masking_ratio: 0.25
+  patch_size: 16
+  coords_dim: 1024
+  pixels_dim: 1024
