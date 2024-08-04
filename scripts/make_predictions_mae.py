@@ -35,11 +35,12 @@ def main(cfg: DictConfig):
         (run_results_dir / "info.csv").unlink()
 
     # Instantiate the model and the lightning module
+    n_sources = val_dataset.get_n_sources()
     encoder = instantiate(exp_cfg["model"]["encoder"])
     decoder = instantiate(exp_cfg["model"]["decoder"])
     lightning_module_class = get_class(exp_cfg["lightning_module"]["_target_"])
     module = lightning_module_class.load_from_checkpoint(
-        checkpoint_path, encoder=encoder, decoder=decoder, cfg=exp_cfg
+        checkpoint_path, n_sources=n_sources, encoder=encoder, decoder=decoder, cfg=exp_cfg
     )
 
     # If we are saving the attention maps, wrap the decoder with the AttentionRecorder class

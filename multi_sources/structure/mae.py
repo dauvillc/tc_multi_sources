@@ -9,7 +9,7 @@ from multi_sources.utils.scheduler import CosineAnnealingWarmupRestarts
 from multi_sources.utils.image_processing import img_to_patches, pad_to_next_multiple_of, pair
 from multi_sources.utils.image_processing import patches_to_img
 from multi_sources.models.utils import normalize_coords_across_sources
-from multi_sources.models.embedding_layers import LinearEmbedding
+from multi_sources.models.embedding_layers import LinearEmbedding, SourceEmbedding
 
 
 class MultisourceMAE(pl.LightningModule):
@@ -33,6 +33,7 @@ class MultisourceMAE(pl.LightningModule):
 
     def __init__(
         self,
+        n_sources,
         encoder,
         decoder,
         cfg,
@@ -47,6 +48,7 @@ class MultisourceMAE(pl.LightningModule):
     ):
         """
         Args:
+            n_sources (int): The number of sources in the input.
             encoder (nn.Module): The encoder model.
             decoder (nn.Module): The decoder model.
             cfg (dict): The whole configuration of the experiment. This will be saved
@@ -64,6 +66,7 @@ class MultisourceMAE(pl.LightningModule):
                 A metric should have the signature metric(y_pred, y_true) -> torch.Tensor.
         """
         super().__init__()
+        self.n_sources = n_sources
         self.encoder = encoder
         self.decoder = decoder
         self.masking_ratio = masking_ratio
@@ -87,9 +90,9 @@ class MultisourceMAE(pl.LightningModule):
         self.mask_embedding = LinearEmbedding(in_dim, pixels_dim)
         # Time and source embeddings, which will be added to the pixel and coord embeddings
         self.time_to_pixel_embedding = LinearEmbedding(1, pixels_dim)
-        self.source_to_pixel_embedding = LinearEmbedding(1, pixels_dim)
         self.time_to_coord_embedding = LinearEmbedding(1, coords_dim)
-        self.source_to_coord_embedding = LinearEmbedding(1, coords_dim)
+        self.source_to_pixel_embedding = SourceEmbedding(n_sources, pixels_dim)
+        self.source_to_coord_embedding = SourceEmbedding(n_sources, coords_dim)
 
         # Projection of the predicted values to the original space
         self.output_proj = nn.Linear(self.pixels_dim, in_dim)

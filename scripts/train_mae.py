@@ -46,6 +46,7 @@ def main(cfg: DictConfig):
     print("Train dataset size:", len(train_dataset))
     print("Validation dataset size:", len(val_dataset))
 
+    n_sources = train_dataset.get_n_sources()
     # Create the encoder and decoder
     encoder = instantiate(cfg["model"]["encoder"])
     decoder = instantiate(cfg["model"]["decoder"])
@@ -53,10 +54,10 @@ def main(cfg: DictConfig):
     if resume_run_id:
         lightning_module_class = get_class(cfg["lightning_module"]["_target_"])
         pl_module = lightning_module_class.load_from_checkpoint(
-            checkpoint_path, encoder=encoder, decoder=decoder, cfg=cfg
+            checkpoint_path, n_sources=n_sources, encoder=encoder, decoder=decoder, cfg=cfg
         )
     else:
-        pl_module = instantiate(cfg["lightning_module"], encoder, decoder, cfg)
+        pl_module = instantiate(cfg["lightning_module"], n_sources, encoder, decoder, cfg)
 
     # Create the logger
     logger = WandbLogger(dir=cfg["paths"]["wandb_logs"], log_model=False)
