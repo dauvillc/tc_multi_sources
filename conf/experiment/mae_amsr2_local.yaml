@@ -10,7 +10,3 @@ wandb:
 
 dataloader:
   batch_size: 16
-
-lightning_module:
-  coords_dim: 512
-  pixels_dim: 512
