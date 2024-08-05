@@ -1,4 +1,5 @@
 """Implements small functions for preprocessing."""
+
 import netCDF4 as nc
 
 
@@ -25,7 +26,7 @@ def list_tc_primed_sources(tc_primed_path, exclude_years=None):
     sen_sat_pairs = set()
     for file in overpass_files:
         sen_sat_pairs.add("_".join(file.stem.split("_")[3:5]))
-    sen_sat_pairs = sorted(list(sen_sat_pairs)) 
+    sen_sat_pairs = sorted(list(sen_sat_pairs))
     sen_sat_files, sen_sat_swaths = {}, {}
     for sensat in sen_sat_pairs:
         # Retrieve the list of files whose stem contains the sensor/satellite pair
@@ -33,6 +34,12 @@ def list_tc_primed_sources(tc_primed_path, exclude_years=None):
         # We need to open a file with netCDF4 to retrieve the list of swaths
         with nc.Dataset(sen_sat_files[sensat][0], "r") as ds:
             swaths = [swath for swath in ds["passive_microwave"].groups.keys()]
+        # If the satellite is GPM or TRMM, we'll also retrieve the radar-radiometer
+        # data and consider them as swaths
+        if "GPM" in sensat:
+            swaths.extend(['KuGMI'])
+        elif "TRMM" in sensat:
+            swaths.extend(['KuTMI'])
         sen_sat_swaths[sensat] = swaths
     return sen_sat_pairs, sen_sat_files, sen_sat_swaths
 
@@ -45,8 +52,8 @@ def list_tc_primed_storm_files(tc_primed_path, exclude_years=None):
         exclude_years (list of int, optional): List of years to exclude from the search.
 
     Returns:
-        storm_files (dict of (str, str, str): list of Path): Dictionary mapping each (year, basin, number)
-            to the list of corresponding source files.
+        storm_files (dict of (str, str, str): list of Path): Dictionary mapping each
+            (year, basin, number) to the list of corresponding source files.
     """
     if exclude_years is None:
         exclude_years = []

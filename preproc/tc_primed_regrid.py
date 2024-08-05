@@ -35,6 +35,11 @@ _METADATA_COL_ORDER_ = [
 def preprocess_source_files(ds):
     # Discard the 'angle_bins' variables
     ds = ds.drop_vars(["ScanTime", "angle_bins"])
+    # For passive microwave data the dimensions are named "scan" and "pixel",
+    # while for radar-radiometer they're named "scan" and "beam". We'll rename
+    # the "beam" dimension to "pixel" for consistency.
+    if "beam" in ds.dims:
+        ds = ds.rename({"beam": "pixel"})
     # Compute the distance between each pixel and the storm center as a new variable
     # using the 'x' and 'y' variables
     ds["dist_to_center"] = np.sqrt(ds["x"] ** 2 + ds["y"] ** 2)
@@ -64,7 +69,7 @@ def process_swath(sensat, swath, files, dest_path, cfg, use_cache=True, verbose=
     else:
         files_norm = files
 
-    if not use_cache or not (dest_swath_dir / "max_area.txt").exists():
+    if not use_cache or not (dest_swath_dir / "avg_area.txt").exists():
         if verbose:
             print("Processing normalization constants and area")
         # Process each file successively. Since the images don't have the same sizes,
@@ -74,7 +79,16 @@ def process_swath(sensat, swath, files, dest_path, cfg, use_cache=True, verbose=
         means, stds = [], []
         iterator = tqdm(files) if verbose else files
         for file in iterator:
-            ds = nc.Dataset(file)['passive_microwave'][swath]
+            # The swath can either be a passive microwave swath or a radar radiometer band
+            group = "passive_microwave"
+            if swath in ["KuGMI", "KuTMI"]:
+                group = "radar_radiometer"
+            ds = nc.Dataset(file)[group]
+            # While all swaths will always be present for microwave instruments, this isn't
+            # the case for the radar-radiometer.
+            if swath not in ds.groups:
+                continue
+            ds = ds[swath]
             # Although a swath always contains the same bands, the areas covered by the images
             # aren't exactly the same (due to the satellite's orbit). We'll compute the average
             # area covered by the images from the swath, i.e.
@@ -90,7 +104,7 @@ def process_swath(sensat, swath, files, dest_path, cfg, use_cache=True, verbose=
                 avg_area[0] += delta_lon
                 avg_area[1] += delta_lat
 
-                # Normalize the data if the file is in the subsample
+                # Save the statistics if the file is in the subsample
                 if file in files_norm:
                     means.append(ds.mean())
                     stds.append(ds.std())
@@ -186,12 +200,30 @@ def process_storm(
             time = pd.to_datetime(overpass_meta.time.values[0])
             # Process each swath of the sensor-satellite pair for that file
             for swath in sen_sat_swaths[sensat]:
-                dataset = preprocess_source_files(
-                    xr.open_dataset(
-                        file,
-                        group=f"passive_microwave/{swath}",
-                    ),
-                ).load()
+                group = "passive_microwave"
+                if swath in ["KuGMI", "KuTMI"]:
+                    group = "radar_radiometer"
+                try:
+                    dataset = preprocess_source_files(
+                        xr.open_dataset(
+                            file,
+                            group=f"{group}/{swath}",
+                        ),
+                    ).load()
+                except (KeyError, OSError) as e:
+                    # For radar-radiometer data, the data can be missing
+                    if swath in ["KuGMI", "KuTMI"]:
+                        continue
+                    else:
+                        # Propagate the exception
+                        raise e
+                # For radar-radiometer data, we'll only use the near-surface total precip rate,
+                # and its uncertainity. For passive microwave data, we'll use all variables.
+                if swath in ["KuGMI", "KuTMI"]:
+                    data_vars = ["nearSurfPrecipTotRate", "nearSurfPrecipTotRateSigma"]
+                    dataset = dataset[
+                        data_vars + ["latitude", "longitude", "dist_to_center"]
+                    ]  # Discards the other variables
                 # Regrid the data to a regular grid with the requested resolution
                 dataset = regrid(
                     dataset,
@@ -199,13 +231,13 @@ def process_storm(
                     avg_areas[sensat, swath],
                 )
                 # Normalize the data, only for the variables that are in means and stds
-                # and that are not contextual variables ('latitude', 'longitude',
-                # 'x', 'y'
+                # and that are not contextual variables
                 data_vars = [
                     var
                     for var in dataset.data_vars
-                    if var not in ["latitude", "longitude", "dist_to_center", "x", "y"]
+                    if var not in ["latitude", "longitude", "dist_to_center"]
                 ]
+                # Normalize the data
                 for var in means[sensat, swath].data_vars:
                     if var in data_vars:
                         dataset[var] = (dataset[var] - means[sensat, swath][var]) / stds[
