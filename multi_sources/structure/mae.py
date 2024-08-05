@@ -162,7 +162,7 @@ class MultisourceMAE(pl.LightningModule):
             m = self.mask_embedding(m.float())
             # Embed the time and source information and sum
             # them to the pixel and coord embeddings
-            dt, s = dt.view(-1, 1, 1), s.view(-1, 1, 1)
+            dt, s = dt.view(-1, 1, 1), s.view(-1, 1)
             c = c + self.time_to_coord_embedding(dt) + self.source_to_coord_embedding(s)
             v = v + self.time_to_pixel_embedding(dt) + self.source_to_pixel_embedding(s)
             output[source] = (s, dt, c, d, lm, v, m)
@@ -185,7 +185,8 @@ class MultisourceMAE(pl.LightningModule):
         token_perms, n_tokens_map = {}, {}
         masked_tokens_indices = {}
         for source, (s, dt, c, d, lm, v, m) in x.items():
-            B, L, D = v.shape  # batch size, sequence length, model dimension
+            B, L, D_v = v.shape  # batch size, sequence length, model dimension
+            D_c = c.shape[-1]  # coord dimension
             # Compute the number of tokens to keep based on the size of the input
             # and the masking ratio
             n_tokens = c.shape[1]
@@ -195,11 +196,13 @@ class MultisourceMAE(pl.LightningModule):
             # Shuffle the tokensnd keep the first n_masked.
             noise = torch.rand(B, L, device=c.device)
             perm = torch.argsort(noise, dim=1)
-            kept_indices = perm[:, :n_kept].unsqueeze(-1).expand(-1, -1, D)
-            c = torch.gather(c, dim=1, index=kept_indices)
-            lm = torch.gather(lm, dim=1, index=kept_indices)
-            v = torch.gather(v, dim=1, index=kept_indices)
-            m = torch.gather(m, dim=1, index=kept_indices)
+            kept_indices = perm[:, :n_kept].unsqueeze(-1)
+            kept_indices_v = kept_indices.expand(-1, -1, D_v)
+            kept_indices_c = kept_indices.expand(-1, -1, D_c)
+            c = torch.gather(c, dim=1, index=kept_indices_c)
+            lm = torch.gather(lm, dim=1, index=kept_indices_v)
+            v = torch.gather(v, dim=1, index=kept_indices_v)
+            m = torch.gather(m, dim=1, index=kept_indices_v)
             # Save the permutation and the original number of tokens for later
             # reconstruction of the original shape
             token_perms[source] = perm
@@ -228,7 +231,7 @@ class MultisourceMAE(pl.LightningModule):
             # Compute the number of tokens to add to retrieve the original shape
             n_tokens_to_add = n_tokens[source] - y.shape[1]
             # Concatenate the [MASK] token to the encoder output
-            mask_tokens = self.mask_token.expand(c.shape[0], n_tokens_to_add, -1)
+            mask_tokens = self.mask_token.expand(B, n_tokens_to_add, -1)
             y = torch.cat((y, mask_tokens), dim=1)  # (b, n_tokens, d_model)
             # Unshuffle the tokens
             reverse_perm = torch.argsort(perm, dim=1).unsqueeze(-1).expand(-1, -1, D)
