@@ -1,0 +1,14 @@
+# @package hydra.launcher
+_target_: hydra_plugins.hydra_submitit_launcher.submitit_launcher.SlurmLauncher
+submitit_folder: ${hydra.sweep.dir}/.submitit/%j
+timeout_min: 1200
+cpus_per_task: 10
+gres: "gpu:4"
+name: ${hydra.job.name}
+constraint: "v100-32g"
+account: "xyw@v100"
+additional_parameters:
+  hint: nomultithread
+setup:
+  - source ${oc.env:HOME}/.bash_profile
+  - conda activate tc
