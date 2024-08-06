@@ -12,13 +12,7 @@ wandb:
 dataset:
   train:
     dt_max: 24
-    min_available_sources_prop: 0.08
+    min_available_sources_prop: 0.5
 
 dataloader:
   batch_size: 16
-
-lightning_module:
-  masking_ratio: 0.25
-  patch_size: 16
-  coords_dim: 1024
-  pixels_dim: 1024
