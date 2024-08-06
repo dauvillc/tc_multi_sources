@@ -38,6 +38,27 @@ tc-primed:
         variables: ['TB_A89.0V', 'TB_A89.0H']
       S6:
         variables: ['TB_B89.0V', 'TB_B89.0H']
+    AMSRE_AQUA:
+      S1:
+        variables: ['TB_10.65V', 'TB_10.65H']
+      S2:
+        variables: ['TB_18.7V', 'TB_18.7H']
+      S3:
+        variables: ['TB_23.8V', 'TB_23.8H']
+      S4:
+        variables: ['TB_36.5V', 'TB_36.5H']
+      S5:
+        variables: ['TB_A89.0V', 'TB_A89.0H']
+      S6:
+        variables: ['TB_B89.0V', 'TB_B89.0H']
+    AMSUB_NOAA17:
+      S1:
+        variables: ['TB_89.0_0.9QV', 'TB_150.0_0.9QV', 'TB_183.31_1.0QV', 'TB_183.31_3.0QV', 'TB_183.31_7.0QV']
+    GMI_GPM:
+      S1:
+        variables: ['TB_10.65H', 'TB_10.65V', 'TB_18.7H', 'TB_18.7V', 'TB_23.8V', 'TB_36.64H', 'TB_36.64V', 'TB_89.0H', 'TB_89.0V']
+      S2:
+        variables: ['TB_166.0H', 'TB_166.0V', 'TB_183.31_3.0V', 'TB_183.31_8.0V']
     ATMS_NOAA20:
       S1:
         variables: ['TB_23.8QV']
@@ -56,9 +77,6 @@ tc-primed:
         variables: ['TB_88.2QV']
       S4:
         variables: ['TB_165.5QH', 'TB_183.31_1.0QH', 'TB_183.31_1.8QH', 'TB_183.31_3.0QH', 'TB_183.31_4.5QH', 'TB_183.31_7.0QH']
-    GMI_GPM:
-      S1:
-        variables: ['TB_10.65H', 'TB_10.65V', 'TB_18.7H', 'TB_18.7V', 'TB_23.8V', 'TB_36.64H', 'TB_36.64V', 'TB_89.0H', 'TB_89.0V']
       S2:
         variables: ['TB_166.0H', 'TB_166.0V', 'TB_183.31_3.0V', 'TB_183.31_7.0V']
     MHS_METOPA:
@@ -73,6 +91,11 @@ tc-primed:
     MHS_NOAA19:
       S1:
         variables: ['TB_89.0V', 'TB_157.0V', 'TB_183.31_1.0H', 'TB_183.31_3.0H', 'TB_190.31V']
+    SSMI_F13:
+      S1:
+        variables: ['TB_19.35V', 'TB_19.35H', 'TB_22.235V', 'TB_37.0V', 'TB_37.0H']
+      S2:
+        variables: ['TB_85.5V', 'TB_85.5H']
     SSMIS_F16:
       S1:
         variables: ['TB_19.35H', 'TB_19.35V', 'TB_22.235V']
@@ -109,3 +132,10 @@ tc-primed:
         variables: ['TB_150.0H', 'TB_183.31_1.0H', 'TB_183.31_3.0H', 'TB_183.31_6.6H']
       S4:
         variables: ['TB_91.665H', 'TB_91.665V']
+    TMI_TRMM:
+      S1:
+        variables: ['TB_10.65H', 'TB_10.65V']
+      S2:
+        variables: ['TB_19.35H', 'TB_19.35V', 'TB_21.3V', 'TB_37.0H', 'TB_37.0V']
+      S3:
+        variables: ['TB_85.5V', 'TB_85.5H']
