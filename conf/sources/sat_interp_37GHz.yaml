@@ -30,7 +30,7 @@ tc-primed:
         variables: ['TB_36.5H']
     AMSRE_AQUA:
       S4:
-        variables: ['TB_36.5V', 'TB_36.5H']
+        variables: ['TB_36.5H']
     ATMS_NPP:
       S2:
         variables: ['TB_31.4QV']
