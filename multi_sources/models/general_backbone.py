@@ -8,22 +8,23 @@ from multi_sources.models.utils import pair
 
 class MultisourceGeneralBackbone(nn.Module):
     """General backbone for the multisource mask-autoencoding task.
-    The model receives a list of tuples (s, dt, c, lm, v, m) as input, where:
-    - s (b,) is the index of the source;
-    - dt (b,) is the relative time delta between the latest source and the current source;
-    - c (b, n, 2 * ph * pw) is the geographical coordinates of the tokens;
-    - lm (b, n, ph * pw) is the land mask;
-    - v (b, n, ph * pw) is the values of the tokens.
+    The model receives a list of tuples (c, v) as input, where:
+    - c (b, n, dim_coords) is the coordinates of the tokens.
+    - v (b, n, dim_pixels) is the values of the tokens.
         Some tokens may be masked.
-    - m (b, n, ph * pw) is a binary mask indicating which pixels are available.
-    The model returns a list of tensors of shape (b, n, ph * pw), which are the
+    The model returns a list of tensors of shape (b, n, dim_pixels), which are the
     predicted values of the tokens.
     """
 
     def __init__(
-        self, patch_size, n_blocks, coords_dim=None, pixels_dim=None, layers={},
+        self,
+        patch_size,
+        n_blocks,
+        coords_dim=None,
+        pixels_dim=None,
+        layers={},
         output_block=None,
-        sum_coords_to_pixels=False
+        sum_coords_to_pixels=False,
     ):
         """
         Args:
@@ -61,32 +62,37 @@ class MultisourceGeneralBackbone(nn.Module):
         for _ in range(n_blocks):
             block = nn.ModuleList()
             for layer_name, layer_kwargs in layers.items():
-                layer_class = layer_kwargs['layer_class']
-                kwargs = {k: v for k, v in layer_kwargs.items() if k != 'layer_class'}
-                block.append(layer_class(self.pixels_dim, self.coords_dim, **kwargs))
+                layer_class = layer_kwargs["layer_class"]
+                kwargs = {k: v for k, v in layer_kwargs.items() if k != "layer_class"}
+                # Before each block, add a layer normalization for the pixels
+                # (the coords don't change between blocks, so no need to re-normalize them).
+                block.append(
+                    nn.ModuleList(
+                        [
+                            nn.LayerNorm(pixels_dim),
+                            layer_class(self.pixels_dim, self.coords_dim, **kwargs),
+                        ]
+                    )
+                )
             self.blocks.append(block)
 
     def forward(self, inputs):
         """Forward pass. See the class docstring for the input/output format."""
-        # Concatenate the inputs along the token dimension to form the following tensors:
-        # coords_seq, pixels_seq, landmask_seq, mask_seq
-        s_seq, dt_seq, coords_seq, landmask_seq, pixels_seq, mask_seq = zip(*inputs)
+        # Unpack the inputs
+        coords_seq, pixels_seq = zip(*inputs)
         # Save the number of tokens in each sequence
         n_tokens_seq = [coords.shape[1] for coords in coords_seq]
+        # Concatenate the sequences from each source into one sequence
         coords_seq = torch.cat(coords_seq, dim=1)
         pixels_seq = torch.cat(pixels_seq, dim=1)
-        landmask_seq = torch.cat(landmask_seq, dim=1)
-        mask_seq = torch.cat(mask_seq, dim=1)
-        # Sum the pixels, landmask and mask sequences
-        pixels_seq = pixels_seq + mask_seq + landmask_seq
         # If the coordinates embedding size is the same as the pixel embedding size,
         # sum them (the coords act as positional encodings)
         if self.coords_dim == self.pixels_dim and self.sum_coords_to_pixels:
             pixels_seq = pixels_seq + coords_seq
         # Apply the blocks with skip connections
         for block in self.blocks:
-            for layer in block:
-                pixels_seq = layer(pixels_seq, coords_seq) + pixels_seq
+            for norm, layer in block:
+                pixels_seq = layer(norm(pixels_seq), coords_seq) + pixels_seq
         # Split the sequences back into the original sequences
         pixels_seq = pixels_seq.split(n_tokens_seq, dim=1)
         return pixels_seq

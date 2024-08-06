@@ -20,13 +20,14 @@ class AttentionMap(nn.Module):
             self.rel_pos_scale = rel_pos_dim_head ** -0.5
 
     def forward(self, keys, queries, pos_key=None, pos_query=None):
-        # Clamp the keys and queries to avoid numerical instability
-        keys, queries = keys.clamp(-6, 6), queries.clamp(-6, 6)
+        # Clamp the keys and queries to avoid numerical instability in the case where
+        # they are perfectly correlated.
+        keys, queries = keys.clamp(-5, 5), queries.clamp(-5, 5)
         dots = torch.matmul(queries, keys.transpose(-2, -1)) * self.scale
 
         # Optional relative positional encodings
         if self.relative_pos:
-            pos_key, pos_query = pos_key.clamp(-6, 6), pos_query.clamp(-6, 6)
+            pos_key, pos_query = pos_key.clamp(-5, 5), pos_query.clamp(-5, 5)
             rel_pos_dots = torch.matmul(pos_query, pos_key.transpose(-2, -1)) * self.rel_pos_scale
             dots = dots + rel_pos_dots
         return F.softmax(dots, dim=-1)
@@ -104,9 +105,6 @@ class PixelsCoordinatesAttention(nn.Module):
         assert inner_dim % num_heads == 0
         self.num_heads = num_heads
 
-        self.pixel_norm = nn.LayerNorm(pixel_dim)
-        self.coords_norm = nn.LayerNorm(coords_dim)
-
         self.pixels_to_qkv = nn.Linear(pixel_dim, inner_dim * 3, bias=False)
         self.coords_to_qk = nn.Linear(coords_dim, inner_dim * 2, bias=False)
 
@@ -115,9 +113,6 @@ class PixelsCoordinatesAttention(nn.Module):
         self.output_proj = nn.Sequential(nn.Linear(inner_dim, pixel_dim), nn.Dropout(dropout))
 
     def forward(self, pixels, coords):
-        pixels = self.pixel_norm(pixels)
-        coords = self.coords_norm(coords)
-
         # Project the pixel values and coordinates to the query, key and value spaces.
         # The values come from the pixels.
         qkv_pixels = self.pixels_to_qkv(pixels).chunk(3, dim=-1)

@@ -7,7 +7,7 @@ import torch.nn as nn
 class LinearEmbedding(nn.Module):
     """Embeds a vector using a linear layer."""
 
-    def __init__(self, input_dim, output_dim, norm=True):
+    def __init__(self, input_dim, output_dim, norm=False):
         super(LinearEmbedding, self).__init__()
         self.embedding = nn.Linear(input_dim, output_dim)
         self.use_norm = norm
@@ -22,15 +22,18 @@ class LinearEmbedding(nn.Module):
 
 
 class SourceEmbedding(nn.Module):
-    """Stores an embedding for each source index."""
+    """Stores an embedding for each source."""
 
-    def __init__(self, num_sources, dim):
+    def __init__(self, source_names, dim):
         super().__init__()
-        self.embeddings = nn.Embedding(num_sources, dim)
-        self.norm = nn.LayerNorm(dim)
+        # Create embeddings for all sources, and associate each source name with an index.
+        self.embedding = nn.Embedding(len(source_names), dim)
+        self.source_indices = {source_name: i for i, source_name in enumerate(source_names)}
 
-    def forward(self, x):
-        # Convert to LongTensor if necessary
-        if x.dtype == torch.float32:
-            x = x.long()
-        return self.norm(self.embeddings(x))
+    def forward(self, source_name, shape):
+        """
+        Returns:
+            embed: torch.Tensor of shape (*shape, dim).
+        """
+        idx = torch.full(shape, self.source_indices[source_name], dtype=torch.long)
+        return self.embedding(idx.to(self.embedding.weight.device))

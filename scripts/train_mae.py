@@ -46,7 +46,6 @@ def main(cfg: DictConfig):
     print("Train dataset size:", len(train_dataset))
     print("Validation dataset size:", len(val_dataset))
 
-    n_sources = train_dataset.get_n_sources()
     source_names = train_dataset.get_source_names()
     # Create the encoder and decoder
     encoder = instantiate(cfg["model"]["encoder"])
@@ -62,7 +61,7 @@ def main(cfg: DictConfig):
         lightning_module_class = get_class(cfg["lightning_module"]["_target_"])
         pl_module = lightning_module_class.load_from_checkpoint(
             checkpoint_path,
-            n_sources=n_sources,
+            source_names=source_names,
             encoder=encoder,
             decoder=decoder,
             cfg=cfg,
@@ -70,7 +69,7 @@ def main(cfg: DictConfig):
         )
     else:
         pl_module = instantiate(
-            cfg["lightning_module"], n_sources, encoder, decoder, cfg, output_convs=output_convs
+            cfg["lightning_module"], source_names, encoder, decoder, cfg, output_convs=output_convs
         )
 
     # Create the logger

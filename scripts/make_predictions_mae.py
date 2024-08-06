@@ -34,7 +34,6 @@ def main(cfg: DictConfig):
         (run_results_dir / "info.csv").unlink()
 
     # Instantiate the model and the lightning module
-    n_sources = val_dataset.get_n_sources()
     source_names = val_dataset.get_source_names()
     encoder = instantiate(exp_cfg["model"]["encoder"])
     decoder = instantiate(exp_cfg["model"]["decoder"])
@@ -47,7 +46,7 @@ def main(cfg: DictConfig):
 
     lightning_module_class = get_class(exp_cfg["lightning_module"]["_target_"])
     module = lightning_module_class.load_from_checkpoint(
-        checkpoint_path, n_sources=n_sources, encoder=encoder, decoder=decoder, cfg=exp_cfg,
+        checkpoint_path, n_sources=source_names, encoder=encoder, decoder=decoder, cfg=exp_cfg,
         output_convs=output_convs
     )
 
