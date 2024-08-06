@@ -40,9 +40,6 @@ tc-primed:
     GMI_GPM:
       S1:
         variables: ['TB_36.64H']
-    SSMI_F13:
-      S1:
-        variables: ['TB_37.0H']
     SSMIS_F16:
       S2:
         variables: ['TB_37.0H']

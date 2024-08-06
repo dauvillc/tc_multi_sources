@@ -28,6 +28,9 @@ tc-primed:
     AMSR2_GCOMW1:
       S5:
         variables: ['TB_A89.0V']
+    AMSRE_AQUA:
+      S5:
+        variables: ['TB_A89.0V']
     ATMS_NOAA20:
       S3:
         variables: ['TB_88.2QV']
@@ -56,8 +59,5 @@ tc-primed:
       S4:
         variables: ['TB_91.665V']
     SSMIS_F18:
-      S4:
-        variables: ['TB_91.665V']
-    SSMIS_F19:
       S4:
         variables: ['TB_91.665V']
