@@ -22,9 +22,9 @@ def main(cfg: DictConfig):
             cfg["paths"]["checkpoints"], resume_run_id
         )
         # For fields that define the experiment, use the values from the checkpoint
-        cfg['model'] = exp_cfg['model']
-        cfg['dataset'] = exp_cfg['dataset']
-        cfg['lightning_module'] = exp_cfg['lightning_module']
+        cfg["model"] = exp_cfg["model"]
+        cfg["dataset"] = exp_cfg["dataset"]
+        cfg["lightning_module"] = exp_cfg["lightning_module"]
         # The user can change fields from the checkpoint by setting them under the "change"
         # key (e.g. +change.lightning_module.masking_ratio=0.75)
         if "change" in cfg:
@@ -47,17 +47,31 @@ def main(cfg: DictConfig):
     print("Validation dataset size:", len(val_dataset))
 
     n_sources = train_dataset.get_n_sources()
+    source_names = train_dataset.get_source_names()
     # Create the encoder and decoder
     encoder = instantiate(cfg["model"]["encoder"])
     decoder = instantiate(cfg["model"]["decoder"])
+    output_convs = None
+    if "output_conv" in cfg["model"] and cfg["model"]["output_conv"]:
+        # Instantiate one output conv per source
+        output_convs = {
+            source: instantiate(cfg["model"]["output_conv"]) for source in source_names
+        }
     # Create the lightning module
     if resume_run_id:
         lightning_module_class = get_class(cfg["lightning_module"]["_target_"])
         pl_module = lightning_module_class.load_from_checkpoint(
-            checkpoint_path, n_sources=n_sources, encoder=encoder, decoder=decoder, cfg=cfg
+            checkpoint_path,
+            n_sources=n_sources,
+            encoder=encoder,
+            decoder=decoder,
+            cfg=cfg,
+            output_convs=output_convs,
         )
     else:
-        pl_module = instantiate(cfg["lightning_module"], n_sources, encoder, decoder, cfg)
+        pl_module = instantiate(
+            cfg["lightning_module"], n_sources, encoder, decoder, cfg, output_convs=output_convs
+        )
 
     # Create the logger
     logger = WandbLogger(dir=cfg["paths"]["wandb_logs"], log_model=False)

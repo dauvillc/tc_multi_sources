@@ -2,9 +2,6 @@
 Implements the Source class.
 """
 
-import yaml
-import os
-
 
 class Source:
     """Represents a source of data, which could be 2D, 1D or 0D (scalar), not accounting for the
@@ -25,15 +22,6 @@ class Source:
         self.dims = dims
         self.variables = variables
         self.env_vars = env_vars
-
-    def get_path(self):
-        """Returns the path to the root directory of the source."""
-        # Load the paths config file to get the sources directory
-        with open("conf/paths/paths.yaml", "r") as file:
-            paths = yaml.safe_load(file)
-        # The path within the root dir is just the name of the source,
-        # where dots are replaced by slashes.
-        return os.path.join(paths["sources"], self.name.replace(".", "/"))
 
     def n_variables(self):
         """Returns the number of variables in the source."""

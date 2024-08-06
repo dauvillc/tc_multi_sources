@@ -21,7 +21,7 @@
 # 
 # The datasets will look for source S.subclass in the directory 'data/sources/S/subclass'.
 #
-tc_primed:
+tc-primed:
   n_dimensions: 2
   microwave:
     environment_variables: ['latitude', 'longitude']

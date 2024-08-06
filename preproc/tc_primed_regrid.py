@@ -58,7 +58,7 @@ def process_swath(sensat, swath, files, dest_path, cfg, use_cache=True, verbose=
     """
     sat, sensor = sensat.split("_")
     print(f"{sensat}: processing swath {swath}")
-    # Create the destination directory dest_path/under microwave/SENSOR.SATELLITE/swath/
+    # Create the destination directory dest_path/under microwave/SAT/SENSOR/swath/
     dest_swath_dir = dest_path / "microwave" / sat / sensor / swath
     dest_swath_dir.mkdir(parents=True, exist_ok=True)
     # If requested in the config, use only a sample of the files for computing the normalization
@@ -256,7 +256,7 @@ def process_storm(
                 # as a numpy file
                 # The numpy array should be stacked in the following order:
                 # latitude, longitude, land_mask, dist_to_center, band1, band2, ..., bandN
-                full_source_name = f"tc_primed.microwave.{sensat}.{swath}"
+                full_source_name = f"tc-primed_microwave_{sensat}_{swath}"
                 dest_file = (
                     storm_dest_dir / f"{time.strftime('%Y%m%d%H%M%S')}-{full_source_name}.npy"
                 )

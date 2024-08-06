@@ -27,7 +27,7 @@ def _get_leaf_subsources(source_dict, path="", previous_vars=[], previous_env_va
         returned_dict.update(
             _get_leaf_subsources(
                 source_dict[subsource_key],
-                path + "." + subsource_key,  # source.subsource. ... .lastsubsource
+                path + "_" + subsource_key,  # source_subsource_ ... _lastsubsource
                 previous_vars + source_dict.get("variables", []),
                 previous_env_vars + source_dict.get("environment_variables", []),
                 source_dict.get("n_dimensions", dim),
@@ -49,7 +49,7 @@ def read_sources(sources_dict):
     # The following function will return a dictionary with the following structure:
     # {source_subsource. ... _lastsubsource: vars, env_vars, dim}
     sources = _get_leaf_subsources(sources_dict)
-    # Rename the starting dot at the start of the source names
+    # Remove the starting dot at the start of the source names
     sources = {key[1:]: value for key, value in sources.items()}
     # Create a list of Source objects from the dictionary
     source_list = []

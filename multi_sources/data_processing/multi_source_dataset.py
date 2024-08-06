@@ -125,7 +125,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
             .rename("avail_source")
             .reset_index()
         )
-        avail["avail_frac"] = avail["avail_source"] / self.get_n_sources()
+        avail["avail_frac"] = avail["avail_source"] / self._get_n_sources()
         # - Keep only the storm/time pairs for which at least min_available_sources_prop sources
         # are available
         avail = avail[avail["avail_frac"] >= min_available_sources_prop]
@@ -239,7 +239,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
             if self.single_channel_sources:
                 a, s, dt, c, d, v = source_output
                 for i, var in enumerate(self.source_variables[source_name]):
-                    output[f"{source_name}.{var}"] = (
+                    output[f"{source_name}_{var}"] = (
                             a, s, dt, c, d, v[i:i+1])
             else:
                 output[source_name] = source_output
@@ -264,9 +264,24 @@ class MultiSourceDataset(torch.utils.data.Dataset):
     def __len__(self):
         return len(self.samples_df)
 
+    def _get_source_names(self):
+        """Returns a list of the source names (before splitting the sources)."""
+        return self.source_names
+
+    def _get_n_sources(self):
+        """Returns the number of original sources (before splitting the sources)."""
+        return len(self.source_names)
+
     def get_source_names(self):
         """Returns a list of the source names."""
+        if self.single_channel_sources:
+            return [f"{source_name}_{var}" for source_name in self.source_names
+                    for var in self.source_variables[source_name]]
         return self.source_names
+
+    def get_n_sources(self):
+        """Returns the number of sources."""
+        return len(self.get_source_names())
 
     def get_source_variables(self):
         """Returns a dict {source_name: [variable_name]}."""
@@ -277,10 +292,6 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         if source_name is not None:
             return len(self.source_variables[source_name])
         return {source.name: len(source.variables) for source in self.sources}
-
-    def get_n_sources(self):
-        """Returns the number of sources."""
-        return len(self.source_names)
 
     def get_source_sizes(self):
         """Returns a dict {source_name: (H, W)}."""

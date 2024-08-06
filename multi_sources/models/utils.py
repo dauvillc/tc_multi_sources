@@ -2,6 +2,7 @@
 
 import torch
 import torch.nn.functional as F
+from omegaconf import DictConfig
 
 
 def pair(x):
@@ -9,6 +10,16 @@ def pair(x):
     if isinstance(x, tuple):
         return x
     return (x, x)
+
+
+def remove_dots(strs):
+    """Replaces dots in a list of strings or dicts with underscores."""
+    if isinstance(strs, str):
+        return strs.replace('.', '_')
+    if isinstance(strs, list):
+        return [s.replace('.', '_') for s in strs]
+    if isinstance(strs, dict) or isinstance(strs, DictConfig):
+        return {k.replace('.', '_'): v for k, v in strs.items()}
 
 
 def pad_to_next_multiple_of(tensor, multiple_of, **kwargs):

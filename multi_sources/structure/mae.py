@@ -8,7 +8,7 @@ import torch.nn as nn
 from multi_sources.utils.scheduler import CosineAnnealingWarmupRestarts
 from multi_sources.utils.image_processing import img_to_patches, pad_to_next_multiple_of, pair
 from multi_sources.utils.image_processing import patches_to_img
-from multi_sources.models.utils import normalize_coords_across_sources
+from multi_sources.models.utils import normalize_coords_across_sources, remove_dots
 from multi_sources.models.embedding_layers import LinearEmbedding, SourceEmbedding
 
 
@@ -44,6 +44,7 @@ class MultisourceMAE(pl.LightningModule):
         adamw_kwargs,
         lr_scheduler_kwargs,
         loss_max_distance_from_center,
+        output_convs=None,
         metrics={},
     ):
         """
@@ -64,6 +65,8 @@ class MultisourceMAE(pl.LightningModule):
                 in the loss computation.
             metrics (dict of str: callable): The metrics to compute during training and validation.
                 A metric should have the signature metric(y_pred, y_true) -> torch.Tensor.
+            output_convs (dict of str to nn.Module, optional): Map from source name to
+                a convolutional layer to apply to the output of the model.
         """
         super().__init__()
         self.n_sources = n_sources
@@ -96,6 +99,11 @@ class MultisourceMAE(pl.LightningModule):
 
         # Projection of the predicted values to the original space
         self.output_proj = nn.Linear(self.pixels_dim, in_dim)
+
+        self.output_convs = None
+        if output_convs is not None:
+            # Keys in nn.ModuleDict must not contain dots, so we replace them with _
+            self.output_convs = nn.ModuleDict(remove_dots(output_convs))
 
         # learnable [MASK] token
         self.mask_token = nn.Parameter(torch.randn(1, 1, self.pixels_dim))
@@ -242,12 +250,14 @@ class MultisourceMAE(pl.LightningModule):
             decoder_x.append((s, dt, c, lm, y, m.float()))
         return decoder_x
 
-    def forward(self, x):
+    def forward(self, x, padded_shapes):
         """Computes the forward pass of the model.
         Returns:
             pred (dict of str to tensor): The predicted values.
             masked_tokens_indices (dict of str to tensor): The indices of the masked tokens, in
                 a random order.
+            padded_shapes (dict of str to tuple of int): The shapes of the images after padding
+                before tokenization.
         """
         x = self.embed(x)
         encoder_x, token_perms, n_tokens, masked_tokens_indices = self.to_encoder_input(x)
@@ -258,13 +268,27 @@ class MultisourceMAE(pl.LightningModule):
         pred = [self.output_proj(p) for p in pred]
         # Rebuild a map {source_name: pred} from the list of predictions
         pred = {source: v for source, v in zip(x.keys(), pred)}
+        # If an output convolutional layer is specified, apply it
+        if self.output_convs is not None:
+            # Convert the predictions back to images, apply the convolutional layer,
+            # and convert them back to patches
+            for source, v in pred.items():
+                pH, pW = padded_shapes[source]
+                v = patches_to_img(v, pH, pW, self.patch_size)
+                v = self.output_convs[remove_dots(source)](v)
+                v = img_to_patches(v, self.patch_size)
+                pred[source] = v
         return pred, masked_tokens_indices
 
     def step(self, batch, batch_idx, train_or_val):
         """Defines a training or validation step for the model."""
         batch = self.preproc_input(batch)
+        # Save the shapes of the padded tensors to reconstruct the images
+        padded_shapes = {source: x[2].shape[-2:] for source, x in batch.items()}
+
         x = self.tokenize(batch)
-        pred, masked_tokens_indices = self.forward(x)
+        pred, masked_tokens_indices = self.forward(x, padded_shapes)
+
         # Compute and log the loss
         loss = self.loss_fn(pred, x, masked_tokens_indices)
 
@@ -322,7 +346,7 @@ class MultisourceMAE(pl.LightningModule):
         # Save the shapes of the padded tensors to reconstruct the images
         padded_shapes = {source: x[2].shape[-2:] for source, x in batch.items()}
         x = self.tokenize(batch)
-        pred, masked_tokens_indices = self.forward(x)
+        pred, masked_tokens_indices = self.forward(x, padded_shapes)
         output = {}
         for source, (_, _, _, _, _, v, _) in x.items():
             if self.unmasked_tokens_use_groundtruth:
@@ -360,7 +384,7 @@ class MultisourceMAE(pl.LightningModule):
                 {"params": [v for k, v in self.named_parameters() if k in decay_params]},
                 {
                     "params": [v for k, v in self.named_parameters() if k not in decay_params],
-                    "weight_decay": decay
+                    "weight_decay": decay,
                 },
             ],
             **self.adamw_kwargs,
