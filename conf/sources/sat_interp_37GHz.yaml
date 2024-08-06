@@ -28,9 +28,21 @@ tc-primed:
     AMSR2_GCOMW1:
       S4:
         variables: ['TB_36.5H']
+    AMSRE_AQUA:
+      S4:
+        variables: ['TB_36.5V', 'TB_36.5H']
     ATMS_NPP:
       S2:
         variables: ['TB_31.4QV']
+    ATMS_NOAA20:
+      S2:
+        variables: ['TB_31.4QV']
+    GMI_GPM:
+      S1:
+        variables: ['TB_36.64H']
+    SSMI_F13:
+      S1:
+        variables: ['TB_37.0H']
     SSMIS_F16:
       S2:
         variables: ['TB_37.0H']
@@ -40,4 +52,7 @@ tc-primed:
     SSMIS_F18:
       S2:
         variables: ['TB_37.0H']
+    TMI_TRMM:
+      S2:
+        variables: ['TB_37.0H', 'TB_37.0V']
 
