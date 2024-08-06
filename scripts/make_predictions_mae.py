@@ -1,6 +1,5 @@
 import lightning.pytorch as pl
 import hydra
-import torch
 from torch.utils.data import DataLoader
 from pathlib import Path
 from hydra.utils import get_class, instantiate
@@ -36,11 +35,20 @@ def main(cfg: DictConfig):
 
     # Instantiate the model and the lightning module
     n_sources = val_dataset.get_n_sources()
+    source_names = val_dataset.get_source_names()
     encoder = instantiate(exp_cfg["model"]["encoder"])
     decoder = instantiate(exp_cfg["model"]["decoder"])
+    output_convs = None
+    if "output_conv" in exp_cfg["model"] and exp_cfg["model"]["output_conv"]:
+        # Instantiate one output conv per source
+        output_convs = {
+            source: instantiate(exp_cfg["model"]["output_conv"]) for source in source_names
+        }
+
     lightning_module_class = get_class(exp_cfg["lightning_module"]["_target_"])
     module = lightning_module_class.load_from_checkpoint(
-        checkpoint_path, n_sources=n_sources, encoder=encoder, decoder=decoder, cfg=exp_cfg
+        checkpoint_path, n_sources=n_sources, encoder=encoder, decoder=decoder, cfg=exp_cfg,
+        output_convs=output_convs
     )
 
     # If we are saving the attention maps, wrap the decoder with the AttentionRecorder class
