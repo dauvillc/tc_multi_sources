@@ -54,5 +54,5 @@ tc-primed:
         variables: ['TB_37.0H']
     TMI_TRMM:
       S2:
-        variables: ['TB_37.0H', 'TB_37.0V']
+        variables: ['TB_37.0H']
 
