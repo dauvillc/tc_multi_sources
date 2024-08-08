@@ -4,11 +4,9 @@ raw_datasets: ${oc.env:WORK}/data/multi_sources/raw/
 preprocessed_dataset: ${oc.env:NEWSCRATCH}/data/multi_sources/preprocessed_regridded/
 # Path the intermediary preprocessing data (specific to each source, such
 # as the normalization constants) 
-sources: "/gpfswork/rech/xyw/ute68qj/data/multi_sources/sources/"
+sources: ${oc.env:WORK}/data/multi_sources/sources/"
 # Path to the metadata regarding the preprocessed dataset
 metadata: ${oc.env:NEWSCRATCH}/data/multi_sources/preprocessed_regridded/metadata.json
-# Path to a tmp directory for scripts
-tmp_dir: "~/scratch/tmp"
 # Checkpoints directory
 checkpoints: ${oc.env:NEWSCRATCH}/checkpoints/
 # Weights and Biases logs
