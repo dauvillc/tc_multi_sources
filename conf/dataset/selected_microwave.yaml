@@ -1,7 +1,0 @@
-# kwargs of MultiSourceDataset, except include_seasons and exclude_seasons
-# Maximum number of hours between the sample synoptic time
-# and an observation included within the sample.
-dt_max: 24
-# Minimum proportion of the sources that must be available at a given (synoptic time, storm)
-# for the sample to be yielded by the dataset.
-min_available_sources_prop: 0.85

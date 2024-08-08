@@ -1,0 +1,11 @@
+_target_: multi_sources.models.general_backbone.GeneralBackbone
+inner_channels: 4
+n_blocks: 1
+values_conv_attention:
+  layer_class:
+    _target_: hydra.utils.get_class
+    path: multi_sources.models.multisource_attention.MultisourceSelfAttBlock
+  use_coordinates_attention: True
+  patch_size: 16
+  embedding_dim: 256
+  num_heads: 4

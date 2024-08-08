@@ -1,0 +1,11 @@
+_target_: multi_sources.models.encoder_decoder_transformer.EncoderDecoderTransformer
+inner_channels: 8
+n_blocks: 1
+values_conv_attention:
+  layer_class:
+    _target_: hydra.utils.get_class
+    path: multi_sources.models.multisource_attention.MultisourceAttBlock
+  use_coordinates_attention: True
+  patch_size: 16
+  embedding_dim: 1024
+  num_heads: 8

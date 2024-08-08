@@ -6,7 +6,13 @@ defaults:
   - override /sources: amsr2_5freqs
 
 wandb:
-  name: amsr2
+  name: test
+
+dataset:
+  train:
+    reference_times_interval: 3
+    dt_max: 24
+    min_available_sources_prop: 1.0
 
 dataloader:
   batch_size: 16

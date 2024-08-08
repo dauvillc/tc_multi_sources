@@ -2,7 +2,7 @@ defaults:
   - paths: local
   - wandb: default
   - sources: amsr2_5freqs
-  - dataset: full_set
+  - dataset: default
   - dataloader: local
   - lightning_module: mae
   - model: general_backbone
