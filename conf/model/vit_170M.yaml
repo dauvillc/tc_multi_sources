@@ -36,9 +36,4 @@ decoder:
         path: multi_sources.models.small_layers.FeedForward
       inner_dim: 1024
 
-output_conv:
-  _target_: multi_sources.models.conv.ResNet
-  channels: 1
-  inner_channels: 8
-  n_blocks: 4
-  kernel_size: 3
+output_conv: null

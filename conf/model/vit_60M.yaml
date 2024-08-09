@@ -35,10 +35,3 @@ decoder:
         _target_: hydra.utils.get_class
         path: multi_sources.models.small_layers.FeedForward
       inner_dim: 512
-
-output_conv:
-  _target_: multi_sources.models.conv.ResNet
-  channels: 1
-  inner_channels: 16
-  n_blocks: 3
-  kernel_size: 3
