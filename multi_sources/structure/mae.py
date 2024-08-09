@@ -96,7 +96,7 @@ class MultisourceMAE(pl.LightningModule):
         # the pixel and coord embeddings
         self.source_to_pixel_embedding = SourceEmbedding(source_names, pixels_dim)
         self.source_to_coord_embedding = SourceEmbedding(source_names, coords_dim)
-        
+
         self.pixels_norm = nn.LayerNorm(pixels_dim)
         self.coords_norm = nn.LayerNorm(coords_dim)
 
