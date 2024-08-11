@@ -18,12 +18,19 @@ def main(cfg: DictConfig):
     exp_cfg, checkpoint_path = load_experiment_cfg_from_checkpoint(
         cfg["paths"]["checkpoints"], run_id
     )
+    # For some fields, we'll use the values from the config file instead of the ones from the
+    # experiment
+    exp_cfg["dataloader"].update(cfg["dataloader"])
+    exp_cfg["paths"].update(cfg["paths"])
     # Seed everything with the seed used in the experiment
     pl.seed_everything(exp_cfg["seed"], workers=True)
 
     # Create the validation dataset and dataloader
-    val_dataset = hydra.utils.instantiate(exp_cfg["dataset"]["val"], _convert_="partial")
-    exp_cfg["dataloader"].update(cfg["dataloader"])
+    val_dataset = hydra.utils.instantiate(
+        exp_cfg["dataset"]["val"],
+        metadata_path=cfg["paths"]["metadata"],
+        dataset_dir=cfg["paths"]["preprocessed_dataset"],
+    )
     val_dataloader = DataLoader(val_dataset, **exp_cfg["dataloader"])
     print("Validation dataset size:", len(val_dataset))
 
@@ -46,8 +53,12 @@ def main(cfg: DictConfig):
 
     lightning_module_class = get_class(exp_cfg["lightning_module"]["_target_"])
     module = lightning_module_class.load_from_checkpoint(
-        checkpoint_path, n_sources=source_names, encoder=encoder, decoder=decoder, cfg=exp_cfg,
-        output_convs=output_convs
+        checkpoint_path,
+        n_sources=source_names,
+        encoder=encoder,
+        decoder=decoder,
+        cfg=exp_cfg,
+        output_convs=output_convs,
     )
 
     # If we are saving the attention maps, wrap the decoder with the AttentionRecorder class
