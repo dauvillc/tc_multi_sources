@@ -11,7 +11,7 @@ wandb:
 
 dataset:
   train:
-    reference_time_intervals: 6
+    reference_times_interval: 6
     dt_max: 24
     min_available_sources_prop: 0.16
 
