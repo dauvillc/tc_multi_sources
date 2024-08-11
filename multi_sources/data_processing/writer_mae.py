@@ -9,7 +9,7 @@ from lightning.pytorch.callbacks import BasePredictionWriter
 class MultiSourceWriter(BasePredictionWriter):
     """Can be used as callback to a Lightning Trainer to write to disk the predictions of a model
     such that:
-    - The targets are of the form {source_name: (s, dt, c, d, lm, v, m)}
+    - The targets are of the form {source_name: (dt, c, d, lm, v, m)}
         where v are the values to predict.
     - The outputs are of the form {source_name: v'} where v' are the predicted values.
         A source may not be included in the outputs.
@@ -42,9 +42,9 @@ class MultiSourceWriter(BasePredictionWriter):
         batch, pred = prediction
         # We'll write to the info file in append mode
         info_file = self.root_dir / "info.csv"
-        # An item in the batch is of the form {source_name: (s, dt, c, d, lm, v, m)}
+        # An item in the batch is of the form {source_name: (dt, c, d, lm, v, m)}
         # We're interested in c (lat/lon) and v (values to predict)
-        for source_name, (_, _, c, _, _, v, _) in batch.items():
+        for source_name, (dt, c, _, _, v, _) in batch.items():
             target_dir = self.targets_dir / source_name
             target_dir.mkdir(parents=True, exist_ok=True)
             targets = v.detach().cpu().numpy()
@@ -59,12 +59,11 @@ class MultiSourceWriter(BasePredictionWriter):
             # The output will be saved
             np.save(output_dir / f"{batch_idx}.npy", outputs)
 
-            s, dt = batch[source_name][:2]
             batch_size = latlon.shape[0]
             info_df = pd.DataFrame(
                 {
                     "source_name": [source_name] * batch_size,
-                    "batch_idx": batch_idx,
+                    "batch_idx": [batch_idx] * batch_size,
                     "dt": dt.detach().cpu().numpy(),
                 },
             )
