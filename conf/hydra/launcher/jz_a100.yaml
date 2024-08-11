@@ -11,4 +11,4 @@ additional_parameters:
   hint: nomultithread
 setup:
   - source ${oc.env:HOME}/.bash_profile
-  - conda activate tc
+  - a100
