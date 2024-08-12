@@ -11,10 +11,10 @@ def list_tc_primed_sources(tc_primed_path, exclude_years=None):
         exclude_years (list of int, optional): List of years to exclude from the search.
 
     Returns:
-        sen_sat_pairs (list of str): List of strings {sensor}.{satellite}.
-        sen_sat_files (dict of str: list of Path): Dictionary mapping each {sensor}.{satellite}
+        sen_sat_pairs (list of str): List of strings {sensor}_{satellite}.
+        sen_sat_files (dict of str: list of Path): Dictionary mapping each {sensor}_{satellite}
             to the list of corresponding source files.
-        sen_sat_swaths (dict of str: list of str): Dictionary mapping each {sensor}.{satellite}
+        sen_sat_swaths (dict of str: list of str): Dictionary mapping each {sensor}_{satellite}
             to the list of corresponding swaths.
     """
     storm_files = list_tc_primed_storm_files(tc_primed_path, exclude_years)
@@ -37,9 +37,9 @@ def list_tc_primed_sources(tc_primed_path, exclude_years=None):
         # If the satellite is GPM or TRMM, we'll also retrieve the radar-radiometer
         # data and consider them as swaths
         if "GPM" in sensat:
-            swaths.extend(['KuGMI'])
+            swaths.extend(["KuGMI"])
         elif "TRMM" in sensat:
-            swaths.extend(['KuTMI'])
+            swaths.extend(["KuTMI"])
         sen_sat_swaths[sensat] = swaths
     return sen_sat_pairs, sen_sat_files, sen_sat_swaths
 
@@ -64,7 +64,9 @@ def list_tc_primed_storm_files(tc_primed_path, exclude_years=None):
             continue
         for basin in year.iterdir():
             for number in basin.iterdir():
-                storm_files[(year.stem, basin.stem, number.stem)] = list(number.iterdir())
+                storm_files[(year.stem, basin.stem, number.stem)] = list(
+                    number.iterdir()
+                )
     # The filenames are formatted as:
     # - TCPRIMED_VERSION_BASINNUMBERYEAR_SENSOR_SATELLITE_IMGNUMBER_YYYYMMDDHHmmSS.nc
     #   for the overpass files;
