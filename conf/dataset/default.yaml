@@ -1,6 +1,6 @@
 # Train dataset
 train:
-  _target_: multi_sources.data_processing.multi_source_dataset.MultiSourceDataset
+  _target_: multi_sources.data_processing.new_dataset.MultiSourceDataset
   metadata_path: ${paths.metadata}
   dataset_dir: ${paths.preprocessed_dataset}
   sources:

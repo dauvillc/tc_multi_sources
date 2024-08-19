@@ -27,6 +27,7 @@ _METADATA_COL_ORDER_ = [
     "basin",
     "cyclone_number",
     "source_name",
+    "source_type",
     "dim",
     "data_vars",
 ]
@@ -274,6 +275,7 @@ def process_storm(
                         "source_name": [full_source_name],
                         "dim": ["2D"],
                         "data_vars": [None],
+                        "source_type": [group],
                     }
                 )
                 # Add the list of data variables to the metadata, so that we'll be

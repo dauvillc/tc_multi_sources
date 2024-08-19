@@ -1,26 +1,14 @@
 """Implements small utility functions for data processing."""
 
-from multi_sources.data_processing.source import Source
 
-
-def _get_leaf_subsources(source_dict, path="", previous_vars=[], previous_env_vars=[], dim=0):
+def _get_leaf_subsources(source_dict, path="", previous_vars=[]):
     """Returns the leaf subsources of a source dictionary."""
     # Recursivity stop condition: if no subsource key is found, return the source
-    # with its vars, env_vars, dim, as well as the previous vars and env_vars. Replace
+    # with its varables as well as the previous ones. Replace
     # the dim key if it is already present.
-    subsource_keys = [
-        key
-        for key in source_dict.keys()
-        if key not in ["variables", "environment_variables", "n_dimensions"]
-    ]
+    subsource_keys = [key for key in source_dict.keys() if key != "variables"]
     if not subsource_keys:
-        return {
-            path: (
-                previous_vars + source_dict.get("variables", []),
-                previous_env_vars + source_dict.get("environment_variables", []),
-                source_dict.get("n_dimensions", dim),
-            )
-        }
+        return {path: (previous_vars + source_dict.get("variables", []))}
     # If there are subsource keys, call the function recursively on each subsource.
     returned_dict = {}
     for subsource_key in subsource_keys:
@@ -29,30 +17,40 @@ def _get_leaf_subsources(source_dict, path="", previous_vars=[], previous_env_va
                 source_dict[subsource_key],
                 path + "_" + subsource_key,  # source_subsource_ ... _lastsubsource
                 previous_vars + source_dict.get("variables", []),
-                previous_env_vars + source_dict.get("environment_variables", []),
-                source_dict.get("n_dimensions", dim),
             )
         )
     return returned_dict
 
 
-def read_sources(sources_dict):
-    """Reads the source dictionary and returns the content as a dictionary.
-
+def read_variables_dict(variables_dict):
+    """Reads the variables dictionary that specifies which variables should be
+    included from which source.
     Args:
-        sources_dict (:obj:`dict`): Sources configuration dictionary.
-
+        variables_dict: dictionary with the following structure:
+            {
+                "source1": {
+                    "subsource1": {
+                        "variables": ["var1", "var2", ...],
+                        "subsource2": {
+                            "variables": ["var3", "var4", ...],
+                            ...
+                        },
+                        ...
+                    },
+                    ...
+                },
+                "source2": {
+                    ...
+                },
+                ...
+            }
     Returns:
-        sources (:obj:`list` of :obj:`multi_sources.data_processing.source.Source`):
-            List of sources.
+        A dictionary with the following structure:
+            {
+                "source1_subsource1_subsource2_..._lastsubsource": ["var1", "var2", ...],
+                ...
+            }
     """
-    # The following function will return a dictionary with the following structure:
-    # {source_subsource. ... _lastsubsource: vars, env_vars, dim}
-    sources = _get_leaf_subsources(sources_dict)
-    # Remove the starting dot at the start of the source names
-    sources = {key[1:]: value for key, value in sources.items()}
-    # Create a list of Source objects from the dictionary
-    source_list = []
-    for name, (vars, env_vars, dim) in sources.items():
-        source_list.append(Source(name, dim, vars, env_vars))
-    return source_list
+    result = _get_leaf_subsources(variables_dict)
+    # Remove the initial '_' at the beginning of each source key.
+    return {key[1:]: value for key, value in result.items()}

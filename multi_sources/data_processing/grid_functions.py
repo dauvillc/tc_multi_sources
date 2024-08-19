@@ -2,6 +2,8 @@
 
 import xarray as xr
 import warnings
+import numpy as np
+from haversine import haversine_vector
 from numpy import nan as NA
 from math import ceil
 from pyresample.kd_tree import resample_nearest
@@ -80,27 +82,24 @@ def regrid(ds, target_resolution_km, target_area):
         target_area (tuple of float): Tuple (d_lon, d_lat) representing the size of the
             target area in degrees.
     """
-    # A radius of influence of 60 km is enough to avoid any issues at the swath edges.
-    # See: https://rammb-data.cira.colostate.edu/tcprimed/TCPRIMED_v01r00_documentation.pdf
-    # The coarsest resolution found in TC-PRIMED is 52.8 km.
-    radius_of_influence = 60000.0
     # Reformat the coordinates to suit pyresample
     lon, lat = check_and_wrap(ds.longitude.values, ds.latitude.values)
     # Define the swath
     swath = SwathDefinition(lons=lon, lats=lat)
+    radius_of_influence = 100000  # 100 km
     # Retrieve the size of the dataset
     sizes = ds.sizes
     size_scan, size_pixel = sizes["scan"], sizes["pixel"]
     # Compute the target resolution in degrees
     target_resolution = (target_resolution_km[0] / 111.32, target_resolution_km[1] / 111.32)
     # Compute the target area's central coordinates
-    central_lat = ds.latitude[size_scan // 2, size_pixel // 2].values
-    central_lon = ds.longitude[size_scan // 2, size_pixel // 2].values
+    central_lat = lat[size_scan // 2, size_pixel // 2]
+    central_lon = lon[size_scan // 2, size_pixel // 2]
     # Define the Mercator projection
     proj_id = "mercator"
     proj_dict = {
         "proj": "merc",
-        "lon_0": 0,
+        "lon_0": central_lon,
         "R": EARTH_RADIUS,
         "units": "m",
     }
@@ -131,6 +130,10 @@ def regrid(ds, target_resolution_km, target_area):
         radius_of_influence=radius_of_influence,
         fill_value=float("nan"),
     )
+    if np.isnan(stacked).all(axis=(0, 1)).any():
+        raise ValueError("Found fully NaN values in the regridded dataset. This is likely due \
+to a misaligned target area or a too small radius of influence.")
+
     result = {var: (("lat", "lon"), stacked[..., i]) for i, var in enumerate(variables)}
     # Add the latitude and longitude variables as coordinates
     lons, lats = target_area.get_lonlats()
@@ -141,3 +144,21 @@ def regrid(ds, target_resolution_km, target_area):
     # Rebuild the dataset
     result = xr.Dataset(result, coords=coords)
     return result
+
+
+def grid_distance_to_point(grid_lat, grid_lon, lat, lon):
+    """Computes the distance between a point and all points of a grid.
+    Args:
+        grid_lat (numpy.ndarray): The latitude grid, of shape (H, W).
+        grid_lon (numpy.ndarray): The longitude grid, of shape (H, W).
+        lat (float): The latitude of the point.
+        lon (float): The longitude of the point.
+    Returns:
+        numpy.ndarray: array of shape (H, W) containing the distances between
+            the point and all points of the grid.
+    """
+    # Stack the latitude and longitude grids
+    grid_latlon = np.stack([grid_lat, grid_lon], axis=-1)  # (H, W, 2)
+    # Haversine expects an array of shape (N_points, 2)
+    grid_latlon = grid_latlon.reshape(-1, 2)  # (H * W, 2)
+    return haversine_vector([(lat, lon)], grid_latlon, comb=True).reshape(grid_lat.shape)

@@ -1,8 +1,14 @@
 defaults:
   - paths: local
-  - sources: test_multiple_channels
-  - dataset: full_set
-  - dataloader: local
+  - dataset: default
+  - sources: new_sat_interp_37GHz
   - _self_
 
-seed: 42
+
+dataset:
+  train:
+    reference_times_interval: 6
+    dt_max: 24
+    min_available_sources_prop: 0.5
+
+
