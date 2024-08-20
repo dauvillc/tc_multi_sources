@@ -1,7 +1,7 @@
 defaults:
   - paths: local
   - dataset: default
-  - sources: new_sat_interp_37GHz
+  - sources: sat_interp_37GHz
   - _self_
 
 

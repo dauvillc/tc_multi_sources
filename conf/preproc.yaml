@@ -2,15 +2,10 @@ defaults:
   - _self_
   - paths: jz
 
-val_seasons: [2014, 2017]
-test_seasons: [2020, 2021]
 # Target resolution to which the images will be regridded, in km.
 # Give a list [longitude_res, latitude_res]
 target_resolution_km: [15.0, 15.0]
-# Minimum 10m 1-min average sustained wind speed, in knots,
-# for a sample to be included in the preprocessed data.
-min_intensity_knots: 35
-# Boolean: whether to include samples where the storm is over land.
-# A potential reason to remove those is since land reflects microwaves
-# more than the storm itself, which makes the storm invisible over land.
-include_obs_over_land: true
+
+# Seed for the train-val-test splitting
+splitting_seed: 42
+train_val_test_fraction: [0.8, 0.1, 0.1]

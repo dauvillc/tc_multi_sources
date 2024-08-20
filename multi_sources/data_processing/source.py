@@ -26,7 +26,7 @@ class Source:
         self.name = source_name
         self.dim = dim
         self.shape = shape
-        self.source_type = source_type
+        self.type = source_type
         self.data_vars = data_vars
         self.context_vars = context_vars
 

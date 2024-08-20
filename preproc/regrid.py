@@ -66,7 +66,7 @@ def process_sample(sample, average_area, target_resolution, dest_dir):
     """
     Processes a single sample.
     """
-    sample_path = sample['data_path']
+    sample_path = sample["data_path"]
     with xr.open_dataset(sample_path) as ds:
         # The regridding function expects (lon, lat) instead of (lat, lon).
         target_resolution = target_resolution[::-1]
@@ -83,21 +83,21 @@ def process_sample(sample, average_area, target_resolution, dest_dir):
         )
         ds["land_mask"] = (("lat", "lon"), land_mask)
         # Compute the distance between each grid point and the center of the storm.
-        storm_lat = sample['storm_latitude']
-        storm_lon = sample['storm_longitude']
+        storm_lat = sample["storm_latitude"]
+        storm_lon = sample["storm_longitude"]
         dist_to_center = grid_distance_to_point(
             ds["latitude"].values,
             ds["longitude"].values,
             storm_lat,
             storm_lon,
         )
-        ds['dist_to_center'] = (("lat", "lon"), dist_to_center)
+        ds["dist_to_center"] = (("lat", "lon"), dist_to_center)
         # Save the regridded sample as netCDF file.
         dest_file = dest_dir / f"{Path(sample_path).stem}.nc"
         ds.to_netcdf(dest_file)
 
         # Return the spatial shape (H, W) of the regridded sample.
-        return ds['latitude'].shape[-2:]
+        return ds["latitude"].shape[-2:]
 
 
 def regrid_source(source_dir, regridded_dir, average_area, target_resolution, num_workers=0):
@@ -146,13 +146,8 @@ def regrid_source(source_dir, regridded_dir, average_area, target_resolution, nu
         lines=True,
         default_handler=str,
     )
-    # Finally, we'll copy the source metadata to the regridded source directory,
-    # and add the "shape" field to it, with the spatial shape of the regridded samples.
-    with open(source_dir / "source_metadata.json", "r") as f:
-        source_metadata = json.load(f)
-    source_metadata["shape"] = img_shape
-    with open(regridded_source_dir / "source_metadata.json", "w") as f:
-        json.dump(source_metadata, f)
+    # Finally, we'll return the shape of the regridded samples.
+    return img_shape
 
 
 @hydra.main(config_path="../conf/", config_name="preproc", version_base=None)
@@ -160,12 +155,14 @@ def main(cfg):
     cfg = OmegaConf.to_container(cfg, resolve=True)
     num_workers = 0 if "num_workers" not in cfg else cfg["num_workers"]
     use_cache = False if "use_cache" not in cfg else cfg["use_cache"]
+    # Path to the preprocessed dataset directory.
+    preprocessed_dir = Path(cfg["paths"]["preprocessed_dataset"])
     # Path to the prepared dataset (output of the first step)
-    prepared_dir = Path(cfg["paths"]["prepared_dataset"])
+    prepared_dir = preprocessed_dir / "prepared"
     # Path to the regridded dataset (output of this step)
-    regridded_dir = Path(cfg["paths"]["preprocessed_dataset"])
+    regridded_dir = preprocessed_dir / "regridded"
     # Path to the constants, where the average areas will be stored.
-    constants_dir = Path(cfg["paths"]["constants"])
+    constants_dir = preprocessed_dir / "constants"
 
     # The prepared data directory contains one sub-directory per source.
     # Each sub-directory contains samples_metadata.json, source_metadata.json,
@@ -192,13 +189,25 @@ def main(cfg):
         with open(average_area_path, "w") as f:
             json.dump({"average_area": average_areas[source_dir.name]}, f)
 
-    # - Regrid each source.
+    # - Regrid each source and get the shape of the regridded samples.
+    # After regridding a source, load its source_metadata.json file in the
+    # regridded dir and save it into a common sources_metadata dict.
+    sources_metadata = {}
     for source_dir in source_dirs:
-        print(f"Regridding source {source_dir.name}")
-        average_area = average_areas[source_dir.name]
-        regrid_source(
+        source_name = source_dir.name
+        print(f"Regridding source {source_name}")
+        average_area = average_areas[source_name]
+        shape = regrid_source(
             source_dir, regridded_dir, average_area, cfg["target_resolution_km"], num_workers
         )
+        # Load the source metadata and store it in sources_metadata.
+        with open(source_dir / "source_metadata.json", "r") as f:
+            source_metadata = json.load(f)
+            sources_metadata[source_name] = source_metadata
+            sources_metadata[source_name]["shape"] = shape
+    # - Save the sources_metadata dict as preprocessed_dir / sources_metadata.json
+    with open(preprocessed_dir / "sources_metadata.json", "w") as f:
+        json.dump(sources_metadata, f)
 
 
 if __name__ == "__main__":

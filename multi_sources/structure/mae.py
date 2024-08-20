@@ -16,14 +16,21 @@ class MultisourceMAE(pl.LightningModule):
     """Given a torch model which receives inputs from multiple sources, this module
     tokenizes the inputs, masks a portion of the tokens, and trains the model to reconstruct
     the masked tokens.
-    The structure receives inputs as a map {source_name: (A, S, DT, C, D, V)}, where:
-    - A is a scalar tensor of shape (1,) containing 1 if the element is available and -1 otherwise.
-    - S is a scalar tensor of shape (1,) containing the index of the source.
-    - DT is a scalar tensor of shape (1,) containing the time delta between the synoptic time
-      and the element's time, normalized by dt_max.
-    - C is a tensor of shape (3, H, W) containing the latitude, longitude, and land-sea mask.
-    - D is a tensor of shape (H, W) containing the distance to the center of the storm.
-    - V is a tensor of shape (n_variables, H, W) containing the variables for the source.
+    The structure expects its input as a dict {source_name: map}, where each map contains the
+    following key-value pairs (all shapes excluding the batch dimension):
+    - "source_type" is a string containing the type of the source.
+    - "avail" is a scalar tensor of shape (1,) containing 1 if the element is available
+        and -1 otherwise.
+    - "dt" is a scalar tensor of shape (1,) containing the time delta between the reference time
+        and the element's time, normalized by dt_max.
+    - "context" is a tensor of shape (n_context_vars,) containing the context variables.
+        Each data variable within a source has its own context variables, which are all
+        concatenated into a single tensor to form CT.
+    - "coords" is a tensor of shape (2, H, W) containing the latitude and longitude at each pixel.
+    - "landmask" is a tensor of shape (H, W) containing the land mask.
+    - "dist_to_center" is a tensor of shape (H, W) containing the distance
+        to the center of the storm.
+    - "values" is a tensor of shape (n_variables, H, W) containing the variables for the source.
     The structure uses an encoder and a decoder. The encoder receives the tokens as
     a list of tuples (C, V) and outputs a tensor of shape (b, n_tokens, d_model).
     Masked tokens are not included in the encoder's input nor output.
@@ -112,23 +119,23 @@ class MultisourceMAE(pl.LightningModule):
         self.mask_token = nn.Parameter(torch.randn(1, 1, self.pixels_dim))
 
     def preproc_input(self, x):
-        # x is a map {source_name: A, S, DT, C, D, V}
         # Normalize the coordinates across sources to make them relative instead of absolute
         # (i.e the min coord across all sources of a sample is always 0 and the max is 1).
-        latlon = [x[3][:, :2] for x in x.values()]  # 3rd channel is the land mask
-        normed_coords = normalize_coords_across_sources(latlon)
+        coords = [source['coords'] for source in x.values()]
+        normed_coords = normalize_coords_across_sources(coords)
+
         input_ = {}
-        for i, (source, (a, s, dt, c, d, v)) in enumerate(x.items()):
-            # C[:, 2:3] is the land mask, which we'll split from the latitude and longitude
-            lm = c[:, 2:3]
+        for i, (source, data) in enumerate(x.items()):
             # Pad the image tensors to the next multiple of the patch size
             c = pad_to_next_multiple_of(normed_coords[i], self.patch_size, value=float("nan"))
-            lm = pad_to_next_multiple_of(lm, self.patch_size, value=float("nan"))
-            v = pad_to_next_multiple_of(v, self.patch_size, value=float("nan"))
-            d = pad_to_next_multiple_of(d, self.patch_size, value=float("nan"))
+            lm = pad_to_next_multiple_of(data["landmask"], self.patch_size, value=float("nan"))
+            v = pad_to_next_multiple_of(data["values"], self.patch_size, value=float("nan"))
+            d = pad_to_next_multiple_of(
+                data["dist_to_center"], self.patch_size, value=float("nan")
+            )
             # Don't modify the tensors in-place, as we need to keep the NaN values
             # for the loss computation
-            dt = torch.nan_to_num(dt, nan=-1.0)
+            dt = torch.nan_to_num(data["dt"], nan=-1.0)
             v = torch.nan_to_num(v, nan=0)
             # Where the coords are NaN, set them to -1, as the normalization set the non-nan values
             # to [0, 1]
@@ -139,42 +146,60 @@ class MultisourceMAE(pl.LightningModule):
             d = torch.nan_to_num(d, nan=float("inf"))
             # Deduce the availability tensor from the distance tensor
             m = d != float("inf")
-            input_[source] = (dt, c, d, lm, v, m)
+            input_[source] = {
+                "source_type": data["source_type"],
+                "avail": data["avail"],
+                "dt": dt,
+                "context": data["context"],
+                "coords": c,
+                "landmask": lm,
+                "dist_to_center": d,
+                "values": v,
+                "mask": m,
+            }
             # Check for NaN values in the tensors
-            for k, tensor in enumerate(input_[source]):
-                if torch.isnan(tensor).any():
-                    raise ValueError(f"NaN values found in source {source} tensor {k}")
+            for k, v in input_[source].items():
+                if isinstance(v, torch.Tensor) and v.dtype == torch.float32:
+                    if torch.isnan(v).any():
+                        raise ValueError(f"NaN values found in source {source} tensor {k}")
         return input_
 
     def tokenize(self, x):
         """Converts the input sources into tokens."""
         output = {}
-        for source, (dt, c, d, lm, v, m) in x.items():
-            # a, s and dt are scalars, so don't need to be tokenized
-            # c, lm and v are image tensors of shape (b, c, h, w)
-            c = img_to_patches(c, self.patch_size)
-            v = img_to_patches(v, self.patch_size)
-            lm = img_to_patches(lm, self.patch_size)
-            # m and d are image tensors of shape (b, h, w)
-            d = img_to_patches(d.unsqueeze(1), self.patch_size)
-            m = img_to_patches(m.unsqueeze(1), self.patch_size)
-            # d doesn't need to be tokenized, as it won't be fed to the model.
-            # It's only used in the loss computation, which is done on the original shape.
-            output[source] = (dt, c, d, lm, v, m)
+        for source, data in x.items():
+            # c and v are image tensors of shape (b, c, h, w)
+            c = img_to_patches(data["coords"], self.patch_size)
+            v = img_to_patches(data["values"], self.patch_size)
+            # lm, d and m are image tensors of shape (b, h, w)
+            lm = img_to_patches(data["landmask"].unsqueeze(1), self.patch_size)
+            d = img_to_patches(data["dist_to_center"].unsqueeze(1), self.patch_size)
+            m = img_to_patches(data["mask"].unsqueeze(1), self.patch_size)
+            output[source] = {
+                "source_type": data["source_type"],
+                "dt": data["dt"],
+                "context": data["context"],
+                "coords": c,
+                "landmask": lm,
+                "dist_to_center": d,
+                "values": v,
+                "mask": m,
+            }
         return output
 
     def embed(self, x):
         """Embeds the input sources."""
         output = {}
-        for source, (dt, c, d, lm, v, m) in x.items():
+        for source, data in x.items():
+            c = data["coords"]
             B, L, _ = c.shape
 
             c = self.coord_embedding(c)
-            lm = self.landmask_embedding(lm)
-            v = self.value_embedding(v)
-            m = self.mask_embedding(m.float())
+            lm = self.landmask_embedding(data["landmask"].float())
+            v = self.value_embedding(data["values"].float())
+            m = self.mask_embedding(data["mask"].float())
 
-            dt = dt.view(-1, 1, 1)
+            dt = data["dt"].view(-1, 1, 1)
             dt = self.time_embedding(dt)
 
             # Sum the pixels, availability mask, land mask and source embeddings
@@ -185,13 +210,21 @@ class MultisourceMAE(pl.LightningModule):
             c = self.coords_norm(c)
             v = self.pixels_norm(v)
 
-            output[source] = (dt, c, d, lm, v, m)
+            output[source] = {
+                "dt": dt,
+                "context": data["context"],
+                "coords": c,
+                "landmask": lm,
+                "dist_to_center": data["dist_to_center"],
+                "values": v,
+                "mask": m,
+            }
         return output
 
     def to_encoder_input(self, x):
         """Masks a portion of the tokens in the input sources.
         Args:
-            x (dict of str to tuple of tensors): The input sources, tokenized.
+            x (dict of str to dict of str to tensor): The input sources, tokenized.
         Returns:
             encoder_x (list of tuple of tensors): Fraction of the input tokens,
                 which can be fed to the encoder.
@@ -204,7 +237,8 @@ class MultisourceMAE(pl.LightningModule):
         encoder_x = []
         token_perms, n_tokens_map = {}, {}
         masked_tokens_indices = {}
-        for source, (dt, c, d, lm, v, m) in x.items():
+        for source, data in x.items():
+            c, v = data["coords"], data["values"]
             B, L, D_v = v.shape  # batch size, sequence length, model dimension
             D_c = c.shape[-1]  # coord dimension
             # Compute the number of tokens to keep based on the size of the input
@@ -236,13 +270,13 @@ class MultisourceMAE(pl.LightningModule):
         to obtain the original number of tokens.
         Args:
             encoder_y (list of tensors): The output of the encoder.
-            x (list of tuple of tensors): The input sources, tokenized.
+            x (dict of str to dict of str to tensor): The input sources, tokenized.
             token_perms (dict of str to tensor): The permutation of the full sequence used
                 to shuffle the tokens.
             n_tokens (dict of str to int): The number of tokens in the original input.
         """
         decoder_x = []
-        for y, (source, (dt, c, d, lm, _, m)) in zip(encoder_y, x.items()):
+        for y, (source, x_data) in zip(encoder_y, x.items()):
             B, L, D = y.shape
             # Get the permutation used to shuffle the tokens in the encoder input
             perm = token_perms[source]
@@ -254,10 +288,7 @@ class MultisourceMAE(pl.LightningModule):
             # Unshuffle the tokens
             reverse_perm = torch.argsort(perm, dim=1).unsqueeze(-1).expand(-1, -1, D)
             y = torch.gather(y, dim=1, index=reverse_perm)
-            # Since the input to the decoder is not the initial pixels, but the tokens
-            # processed by the encoder, the availability tensor is not needed.
-            m = torch.zeros_like(m)
-            decoder_x.append((c, y))
+            decoder_x.append((x_data['coords'], y))
         return decoder_x
 
     def forward(self, x, padded_shapes):
@@ -294,7 +325,7 @@ class MultisourceMAE(pl.LightningModule):
         """Defines a training or validation step for the model."""
         batch = self.preproc_input(batch)
         # Save the shapes of the padded tensors to reconstruct the images
-        padded_shapes = {source: x[1].shape[-2:] for source, x in batch.items()}
+        padded_shapes = {source: x['values'].shape[-2:] for source, x in batch.items()}
 
         x = self.tokenize(batch)
         pred, masked_tokens_indices = self.forward(x, padded_shapes)
@@ -316,31 +347,31 @@ class MultisourceMAE(pl.LightningModule):
     def loss_fn(self, y_pred, y_true, masked_token_indices):
         """Computes the MSE between the predicted and true values."""
         losses = {}
-        for source, (_, _, d, _, v, m) in y_true.items():
+        for source, true_data in y_true.items():
             pred = y_pred[source]
             B, L, D = pred.shape
             # Retrieve the indices of the masked tokens
             masked_indices = masked_token_indices[source].unsqueeze(-1).expand(-1, -1, D)
             # For those tokens, retrieve the availability mask (as masked tokens can
             # correspond to missing data in the ground truth).
-            m = m.gather(1, masked_indices).float()
+            mask = true_data['mask'].gather(1, masked_indices).float()
             # If a max distance from the center is specified, mask the tokens
             # that are too far from the center
             if self.loss_max_distance_from_center is not None:
-                d_masked_tokens = d.gather(1, masked_indices)
-                m = m * (d_masked_tokens < self.loss_max_distance_from_center).float()
-            m_sum = m.sum()
+                d_masked_tokens = true_data['dist_to_center'].gather(1, masked_indices)
+                mask = mask * (d_masked_tokens < self.loss_max_distance_from_center).float()
+            m_sum = mask.sum()
             if m_sum.item() == 0:
                 # If all masked tokens are missing data, skip the loss computation
                 # for this source
                 continue
             # Retrieve the predicted and true values for the masked tokens
             pred = pred.gather(1, masked_indices)
-            v = v.gather(1, masked_indices)
+            true_values = true_data['values'].gather(1, masked_indices)
             # Compute the MSE loss
-            loss = nn.functional.mse_loss(pred, v, reduction="none")
+            loss = nn.functional.mse_loss(pred, true_values, reduction="none")
             # Mask the loss where the ground truth is missing
-            loss = (loss * m).sum() / m_sum
+            loss = (loss * mask).sum() / m_sum
             losses[source] = loss
         return losses
 
@@ -362,11 +393,11 @@ class MultisourceMAE(pl.LightningModule):
         x = self.tokenize(batch)
         pred, masked_tokens_indices = self.forward(x, padded_shapes)
         output = {}
-        for source, (_, _, _, _, v, _) in x.items():
+        for source, true_data in x.items():
             if self.unmasked_tokens_use_groundtruth:
                 # If we want to use the ground truth for the unmasked tokens,
                 # we'll replace the predicted values with the true values
-                otp = v.clone()
+                otp = true_data['values'].clone()
                 B, L, D = pred[source].shape
                 masked_indices = masked_tokens_indices[source].unsqueeze(-1).expand(-1, -1, D)
                 otp.scatter_(1, masked_indices, pred[source].gather(1, masked_indices))

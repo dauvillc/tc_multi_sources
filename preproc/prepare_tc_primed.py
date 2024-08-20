@@ -226,7 +226,7 @@ def main(cfg):
     with open(ifovs_path, "r") as f:
         ifovs = yaml.safe_load(f)
     # Path to where the prepared dataset will be stored (as netCDF files)
-    dest_path = Path(cfg["paths"]["prepared_dataset"])
+    dest_path = Path(cfg["paths"]["preprocessed_dataset"]) / "prepared"
 
     # Retrieve the list of files from the TC-Primed dataset, excluding the validation and test sets
     sen_sat_pairs, sen_sat_files, sen_sat_swaths = list_tc_primed_sources(tc_primed_path)

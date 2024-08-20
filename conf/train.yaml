@@ -1,7 +1,7 @@
 defaults:
   - paths: local
   - wandb: default
-  - sources: amsr2_5freqs
+  - sources: sat_interp_37GHz
   - dataset: default
   - dataloader: local
   - lightning_module: mae

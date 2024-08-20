@@ -1,15 +1,7 @@
 # Path to where the unpreprocessed datasets are stored
 raw_datasets: "/home/cdauvill/scratch/data/multi_sources/raw/"
-# Path to where the prepared dataset (i.e. data in a format ready for preprocessing)
-# is stored
-prepared_dataset: "/home/cdauvill/scratch/data/multi_sources/preprocessed/prepared"
 # Path to where the preprocessed dataset will be saved
-preprocessed_dataset: "/home/cdauvill/scratch/data/multi_sources/preprocessed/regridded"
-# Path to the dir containing the normalization constants
-constants: "/home/cdauvill/scratch/data/multi_sources/preprocessed/constants"
-# Path to the metadata regarding the preprocessed dataset
-# Indicate a json file
-metadata: "/home/cdauvill/scratch/data/multi_sources/preprocessed/regridded/metadata.json"
+preprocessed_dataset: "/home/cdauvill/scratch/data/multi_sources/preprocessed/"
 # Checkpoints directory
 checkpoints: "/home/cdauvill/scratch/checkpoints/"
 # Weights and Biases logs
