@@ -2,6 +2,7 @@
 
 import matplotlib.pyplot as plt
 import hydra
+import numpy as np
 from collections import defaultdict
 from omegaconf import DictConfig, OmegaConf
 from torch.utils.data import DataLoader
@@ -48,12 +49,12 @@ def main(cfg: DictConfig):
     for i, batch in zip(trange(len(dataloader)), dataloader):
         for source_name, data in batch.items():
             # values
-            v = data["values"]
-            v_nonan = v[~v.isnan()]
-            if v_nonan.numel() == 0:
+            v = data["values"].numpy()
+            if np.isnan(v).all():
                 continue
-            data_means[source_name] = data_means[source_name] + v_nonan.mean().item()
-            data_stds[source_name] = data_stds[source_name] + v_nonan.std().item()
+            data_means[source_name] = data_means[source_name] + np.nanmean(v)
+            mean_std = np.nanmean(np.nanstd(v, axis=(2, 3)))
+            data_stds[source_name] = data_stds[source_name] + mean_std
             # context
             ct = data["context"]
             ct_nonan = ct[~ct.isnan()]
