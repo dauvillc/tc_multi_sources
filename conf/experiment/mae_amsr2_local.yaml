@@ -10,9 +10,8 @@ wandb:
 
 dataset:
   train:
-    reference_times_interval: 3
     dt_max: 24
-    min_available_sources_prop: 1.0
+    min_available_sources: 5
 
 dataloader:
   batch_size: 16
