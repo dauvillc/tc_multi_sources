@@ -7,6 +7,7 @@ import numpy as np
 from netCDF4 import Dataset
 from pathlib import Path
 from multi_sources.data_processing.source import Source
+from multi_sources.data_processing.utils import compute_sources_availability
 
 
 class MultiSourceDataset(torch.utils.data.Dataset):
@@ -40,11 +41,11 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         split,
         included_variables_dict,
         single_channel_sources=True,
+        dt_max=24,
+        min_available_sources=2,
+        num_workers=0,
         include_seasons=None,
         exclude_seasons=None,
-        reference_times_interval=6,
-        dt_max=24,
-        min_available_sources_prop=0.6,
         enable_data_augmentation=False,
     ):
         """
@@ -65,23 +66,21 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                 dictionary will not be included in the dataset.
             single_channel_sources (bool): If True, sources with multiple channels will
                 be split into multiple sources with a single channel each.
+            dt_max (int): The maximum time delta between the elements returned for each source,
+                in hours.
+            min_available_sources (int): The minimum number of sources that must be available
+                for a sample to be included in the dataset.
+            num_workers (int): If > 1, number of workers to use for parallel loading of the data.
             include_seasons (list of int): The years to include in the dataset.
                 If None, all years are included.
             exclude_seasons (list of int): The years to exclude from the dataset.
                 If None, no years are excluded.
-            reference_times_interval (int): The interval between the reference times, in hours.
-            dt_max (int): The maximum time delta between the elements returned for each source,
-                in hours.
-            min_available_sources_prop (float): For a given sample (storm/time pair),
-                the minimum proportion of sources that must have an available element
-                for the sample to be included in the dataset.
             enable_data_augmentation (bool): If True, data augmentation is enabled.
         """
         self.dataset_dir = Path(dataset_dir)
         self.constants_dir = self.dataset_dir / "constants"
         self.split = split
         self.variables_dict = included_variables_dict
-        self.h = reference_times_interval
         self.dt_max = pd.Timedelta(dt_max, unit="h")
         self.single_channel_sources = single_channel_sources
         self.enable_data_augmentation = enable_data_augmentation
@@ -118,6 +117,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         source_names = [source.name for source in self.sources]
         self.source_variables = {source.name: source.data_vars for source in self.sources}
         self.df = self.df[self.df["source_name"].isin(source_names)]
+        self.df = self.df.reset_index(drop=True)
 
         # Check that the included and excluded seasons are not overlapping
         if include_seasons is not None and exclude_seasons is not None:
@@ -132,46 +132,20 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         if len(self.df) == 0:
             raise ValueError("No elements available for the selected sources and seasons.")
         # ========================================================================================
-        # We'll now create a dataframe self.samples_df that contains the list of unique
-        # (sid, ref_time) pairs that will be used to sample the dataset.
-        # Some more processing is apply to it, which was first written in the notebook
-        # notebooks/sources.ipynb.
-        # Compute the reference time that is closest and after the element's time
-        self.df["ref_time"] = self.df["time"].dt.ceil(f"{self.h}h")
-        # For each element, compute the list of reference times that are within dt_max
-        # of the element's time, e.g. for an interval of 6h and a maximum time delta of 24h,
-        # 06:41:00 -> [12:00:00, 18:00:00, 00:00:00 (next day), 06:00:00 (next day)]
-        self.df["ref_time"] = self.df.apply(
-            lambda row: pd.date_range(
-                row["ref_time"], row["time"] + self.dt_max, freq=f"{self.h}h"
-            ),
-            axis=1,
+        # We'll now filter the samples to only keep the ones where at least min_available_sources
+        # sources are available.
+        # - We'll compute a dataframe D of shape (n_samples, n_sources) such that
+        # D[i, s] = 1 if source i is available for sample s, and 0 otherwise.
+        print("Computing sources availability...")
+        self.available_sources = compute_sources_availability(
+            self.df, self.dt_max, num_workers=num_workers
         )
-        # Explode the reference times into separate rows
-        self.df = self.df.explode("ref_time")
-        # Filtering:
-        # - Compute for each storm/time the number of available sources
-        avail = (
-            self.df.groupby(["sid", "ref_time"])["source_name"]
-            .nunique()
-            .rename("avail_source")
-            .reset_index()
-        )
-        avail["avail_frac"] = avail["avail_source"] / self._get_n_sources()
-        # - Keep only the storm/time pairs for which at least min_available_sources_prop sources
-        # are available
-        avail = avail[avail["avail_frac"] >= min_available_sources_prop]
-        self.df = self.df.merge(avail[["sid", "ref_time"]], on=["sid", "ref_time"], how="inner")
-        # - Sort by sid,source,time and for every (sid,ref_time,source) triplet,
-        # keep only the last one (i.e. the one with the latest time)
-        self.df = self.df.sort_values(["sid", "source_name", "time"]).drop_duplicates(
-            ["sid", "ref_time", "source_name"], keep="last"
-        )
-        # Finally, compute the list of unique (sid,ref_time) pairs.
-        # Each row of this final dataframe will
-        # constitute a sample of the dataset, while self.df can be used
-        # to retrieve the corresponding elements.
-        self.samples_df = self.df[["sid", "ref_time"]].drop_duplicates().reset_index(drop=True)
+        # - From this, we can filter the samples to only keep the ones where at least
+        # min_available_sources sources are available.
+        available_sources_count = self.available_sources.sum(axis=1)
+        mask = available_sources_count >= min_available_sources
+        self.df = self.df[mask].reset_index(drop=True)
+        self.available_sources = self.available_sources[mask].reset_index(drop=True)
 
         # ========================================================================================
         # Load the data means and stds
@@ -198,20 +172,24 @@ class MultiSourceDataset(torch.utils.data.Dataset):
             sample (multi_sources.data_processing.multi_source_batch.MultiSourceBatch): The element
                 at the given index.
         """
-        sample = self.samples_df.iloc[idx]
-        sid = sample["sid"]
-        ref_time = sample["ref_time"]
-        output = {}
         source_shapes = self._get_source_shapes()
-        # Isolate the rows of self.df corresponding to the given sid and ref_time
-        sample_df = self.df[(self.df["sid"] == sid) & (self.df["ref_time"] == ref_time)]
+        sample = self.df.iloc[idx]
+        sid, t0 = sample["sid"], sample["time"]
+        # Isolate the rows of self.df corresponding to the sample sid
+        sample_df = self.df[self.df["sid"] == sid]
+
         # For each source, try to load the element at the given time
+        output = {}
         for source in self.sources:
             source_name = source.name
             source_type = source.type
-            # Try to find an element for the given source, sid and ref_time
+            # Isolate the rows of sample_df corresponding to the right source
             df = sample_df[sample_df["source_name"] == source_name]
-            if len(df) == 0 or ref_time - df["time"].iloc[0] > self.dt_max:
+            # Sort by descending time so that the first row is the closest to t0
+            df = df.sort_values("time", ascending=False)
+            # Check that there is at least one element available for this source,
+            # and that the time delta is within the acceptable range
+            if len(df) == 0 or t0 - df["time"].iloc[0] >= self.dt_max:
                 source_shape = source_shapes[source_name]
 
                 # No element available for this source
@@ -270,7 +248,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
 
             else:
                 time = df["time"].iloc[0]
-                dt = ref_time - time
+                dt = t0 - time
                 A = torch.tensor(1, dtype=torch.float32)
                 DT = torch.tensor(
                     dt.total_seconds() / self.dt_max.total_seconds(), dtype=torch.float32
@@ -379,7 +357,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         return normalized_context, normalized_values
 
     def __len__(self):
-        return len(self.samples_df)
+        return len(self.df)
 
     def _get_source_names(self):
         """Returns a list of the source names (before splitting the sources)."""

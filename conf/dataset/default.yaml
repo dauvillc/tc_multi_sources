@@ -7,14 +7,14 @@ train:
     _target_: multi_sources.data_processing.utils.read_variables_dict
     variables_dict: ${sources}
   single_channel_sources: True
-  # Interval in hours between two reference times
-  reference_times_interval: ???
-  # Maximum number of hours between the sample synoptic time
-  # and an observation included within the sample.
+  # Maximum difference of time in hours between an observation's time
+  # and the sample's reference time.
   dt_max: ???
-  # Minimum proportion of the sources that must be available at a given (synoptic time, storm)
-  # for the sample to be yielded by the dataset.
-  min_available_sources_prop: ???
+  # Minimum number of sources that must be available in a sample
+  # for it to be included in the dataset.
+  min_available_sources: ???
+  # Number of workers for the data loading
+  num_workers: ${dataloader.num_workers}
   enable_data_augmentation: false
 
 # Validation dataset
@@ -26,6 +26,6 @@ val:
     _target_: multi_sources.data_processing.utils.read_variables_dict
     variables_dict: ${sources}
   single_channel_sources: True
-  reference_times_interval: ${dataset.train.reference_times_interval}
   dt_max: ${dataset.train.dt_max}
-  min_available_sources_prop: ${dataset.train.min_available_sources_prop}
+  min_available_sources: ${dataset.train.min_available_sources}
+  num_workers: ${dataloader.num_workers}

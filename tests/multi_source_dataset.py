@@ -1,5 +1,6 @@
 """Tests the MultiSourceDataset class."""
 
+import warnings
 import matplotlib.pyplot as plt
 import hydra
 import numpy as np
@@ -46,20 +47,21 @@ def main(cfg: DictConfig):
 
     data_means, data_stds = defaultdict(int), defaultdict(int)
     context_means, context_stds = defaultdict(int), defaultdict(int)
-    for i, batch in zip(trange(len(dataloader)), dataloader):
-        for source_name, data in batch.items():
-            # values
-            v = data["values"].numpy()
-            if np.isnan(v).all():
-                continue
-            data_means[source_name] = data_means[source_name] + np.nanmean(v)
-            mean_std = np.nanmean(np.nanstd(v, axis=(2, 3)))
-            data_stds[source_name] = data_stds[source_name] + mean_std
-            # context
-            ct = data["context"]
-            ct_nonan = ct[~ct.isnan()]
-            context_means[source_name] = context_means[source_name] + ct_nonan.mean().item()
-            context_stds[source_name] = context_stds[source_name] + ct_nonan.std().item()
+    with warnings.catch_warnings(action="ignore"):
+        for i, batch in zip(trange(len(dataloader)), dataloader):
+            for source_name, data in batch.items():
+                # values
+                v = data["values"].numpy()
+                if np.isnan(v).all():
+                    continue
+                data_means[source_name] = data_means[source_name] + np.nanmean(v)
+                mean_std = np.nanmean(np.nanstd(v, axis=(2, 3)))
+                data_stds[source_name] = data_stds[source_name] + mean_std
+                # context
+                ct = data["context"]
+                ct_nonan = ct[~ct.isnan()]
+                context_means[source_name] = context_means[source_name] + ct_nonan.mean().item()
+                context_stds[source_name] = context_stds[source_name] + ct_nonan.std().item()
 
     profiler.stop()
     profiler.write_html("tests/outputs/profile_multi_source_dataset.html")
