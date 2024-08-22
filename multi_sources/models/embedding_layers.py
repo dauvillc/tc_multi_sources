@@ -37,3 +37,36 @@ class SourceEmbedding(nn.Module):
         """
         idx = torch.full(shape, self.source_indices[source_name], dtype=torch.long)
         return self.embedding(idx.to(self.embedding.weight.device))
+
+
+class SharedSourceEmbedding(nn.Module):
+    """A module that shares embeddings across sources of the same type.
+    A source type is supposed to be associated with a fixed number of context variables,
+    e.g. 'passive_microwave' is associated with 'frequency' and 'IFOV'. This module
+    maps those context variables to a shared embedding space.
+    """
+    def __init__(self, context_variables, dim):
+        """
+        Args:
+            context_variables (dict of str to list of str): A mapping from source type
+                to the context variables associated with that source type.
+            dim (int): The dimension of the shared embedding space.
+        """
+        super().__init__()
+        self.source_types = list(context_variables.keys())
+        self.context_variables = context_variables
+        self.embeddings = nn.ModuleDict()
+        for source_type, variables in context_variables.items():
+            self.embeddings[source_type] = nn.Linear(len(variables), dim)
+
+    def forward(self, source_type, context):
+        """
+        Args:
+            source_type (str): The type of the source.
+            context (torch.Tensor): A tensor of shape (batch_size, num_context_variables)
+                containing the context variables for each source.
+
+        Returns:
+            embed: torch.Tensor of shape (batch_size, dim).
+        """
+        return self.embeddings[source_type](context)

@@ -47,6 +47,7 @@ def main(cfg: DictConfig):
     print("Validation dataset size:", len(val_dataset))
 
     source_names = train_dataset.get_source_names()
+    context_vars = train_dataset.get_source_types_context_vars()
     # Create the encoder and decoder
     encoder = instantiate(cfg["model"]["encoder"])
     decoder = instantiate(cfg["model"]["decoder"])
@@ -66,10 +67,17 @@ def main(cfg: DictConfig):
             decoder=decoder,
             cfg=cfg,
             output_convs=output_convs,
+            context_variables=context_vars,
         )
     else:
         pl_module = instantiate(
-            cfg["lightning_module"], source_names, encoder, decoder, cfg, output_convs=output_convs
+            cfg["lightning_module"],
+            source_names,
+            encoder,
+            decoder,
+            cfg,
+            output_convs=output_convs,
+            context_variables=context_vars,
         )
 
     # Create the logger

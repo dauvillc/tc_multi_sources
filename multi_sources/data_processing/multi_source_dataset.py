@@ -85,7 +85,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         self.single_channel_sources = single_channel_sources
         self.enable_data_augmentation = enable_data_augmentation
 
-        print("Browsing requested sources and loading metadata...")
+        print(f"{split}: Browsing requested sources and loading metadata...")
         # Load the sourcs metadata
         with open(self.dataset_dir / "sources_metadata.json", "r") as f:
             sources_metadata = json.load(f)
@@ -110,7 +110,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         for source in self.sources:
             if source.name not in unique_sources:
                 raise ValueError(f"Source {source.name} is not present in the dataset.")
-        print(f"Found {len(self.sources)} sources in the dataset.")
+        print(f"{split}: Found {len(self.sources)} sources in the dataset.")
 
         # Filter the dataframe to only keep the rows where source_name is the name of a source
         # in self.sources
@@ -136,7 +136,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         # sources are available.
         # - We'll compute a dataframe D of shape (n_samples, n_sources) such that
         # D[i, s] = 1 if source i is available for sample s, and 0 otherwise.
-        print("Computing sources availability...")
+        print(f"{split}: Computing sources availability...")
         self.available_sources = compute_sources_availability(
             self.df, self.dt_max, num_workers=num_workers
         )
@@ -339,8 +339,9 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         if dvar is None:
             context_means = np.repeat(context_means, self._get_n_data_variables(source_name))
             context_stds = np.repeat(context_stds, self._get_n_data_variables(source_name))
-
-        normalized_context = (context - torch.tensor(context_means)) / torch.tensor(context_stds)
+        context_means = torch.tensor(context_means, dtype=context.dtype)
+        context_stds = torch.tensor(context_stds, dtype=context.dtype)
+        normalized_context = (context - context_means) / context_stds
 
         # Values normalization
         if dvar is None:
@@ -353,7 +354,9 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         else:
             data_means = self.data_means[source_name][dvar]  # scalar value
             data_stds = self.data_stds[source_name][dvar]  # scalar value
-        normalized_values = (values - torch.tensor(data_means)) / torch.tensor(data_stds)
+        data_means = torch.tensor(data_means, dtype=values.dtype)
+        data_stds = torch.tensor(data_stds, dtype=values.dtype)
+        normalized_values = (values - data_means) / data_stds
         return normalized_context, normalized_values
 
     def __len__(self):
@@ -403,6 +406,23 @@ class MultiSourceDataset(torch.utils.data.Dataset):
     def get_n_sources(self):
         """Returns the number of sources."""
         return len(self.get_source_names())
+
+    def get_source_types_context_vars(self):
+        """Returns a dict {source_type: context variables}."""
+        # Browse all sources and collect their types and context variables
+        source_types_context_vars = {}
+        for source in self.sources:
+            # If the source type has been seen before, make sure the context
+            # vars were the same. All sources from the same type should have
+            # the same context variables.
+            if source.type in source_types_context_vars:
+                if source.context_vars != source_types_context_vars[source.type]:
+                    raise ValueError(
+                        f"Sources of type {source.type} have different context variables."
+                    )
+            else:
+                source_types_context_vars[source.type] = source.context_vars
+        return source_types_context_vars
 
     def get_n_context_variables(self):
         """Returns a dict {source_name: number of context variables}."""

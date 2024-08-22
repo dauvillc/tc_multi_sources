@@ -9,7 +9,11 @@ from multi_sources.utils.scheduler import CosineAnnealingWarmupRestarts
 from multi_sources.utils.image_processing import img_to_patches, pad_to_next_multiple_of, pair
 from multi_sources.utils.image_processing import patches_to_img
 from multi_sources.models.utils import normalize_coords_across_sources, remove_dots
-from multi_sources.models.embedding_layers import LinearEmbedding, SourceEmbedding
+from multi_sources.models.embedding_layers import (
+    LinearEmbedding,
+    SourceEmbedding,
+    SharedSourceEmbedding,
+)
 
 
 class MultisourceMAE(pl.LightningModule):
@@ -51,6 +55,8 @@ class MultisourceMAE(pl.LightningModule):
         adamw_kwargs,
         lr_scheduler_kwargs,
         loss_max_distance_from_center,
+        share_source_embeddings=False,
+        context_variables=None,
         output_convs=None,
         metrics={},
     ):
@@ -70,10 +76,17 @@ class MultisourceMAE(pl.LightningModule):
             loss_max_distance_from_center (int or None): If specified, only pixels within this
                 distance from the center of the storm (in km) will be considered
                 in the loss computation.
-            metrics (dict of str: callable): The metrics to compute during training and validation.
-                A metric should have the signature metric(y_pred, y_true) -> torch.Tensor.
+            share_source_embeddings (bool): If True, sources from the same type (e.g.
+                "passive_microwave") will share the same embeddings, which will use
+                context variables (e.g. the frequency of the sensor) as input.
+                If False, each source will have its own embedding.
+            n_context_variables (dict of str to list of str): Must be passed if
+                share_source_embeddings is True. Maps each source type to the list of
+                its context variables.
             output_convs (dict of str to nn.Module, optional): Map from source name to
                 a convolutional layer to apply to the output of the model.
+            metrics (dict of str: callable): The metrics to compute during training and validation.
+                A metric should have the signature metric(y_pred, y_true) -> torch.Tensor.
         """
         super().__init__()
         self.source_names = source_names
@@ -87,6 +100,7 @@ class MultisourceMAE(pl.LightningModule):
         self.adamw_kwargs = adamw_kwargs
         self.metrics = metrics
         self.loss_max_distance_from_center = loss_max_distance_from_center
+        self.share_source_embeddings = share_source_embeddings
         self.save_hyperparameters(ignore=["encoder", "decoder", "metrics"])
 
         # Wether to use the ground truth for the unmasked tokens during prediction
@@ -99,10 +113,19 @@ class MultisourceMAE(pl.LightningModule):
         self.value_embedding = LinearEmbedding(in_dim, pixels_dim)
         self.mask_embedding = LinearEmbedding(in_dim, pixels_dim)
         self.time_embedding = LinearEmbedding(1, coords_dim)
+
         # The source embedding are learned, and will be summed both to
         # the pixel and coord embeddings
-        self.source_to_pixel_embedding = SourceEmbedding(source_names, pixels_dim)
-        self.source_to_coord_embedding = SourceEmbedding(source_names, coords_dim)
+        if share_source_embeddings:
+            if context_variables is None:
+                raise ValueError(
+                    "If share_source_embeddings is True, context_variables must be passed"
+                )
+            self.source_to_pixel_embedding = SharedSourceEmbedding(context_variables, pixels_dim)
+            self.source_to_coord_embedding = SharedSourceEmbedding(context_variables, coords_dim)
+        else:
+            self.source_to_pixel_embedding = SourceEmbedding(source_names, pixels_dim)
+            self.source_to_coord_embedding = SourceEmbedding(source_names, coords_dim)
 
         self.pixels_norm = nn.LayerNorm(pixels_dim)
         self.coords_norm = nn.LayerNorm(coords_dim)
@@ -121,7 +144,7 @@ class MultisourceMAE(pl.LightningModule):
     def preproc_input(self, x):
         # Normalize the coordinates across sources to make them relative instead of absolute
         # (i.e the min coord across all sources of a sample is always 0 and the max is 1).
-        coords = [source['coords'] for source in x.values()]
+        coords = [source["coords"] for source in x.values()]
         normed_coords = normalize_coords_across_sources(coords)
 
         input_ = {}
@@ -137,11 +160,11 @@ class MultisourceMAE(pl.LightningModule):
             # for the loss computation
             dt = torch.nan_to_num(data["dt"], nan=-1.0)
             v = torch.nan_to_num(v, nan=0)
+            lm = torch.nan_to_num(lm, nan=0)
+            ct = torch.nan_to_num(data["context"], nan=0)
             # Where the coords are NaN, set them to -1, as the normalization set the non-nan values
             # to [0, 1]
             c = torch.nan_to_num(c, nan=-1)
-            # Where the land mask is NaN, set it to 0
-            lm = torch.nan_to_num(lm, nan=0)
             # For the distance tensor, fill the nan values with +inf
             d = torch.nan_to_num(d, nan=float("inf"))
             # Deduce the availability tensor from the distance tensor
@@ -150,7 +173,7 @@ class MultisourceMAE(pl.LightningModule):
                 "source_type": data["source_type"],
                 "avail": data["avail"],
                 "dt": dt,
-                "context": data["context"],
+                "context": ct,
                 "coords": c,
                 "landmask": lm,
                 "dist_to_center": d,
@@ -202,10 +225,24 @@ class MultisourceMAE(pl.LightningModule):
             dt = data["dt"].view(-1, 1, 1)
             dt = self.time_embedding(dt)
 
+            # Source embeddings
+            if self.share_source_embeddings:
+                source_type = data["source_type"][0]  # The type is linked to the source
+                # so it's the same for all samples from that source in the batch.
+                source_to_pixel_embedding = self.source_to_pixel_embedding(
+                    source_type, data["context"].unsqueeze(1)
+                )
+                source_to_coord_embedding = self.source_to_coord_embedding(
+                    source_type, data["context"].unsqueeze(1)
+                )
+            else:
+                source_to_pixel_embedding = self.source_to_pixel_embedding(source, (B, L))
+                source_to_coord_embedding = self.source_to_coord_embedding(source, (B, L))
+
             # Sum the pixels, availability mask, land mask and source embeddings
-            v = v + lm + m + self.source_to_pixel_embedding(source, (B, L))
+            v = v + lm + m + source_to_pixel_embedding
             # Sum the coords, time and source embeddings
-            c = c + dt + self.source_to_coord_embedding(source, (B, L))
+            c = c + dt + source_to_coord_embedding
             # Normalize the embeddings
             c = self.coords_norm(c)
             v = self.pixels_norm(v)
@@ -288,7 +325,7 @@ class MultisourceMAE(pl.LightningModule):
             # Unshuffle the tokens
             reverse_perm = torch.argsort(perm, dim=1).unsqueeze(-1).expand(-1, -1, D)
             y = torch.gather(y, dim=1, index=reverse_perm)
-            decoder_x.append((x_data['coords'], y))
+            decoder_x.append((x_data["coords"], y))
         return decoder_x
 
     def forward(self, x, padded_shapes):
@@ -325,7 +362,7 @@ class MultisourceMAE(pl.LightningModule):
         """Defines a training or validation step for the model."""
         batch = self.preproc_input(batch)
         # Save the shapes of the padded tensors to reconstruct the images
-        padded_shapes = {source: x['values'].shape[-2:] for source, x in batch.items()}
+        padded_shapes = {source: x["values"].shape[-2:] for source, x in batch.items()}
 
         x = self.tokenize(batch)
         pred, masked_tokens_indices = self.forward(x, padded_shapes)
@@ -354,11 +391,11 @@ class MultisourceMAE(pl.LightningModule):
             masked_indices = masked_token_indices[source].unsqueeze(-1).expand(-1, -1, D)
             # For those tokens, retrieve the availability mask (as masked tokens can
             # correspond to missing data in the ground truth).
-            mask = true_data['mask'].gather(1, masked_indices).float()
+            mask = true_data["mask"].gather(1, masked_indices).float()
             # If a max distance from the center is specified, mask the tokens
             # that are too far from the center
             if self.loss_max_distance_from_center is not None:
-                d_masked_tokens = true_data['dist_to_center'].gather(1, masked_indices)
+                d_masked_tokens = true_data["dist_to_center"].gather(1, masked_indices)
                 mask = mask * (d_masked_tokens < self.loss_max_distance_from_center).float()
             m_sum = mask.sum()
             if m_sum.item() == 0:
@@ -367,7 +404,7 @@ class MultisourceMAE(pl.LightningModule):
                 continue
             # Retrieve the predicted and true values for the masked tokens
             pred = pred.gather(1, masked_indices)
-            true_values = true_data['values'].gather(1, masked_indices)
+            true_values = true_data["values"].gather(1, masked_indices)
             # Compute the MSE loss
             loss = nn.functional.mse_loss(pred, true_values, reduction="none")
             # Mask the loss where the ground truth is missing
@@ -397,7 +434,7 @@ class MultisourceMAE(pl.LightningModule):
             if self.unmasked_tokens_use_groundtruth:
                 # If we want to use the ground truth for the unmasked tokens,
                 # we'll replace the predicted values with the true values
-                otp = true_data['values'].clone()
+                otp = true_data["values"].clone()
                 B, L, D = pred[source].shape
                 masked_indices = masked_tokens_indices[source].unsqueeze(-1).expand(-1, -1, D)
                 otp.scatter_(1, masked_indices, pred[source].gather(1, masked_indices))
