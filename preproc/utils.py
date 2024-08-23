@@ -31,8 +31,11 @@ def list_tc_primed_sources(tc_primed_path, exclude_years=None):
     for sensat in sen_sat_pairs:
         # Retrieve the list of files whose stem contains the sensor/satellite pair
         sen_sat_files[sensat] = [file for file in overpass_files if sensat in file.stem]
-        # We need to open a file with netCDF4 to retrieve the list of swaths
-        with nc.Dataset(sen_sat_files[sensat][0], "r") as ds:
+        # Browse the files until finding one that doesn't contain "env" in its stem
+        any_obs_file = next(
+            (file for file in sen_sat_files[sensat] if "env" not in file.stem), None
+        )
+        with nc.Dataset(any_obs_file, "r") as ds:
             swaths = [swath for swath in ds["passive_microwave"].groups.keys()]
         # If the satellite is GPM or TRMM, we'll also retrieve the radar-radiometer
         # data and consider them as swaths
