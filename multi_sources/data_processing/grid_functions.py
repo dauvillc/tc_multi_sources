@@ -130,9 +130,6 @@ def regrid(ds, target_resolution_km, target_area):
         radius_of_influence=radius_of_influence,
         fill_value=float("nan"),
     )
-    if np.isnan(stacked).all(axis=(0, 1)).any():
-        raise ValueError("Found fully NaN values in the regridded dataset. This is likely due \
-to a misaligned target area or a too small radius of influence.")
 
     result = {var: (("lat", "lon"), stacked[..., i]) for i, var in enumerate(variables)}
     # Add the latitude and longitude variables as coordinates

@@ -92,10 +92,14 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         self.sources = []
         for source_name in self.variables_dict:
             if source_name not in sources_metadata:
-                raise ValueError(f"Source {source_name} not found in the sources metadata.")
+                raise ValueError(
+                    f"Source {source_name} not found in the sources metadata."
+                )
             else:
                 # Isolate the variables to include for the source
-                sources_metadata[source_name]["data_vars"] = self.variables_dict[source_name]
+                sources_metadata[source_name]["data_vars"] = self.variables_dict[
+                    source_name
+                ]
                 self.sources.append(Source(**sources_metadata[source_name]))
         # Load the samples metadata based on the split
         self.df = pd.read_json(
@@ -115,7 +119,9 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         # Filter the dataframe to only keep the rows where source_name is the name of a source
         # in self.sources
         source_names = [source.name for source in self.sources]
-        self.source_variables = {source.name: source.data_vars for source in self.sources}
+        self.source_variables = {
+            source.name: source.data_vars for source in self.sources
+        }
         self.df = self.df[self.df["source_name"].isin(source_names)]
         self.df = self.df.reset_index(drop=True)
 
@@ -130,7 +136,9 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         if exclude_seasons is not None:
             self.df = self.df[~self.df["season"].isin(exclude_seasons)]
         if len(self.df) == 0:
-            raise ValueError("No elements available for the selected sources and seasons.")
+            raise ValueError(
+                "No elements available for the selected sources and seasons."
+            )
         # ========================================================================================
         # We'll now filter the samples to only keep the ones where at least min_available_sources
         # sources are available.
@@ -197,9 +205,15 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                 A = torch.tensor(-1, dtype=torch.float32)
                 source_channels = self._get_n_data_variables(source_name)
                 DT = torch.tensor(float("nan"), dtype=torch.float32)
-                C = torch.full((2, *source_shape), fill_value=float("nan"), dtype=torch.float32)
-                LM = torch.full(source_shape, fill_value=float("nan"), dtype=torch.float32)
-                D = torch.full(source_shape, fill_value=float("nan"), dtype=torch.float32)
+                C = torch.full(
+                    (2, *source_shape), fill_value=float("nan"), dtype=torch.float32
+                )
+                LM = torch.full(
+                    source_shape, fill_value=float("nan"), dtype=torch.float32
+                )
+                D = torch.full(
+                    source_shape, fill_value=float("nan"), dtype=torch.float32
+                )
                 # Either consider each variable as a separate source, or keep the source as a
                 # multi-channel image.
                 if self.single_channel_sources:
@@ -226,7 +240,10 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                     # If the source is multi-channel, each channel brings its own context variables
                     # so the number of context vars is multiplied by the number of channels.
                     CT = torch.full(
-                        (source.n_context_variables() * self._get_n_data_variables(source_name),),
+                        (
+                            source.n_context_variables()
+                            * self._get_n_data_variables(source_name),
+                        ),
                         fill_value=float("nan"),
                         dtype=torch.float32,
                     )
@@ -251,7 +268,8 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                 dt = t0 - time
                 A = torch.tensor(1, dtype=torch.float32)
                 DT = torch.tensor(
-                    dt.total_seconds() / self.dt_max.total_seconds(), dtype=torch.float32
+                    dt.total_seconds() / self.dt_max.total_seconds(),
+                    dtype=torch.float32,
                 )
 
                 # Load the npy file containing the data for the given storm, time, and source
@@ -267,10 +285,14 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                         for dvar in source.data_vars:
                             # Load the context variables for the given data variable
                             context_df = df[source.context_vars].iloc[0]
-                            CT = np.array([context_df[cvar][dvar] for cvar in source.context_vars])
+                            CT = np.array(
+                                [context_df[cvar][dvar] for cvar in source.context_vars]
+                            )
                             CT = torch.tensor(CT, dtype=torch.float32)
                             # Load the data variable, yield it with shape (1, H, W)
-                            V = torch.tensor(ds[dvar][:], dtype=torch.float32).unsqueeze(0)
+                            V = torch.tensor(
+                                ds[dvar][:], dtype=torch.float32
+                            ).unsqueeze(0)
                             # Normalize the context and values tensors
                             CT, V = self.normalize(CT, V, source, dvar)
                             output[f"{source_name}_{dvar}"] = {
@@ -291,7 +313,12 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                         # (n_context_vars * n_data_vars,)
                         CT = np.stack(
                             [
-                                np.array([context_df[cvar][dvar] for dvar in source.variables])
+                                np.array(
+                                    [
+                                        context_df[cvar][dvar]
+                                        for dvar in source.variables
+                                    ]
+                                )
                                 for cvar in source.context_vars
                             ],
                             axis=1,
@@ -330,15 +357,23 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         """
         source_name = source.name
         # Context normalization
-        context_means = np.array([self.context_means[cvar] for cvar in source.context_vars])
-        context_stds = np.array([self.context_stds[cvar] for cvar in source.context_vars])
+        context_means = np.array(
+            [self.context_means[cvar] for cvar in source.context_vars]
+        )
+        context_stds = np.array(
+            [self.context_stds[cvar] for cvar in source.context_vars]
+        )
         # If we're yielding multi-channel sources, then the context tensor is a concatenation
         # of the context variables for each data variable. Thus we need to load
         # the means and stds for each context variable and repeat them for each
         # data variable.
         if dvar is None:
-            context_means = np.repeat(context_means, self._get_n_data_variables(source_name))
-            context_stds = np.repeat(context_stds, self._get_n_data_variables(source_name))
+            context_means = np.repeat(
+                context_means, self._get_n_data_variables(source_name)
+            )
+            context_stds = np.repeat(
+                context_stds, self._get_n_data_variables(source_name)
+            )
         context_means = torch.tensor(context_means, dtype=context.dtype)
         context_stds = torch.tensor(context_stds, dtype=context.dtype)
         normalized_context = (context - context_means) / context_stds
@@ -384,7 +419,8 @@ class MultiSourceDataset(torch.utils.data.Dataset):
 
     def _get_n_context_variables(self, source_name=None):
         """Returns either the number of context variables within a source,
-        or a dict {source_name: number of context variables}, before splitting the sources."""
+        or a dict {source_name: number of context variables}, before splitting the sources.
+        """
         if source_name is not None:
             return self._get_n_context_variables()[source_name]
         return {

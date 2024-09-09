@@ -67,9 +67,7 @@ def list_tc_primed_storm_files(tc_primed_path, exclude_years=None):
             continue
         for basin in year.iterdir():
             for number in basin.iterdir():
-                storm_files[(year.stem, basin.stem, number.stem)] = list(
-                    number.iterdir()
-                )
+                storm_files[(year.stem, basin.stem, number.stem)] = list(number.iterdir())
     # The filenames are formatted as:
     # - TCPRIMED_VERSION_BASINNUMBERYEAR_SENSOR_SATELLITE_IMGNUMBER_YYYYMMDDHHmmSS.nc
     #   for the overpass files;
@@ -77,5 +75,9 @@ def list_tc_primed_storm_files(tc_primed_path, exclude_years=None):
     # Isolate the overpass files:
     overpass_files = {}
     for key, files in storm_files.items():
-        overpass_files[key] = [file for file in files if "era5" not in file.stem]
+        overpass_files[key] = [
+            file
+            for file in files
+            if "era5" not in file.stem and "env" not in file.stem and file.suffix == ".nc"
+        ]
     return overpass_files

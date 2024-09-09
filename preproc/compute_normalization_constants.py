@@ -7,56 +7,37 @@ from omegaconf import OmegaConf
 from tqdm import tqdm
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
+from collections import defaultdict
 
 
-def sample_data_constants(data_path):
-    """
-    Computes the normalization constants for a single sample.
-    """
-    # The data is stored in a NetCDF file. We'll return the means and stds as a dict
-    # {variable_name: (mean, std)}.
-    means, stds = {}, {}
-    with Dataset(data_path, "r") as ds:
-        # Compute the stats for all variables except 'land_mask', 'latitude'
-        # and 'longitude'.
-        data_vars = [v for v in ds.variables if v not in ["land_mask", "latitude", "longitude"]]
-        for var in data_vars:
-            data = ds[var][:]
-            means[var] = np.nanmean(data).astype(np.float64)
-            stds[var] = np.nanstd(data).astype(np.float64)
-    return means, stds
-
-
-def process_source(train_metadata, source_name, constants_dir, num_workers=0):
+def process_source(train_metadata, source_name, constants_dir):
     """
     Computes the normalization constants for all samples in a source.
     """
     # Filter the metadata to keep only the samples from the source.
     train_metadata = train_metadata[train_metadata["source_name"] == source_name]
-    # Compute the normalization constants for the data variables.
-    means, stds = [], []
-    if num_workers == 0:
-        # Process each sample sequentially.
-        for _, row in tqdm(
-            train_metadata.iterrows(), desc=f"Computing constants for {source_name}"
-        ):
-            mean, std = sample_data_constants(row["data_path"])
-            means.append(mean)
-            stds.append(std)
-    else:
-        # Process each sample in parallel.
-        with ProcessPoolExecutor(max_workers=num_workers) as executor:
-            futures = [
-                executor.submit(sample_data_constants, row["data_path"])
-                for _, row in train_metadata.iterrows()
+    means, stds = defaultdict(float), defaultdict(float)
+    # Compute the normalization constants for each sample sequentially.
+    for _, sample in train_metadata.iterrows():
+        data_path = Path(sample["data_path"])
+        with Dataset(data_path, "r") as ds:
+            # Compute the stats for all variables except 'land_mask', 'latitude'
+            # and 'longitude'.
+            data_vars = [
+                v for v in ds.variables if v not in ["land_mask", "latitude", "longitude"]
             ]
-            for future in tqdm(futures, desc=f"Computing constants for {source_name}"):
-                mean, std = future.result()
-                means.append(mean)
-                stds.append(std)
-    # Compute the average means and stds.
-    means = {var: np.mean([m[var] for m in means]) for var in means[0]}
-    stds = {var: np.mean([s[var] for s in stds]) for var in stds[0]}
+            for var in data_vars:
+                data = ds[var][:]
+                if data.mask.all():
+                    # The variable is entirely masked, we'll skip it.
+                    continue
+                means[var] += np.nanmean(data)
+                stds[var] += np.nanstd(data)
+    # Compute the means and stds.
+    n_samples = len(train_metadata)
+    for var in means:
+        means[var] /= n_samples
+        stds[var] /= n_samples
     # Save the means and stds in a JSON file.
     with open(constants_dir / "data_means.json", "w") as f:
         json.dump(means, f)
@@ -79,13 +60,22 @@ def main(cfg):
 
     # The prepared data directory contains one sub-directory per source.
     source_dirs = [d for d in regridded_dir.iterdir() if d.is_dir()]
-    for source_dir in source_dirs:
-        process_source(
-            samples_metadata,
-            source_dir.name,
-            constants_dir / source_dir.name,
-            num_workers=num_workers,
-        )
+    if num_workers > 1:
+        with ProcessPoolExecutor(max_workers=num_workers) as executor:
+            futures = []
+            for source_dir in source_dirs:
+                source_name = source_dir.name
+                futures.append(
+                    executor.submit(
+                        process_source, samples_metadata, source_name, constants_dir / source_name
+                    )
+                )
+            for future in tqdm(futures, desc="Processing sources"):
+                future.result()
+    else:
+        for source_dir in tqdm(source_dirs, desc="Processing sources"):
+            source_name = source_dir.name
+            process_source(samples_metadata, source_name, constants_dir / source_name)
 
     # We know need to compute the normalization constants for the context variables.
     # However, the context variables can be shared across sources (e.g. the observing frequency

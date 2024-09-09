@@ -1,3 +1,4 @@
+import warnings
 import hydra
 import xarray as xr
 import numpy as np
@@ -28,7 +29,7 @@ def sample_area(sample_path):
     return delta_lat, delta_lon
 
 
-def source_average_area(samples_metadata, num_workers=0):
+def source_average_area(samples_metadata, path):
     """
     Browses all samples of a given source and computes the average latitude and
     longitude delta covered by the observations.
@@ -36,29 +37,17 @@ def source_average_area(samples_metadata, num_workers=0):
     # Each row in samples_metadata is a sample; the data_path column indicates the
     # path to the actual data.
     total_delta_lat, total_delta_lon = 0, 0
-    if num_workers == 0:
-        # Compute the area covered by each sample sequentially.
-        for _, row in tqdm(
-            samples_metadata.iterrows(), desc="Computing average area", total=len(samples_metadata)
-        ):
-            delta_lat, delta_lon = sample_area(row["data_path"])
-            total_delta_lat += delta_lat
-            total_delta_lon += delta_lon
-    else:
-        # Compute the area covered by each sample in parallel.
-        with ProcessPoolExecutor(num_workers) as executor:
-            futures = [
-                executor.submit(sample_area, row["data_path"])
-                for _, row in samples_metadata.iterrows()
-            ]
-            for future in tqdm(futures, total=len(futures), desc="Computing average area"):
-                delta_lat, delta_lon = future.result()
-                total_delta_lat += delta_lat
-                total_delta_lon += delta_lon
+    # Compute the area covered by each sample sequentially.
+    for _, row in samples_metadata.iterrows():
+        delta_lat, delta_lon = sample_area(row["data_path"])
+        total_delta_lat += delta_lat
+        total_delta_lon += delta_lon
     # Compute the average area.
     num_samples = len(samples_metadata)
     average_delta_lat = total_delta_lat / num_samples
     average_delta_lon = total_delta_lon / num_samples
+    with open(path, "w") as f:
+        json.dump({"average_area": (average_delta_lat, average_delta_lon)}, f)
     return average_delta_lat, average_delta_lon
 
 
@@ -75,7 +64,7 @@ def process_sample(sample, average_area, target_resolution, dest_dir):
         ds = regrid(ds, target_resolution, average_area)
         for variable in ds.variables:
             if ds[variable].isnull().all():
-                return
+                warnings.warn(f"Variable {variable} is null for sample {sample_path}.")
         # Add the land-sea mask as a new variable.
         land_mask = globe.is_land(
             ds["latitude"].values,
@@ -100,7 +89,7 @@ def process_sample(sample, average_area, target_resolution, dest_dir):
         return ds["latitude"].shape[-2:]
 
 
-def regrid_source(source_dir, regridded_dir, average_area, target_resolution, num_workers=0):
+def regrid_source(source_dir, regridded_dir, average_area, target_resolution):
     """
     Regrids all samples of a given source and saves the regridded samples in
     regridded_dir.
@@ -112,26 +101,8 @@ def regrid_source(source_dir, regridded_dir, average_area, target_resolution, nu
     # Create the regridded source directory.
     regridded_source_dir = regridded_dir / source_dir.name
     regridded_source_dir.mkdir(parents=True, exist_ok=True)
-
-    if num_workers == 0:
-        # Process each sample sequentially.
-        for _, row in tqdm(samples_metadata.iterrows(), desc=f"Regridding {source_dir.name}"):
-            img_shape = process_sample(row, average_area, target_resolution, regridded_source_dir)
-    else:
-        # Process each sample in parallel.
-        with ProcessPoolExecutor(num_workers) as executor:
-            futures = [
-                executor.submit(
-                    process_sample,
-                    row,
-                    average_area,
-                    target_resolution,
-                    regridded_source_dir,
-                )
-                for _, row in samples_metadata.iterrows()
-            ]
-            for future in tqdm(futures, total=len(futures), desc=f"Regridding {source_dir.name}"):
-                img_shape = future.result()
+    for _, row in samples_metadata.iterrows():
+        img_shape = process_sample(row, average_area, target_resolution, regridded_source_dir)
 
     # We'll now create an updated samples_metadata.json file that contains the paths
     # to the regridded samples, and store it in the regridded source directory.
@@ -171,6 +142,10 @@ def main(cfg):
     source_dirs = [d for d in prepared_dir.iterdir() if d.is_dir()]
     # - Compute the average area covered by the observations of each source.
     average_areas = {}
+    # If num_workers > 0, do it in parallel.
+    if num_workers > 0:
+        futures = {}
+        executor = ProcessPoolExecutor(num_workers)
     for source_dir in source_dirs:
         # - Save the average area to a constants_dir / source / average_area.json
         average_area_path = constants_dir / source_dir.name / "average_area.json"
@@ -185,26 +160,54 @@ def main(cfg):
         samples_metadata = pd.read_json(
             source_dir / "samples_metadata.json", orient="records", lines=True
         )
-        average_areas[source_dir.name] = source_average_area(samples_metadata, num_workers)
-        with open(average_area_path, "w") as f:
-            json.dump({"average_area": average_areas[source_dir.name]}, f)
+        if num_workers <= 1:
+            average_area = source_average_area(samples_metadata, average_area_path)
+            average_areas[source_dir.name] = average_area
+        else:
+            futures[source_dir.name] = executor.submit(
+                source_average_area, samples_metadata, average_area_path
+            )
+    if num_workers > 0:
+        for source_name, future in tqdm(
+            futures.items(), desc="Computing average areas", total=len(futures)
+        ):
+            average_area = future.result()
+            average_areas[source_name] = average_area
 
     # - Regrid each source and get the shape of the regridded samples.
     # After regridding a source, load its source_metadata.json file in the
     # regridded dir and save it into a common sources_metadata dict.
     sources_metadata = {}
+    shapes = {}
+    if num_workers > 0:
+        futures = {}
+        executor = ProcessPoolExecutor(num_workers)
     for source_dir in source_dirs:
         source_name = source_dir.name
         print(f"Regridding source {source_name}")
         average_area = average_areas[source_name]
-        shape = regrid_source(
-            source_dir, regridded_dir, average_area, cfg["target_resolution_km"], num_workers
-        )
+        if num_workers <= 1:
+            shapes[source_name] = regrid_source(
+                source_dir, regridded_dir, average_area, cfg["target_resolution_km"]
+            )
+        else:
+            futures[source_name] = executor.submit(
+                regrid_source,
+                source_dir,
+                regridded_dir,
+                average_area,
+                cfg["target_resolution_km"],
+            )
+    if num_workers > 0:
+        for source_name, future in tqdm(futures.items(), desc="Regridding sources", total=len(futures)):
+            shape = future.result()
+            shapes[source_name] = shape
+    for source_dir in source_dirs:
         # Load the source metadata and store it in sources_metadata.
         with open(source_dir / "source_metadata.json", "r") as f:
             source_metadata = json.load(f)
-            sources_metadata[source_name] = source_metadata
-            sources_metadata[source_name]["shape"] = shape
+            sources_metadata[source_dir.name] = source_metadata
+            sources_metadata[source_dir.name]["shape"] = shapes[source_dir.name]
     # - Save the sources_metadata dict as preprocessed_dir / sources_metadata.json
     with open(preprocessed_dir / "sources_metadata.json", "w") as f:
         json.dump(sources_metadata, f)

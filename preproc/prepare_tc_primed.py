@@ -63,6 +63,9 @@ def process_swath(sensat, swath, sensat_files, dest_dir, ifovs, verbose=False):
         - latitude, longitude: float32 (latitude, longitude)
         - data_var: float32 (data variable)
     """
+    # If the IFOV info is unavailable for this sensor-satellite pair, we'll skip it
+    if sensat not in ifovs or swath not in ifovs[sensat]:
+        return
     # Create the destination directory if it doesn't exist
     dest_dir.mkdir(parents=True, exist_ok=True)
     samples_metadata_path = dest_dir / "samples_metadata.json"
