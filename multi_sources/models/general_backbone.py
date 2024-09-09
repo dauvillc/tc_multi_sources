@@ -76,7 +76,7 @@ class MultisourceGeneralBackbone(nn.Module):
                 )
             self.blocks.append(block)
 
-    def forward(self, inputs):
+    def forward(self, inputs, attention_mask=None):
         """Forward pass. See the class docstring for the input/output format."""
         # Unpack the inputs
         coords_seq, pixels_seq = zip(*inputs)
@@ -85,6 +85,9 @@ class MultisourceGeneralBackbone(nn.Module):
         # Concatenate the sequences from each source into one sequence
         coords_seq = torch.cat(coords_seq, dim=1)
         pixels_seq = torch.cat(pixels_seq, dim=1)
+        # If an attention mask is provided, concatenate it
+        if attention_mask is not None:
+            attention_mask = torch.cat(attention_mask, dim=1)
         # If the coordinates embedding size is the same as the pixel embedding size,
         # sum them (the coords act as positional encodings)
         if self.coords_dim == self.pixels_dim and self.sum_coords_to_pixels:
@@ -92,7 +95,8 @@ class MultisourceGeneralBackbone(nn.Module):
         # Apply the blocks with skip connections
         for block in self.blocks:
             for norm, layer in block:
-                pixels_seq = layer(norm(pixels_seq), coords_seq) + pixels_seq
+                layer_out = layer(norm(pixels_seq), coords_seq, mask=attention_mask)
+                pixels_seq = layer_out + pixels_seq
         # Split the sequences back into the original sequences
         pixels_seq = pixels_seq.split(n_tokens_seq, dim=1)
         return pixels_seq

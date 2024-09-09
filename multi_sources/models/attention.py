@@ -19,7 +19,20 @@ class AttentionMap(nn.Module):
         if self.relative_pos:
             self.rel_pos_scale = rel_pos_dim_head ** -0.5
 
-    def forward(self, keys, queries, pos_key=None, pos_query=None):
+    def forward(self, keys, queries, pos_key=None, pos_query=None, mask=None):
+        """
+        Args:
+            keys: Tensor of shape (batch_size, num_keys, embed_dim), or
+                (batch_size, heads, num_keys, dim_head). The same is true for
+                all other arguments.
+            queries: Tensor of shape (batch_size, num_queries, embed_dim)
+            pos_key: Tensor of shape (batch_size, num_keys, rel_pos_dim)
+            pos_query: Tensor of shape (batch_size, num_queries, rel_pos_dim)
+            mask: Tensor of shape (batch_size, num_keys) or (batch_size, heads, num_keys),
+                or None. Keys for which the mask is True will not be attended to.
+        Returns:
+            Tensor of shape (batch_size, num_queries, num_keys)
+        """
         # Clamp the keys and queries to avoid numerical instability in the case where
         # they are perfectly correlated.
         keys, queries = keys.clamp(-5, 5), queries.clamp(-5, 5)
@@ -30,6 +43,15 @@ class AttentionMap(nn.Module):
             pos_key, pos_query = pos_key.clamp(-5, 5), pos_query.clamp(-5, 5)
             rel_pos_dots = torch.matmul(pos_query, pos_key.transpose(-2, -1)) * self.rel_pos_scale
             dots = dots + rel_pos_dots
+        # Mask the columns of the attention map that correspond to the masked tokens.
+        if mask is not None:
+            # Expand the mask in the middle to reach the same number of dimensions as dots.
+            if dots.dim() == 3:
+                mask = mask.unsqueeze(1)
+            elif dots.dim() == 4:
+                mask = mask.unsqueeze(1).unsqueeze(1)
+            dots = dots.masked_fill(mask, float("-inf"))
+
         return F.softmax(dots, dim=-1)
 
 
@@ -54,7 +76,7 @@ class SelfAttention(nn.Module):
 
         self.output_proj = nn.Sequential(nn.Linear(inner_dim, value_dim), nn.Dropout(dropout))
 
-    def forward(self, keys, values):
+    def forward(self, keys, values, mask=None):
         keys = self.qk_norm(keys)
         values = self.norm_value(values)
 
@@ -64,7 +86,7 @@ class SelfAttention(nn.Module):
         v = self.to_v(values)
         v = rearrange(v, "b n (h d) -> b h n d", h=self.num_heads)
 
-        attn = self.attention_map(k, q)
+        attn = self.attention_map(k, q, mask=mask)
         out = torch.matmul(attn, v)
         out = rearrange(out, "b h n d -> b n (h d)")
         return self.output_proj(out)
@@ -112,7 +134,7 @@ class PixelsCoordinatesAttention(nn.Module):
         self.attention_map = AttentionMap(dim_head, relative_pos=True, rel_pos_dim_head=dim_head)
         self.output_proj = nn.Sequential(nn.Linear(inner_dim, pixel_dim), nn.Dropout(dropout))
 
-    def forward(self, pixels, coords):
+    def forward(self, pixels, coords, mask=None):
         # Project the pixel values and coordinates to the query, key and value spaces.
         # The values come from the pixels.
         qkv_pixels = self.pixels_to_qkv(pixels).chunk(3, dim=-1)
@@ -124,7 +146,7 @@ class PixelsCoordinatesAttention(nn.Module):
 
         # Compute the attention map using two sets of keys and queries, one from the pixels
         # and one from the coordinates.
-        attn = self.attention_map(kp, qp, kc, qc)
+        attn = self.attention_map(kp, qp, kc, qc, mask=mask)
         out = torch.matmul(attn, v)
         out = rearrange(out, "b h n d -> b n (h d)")
         return self.output_proj(out)

@@ -13,5 +13,5 @@ class FeedForward(nn.Module):
             nn.Dropout(dropout),
         )
 
-    def forward(self, pixels_seq, coords_seq):
+    def forward(self, pixels_seq, coords_seq, **kwargs):
         return self.net(pixels_seq)

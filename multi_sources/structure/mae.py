@@ -340,8 +340,17 @@ class MultisourceMAE(pl.LightningModule):
         x = self.embed(x)
         encoder_x, token_perms, n_tokens, masked_tokens_indices = self.to_encoder_input(x)
         encoder_y = self.encoder(encoder_x)
+
         decoder_x = self.to_decoder_input(encoder_y, x, token_perms, n_tokens)
-        pred = self.decoder(decoder_x)
+        B, L = decoder_x[0][1].shape[:2]
+        # Create the attention mask for the decoder: True where the tokens are masked,
+        # and False elsewhere
+        attn_masks = []
+        for source, indices in masked_tokens_indices.items():
+            attn_mask = torch.zeros(B, L, device=indices.device, dtype=torch.bool)
+            attn_mask.scatter_(1, indices, True)
+            attn_masks.append(attn_mask)
+        pred = self.decoder(decoder_x, attn_masks)
         # Project the predicted values to the original space
         pred = [self.output_proj(p) for p in pred]
         # Rebuild a map {source_name: pred} from the list of predictions
