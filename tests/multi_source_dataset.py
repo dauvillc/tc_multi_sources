@@ -43,7 +43,7 @@ def main(cfg: DictConfig):
     # of the samples in the dataset.
     profiler = Profiler()
     profiler.start()
-    dataloader = DataLoader(dataset, batch_size=32, num_workers=0, shuffle=True)
+    dataloader = DataLoader(dataset, batch_size=32, num_workers=cfg['num_workers'], shuffle=True)
 
     data_means, data_stds = defaultdict(int), defaultdict(int)
     context_means, context_stds = defaultdict(int), defaultdict(int)
