@@ -10,5 +10,6 @@ account: "xyw@a100"
 additional_parameters:
   hint: nomultithread
 setup:
+  - module purge
   - source ${oc.env:HOME}/.bash_profile
   - a100
