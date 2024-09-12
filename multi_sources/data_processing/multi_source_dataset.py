@@ -145,17 +145,19 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         # - We'll compute a dataframe D of shape (n_samples, n_sources) such that
         # D[i, s] = 1 if source i is available for sample s, and 0 otherwise.
         print(f"{split}: Computing sources availability...")
-        self.available_sources = compute_sources_availability(
+        available_sources = compute_sources_availability(
             self.df, self.dt_max, num_workers=num_workers
         )
         # - From this, we can filter the samples to only keep the ones where at least
         # min_available_sources sources are available.
-        available_sources_count = self.available_sources.sum(axis=1)
+        available_sources_count = available_sources.sum(axis=1)
+        # We can now build the reference dataframe:
+        # - self.df contains the metadata for all elements from all sources,
+        # - self.reference_df is a subset of self.df containing every (sid, time) pair 
+        #   that defines a sample for which at least min_available_sources sources are available.
         mask = available_sources_count >= min_available_sources
-        self.reference_df = self.df[mask].reset_index(drop=True)
-        self.available_sources = self.available_sources[mask].reset_index(drop=True)
-        # At this point, self.df contains the info about every element that can be yielded
-        # within a sample, while self.reference_df contains every element that defines a sample.
+        self.reference_df = self.df[mask][["sid", "time"]]
+        self.reference_df = self.reference_df.drop_duplicates().reset_index(drop=True)
 
         # ========================================================================================
         # Load the data means and stds
