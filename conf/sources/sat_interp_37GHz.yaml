@@ -5,9 +5,6 @@ tc_primed:
   ATMS_NPP:
     S2:
       variables: ['TB_31.4QV']
-  ATMS_NOAA20:
-    S2:
-      variables: ['TB_31.4QV']
   GMI_GPM:
     S1:
       variables: ['TB_36.64H']
