@@ -12,7 +12,7 @@ wandb:
 dataset:
   train:
     dt_max: 24
-    min_available_sources_prop: 2
+    min_available_sources: 2
 
 dataloader:
   batch_size: 8

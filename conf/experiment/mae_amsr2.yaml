@@ -4,15 +4,15 @@ defaults:
   - override /sources: amsr2_5freqs
   - override /lightning_module: mae
   - override /trainer: 4gpus
-  - override /lr_scheduler: cosine_warmup_300epochs.yaml
-  - override /model: vit_170M
+  - override /lr_scheduler: cosine_warmup_100epochs.yaml
+  - override /model: vit_60M
 
 wandb:
-  name: amsr2_vit_170M
+  name: amsr2_vit_60M
 
 dataset:
   train:
-    dt_max: 24
+    dt_max: 1
     min_available_sources: 5
 
 dataloader:
