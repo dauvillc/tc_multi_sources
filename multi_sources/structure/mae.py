@@ -342,11 +342,11 @@ class MultisourceMAE(pl.LightningModule):
         encoder_y = self.encoder(encoder_x)
 
         decoder_x = self.to_decoder_input(encoder_y, x, token_perms, n_tokens)
-        B, L = decoder_x[0][1].shape[:2]
         # Create the attention mask for the decoder: True where the tokens are masked,
         # and False elsewhere
         attn_masks = []
         for source, indices in masked_tokens_indices.items():
+            B, L = x[source]["values"].shape[:2]
             attn_mask = torch.zeros(B, L, device=indices.device, dtype=torch.bool)
             attn_mask.scatter_(1, indices, True)
             attn_masks.append(attn_mask)
@@ -370,6 +370,7 @@ class MultisourceMAE(pl.LightningModule):
     def step(self, batch, batch_idx, train_or_val):
         """Defines a training or validation step for the model."""
         batch = self.preproc_input(batch)
+        batch_size = batch[list(batch.keys())[0]]["values"].shape[0]
         # Save the shapes of the padded tensors to reconstruct the images
         padded_shapes = {source: x["values"].shape[-2:] for source, x in batch.items()}
 
@@ -379,15 +380,28 @@ class MultisourceMAE(pl.LightningModule):
         # Compute the loss for each source
         losses = self.loss_fn(pred, x, masked_tokens_indices)
         for source, loss in losses.items():
-            self.log(f"{train_or_val}_loss_{source}", loss, on_epoch=True, sync_dist=True)
+            self.log(
+                f"{train_or_val}_loss_{source}",
+                loss,
+                on_epoch=True,
+                sync_dist=True,
+                batch_size=batch_size,
+            )
         # Compute the total loss
         loss = sum(losses.values()) / len(losses)
-        self.log(f"{train_or_val}_loss", loss, prog_bar=True, on_epoch=True, sync_dist=True)
+        self.log(
+            f"{train_or_val}_loss",
+            loss,
+            prog_bar=True,
+            on_epoch=True,
+            sync_dist=True,
+            batch_size=batch_size,
+        )
 
         # Compute other metrics
         for metric_name, metric_fn in self.metrics.items():
             metric_value = metric_fn(pred, x)
-            self.log(f"{train_or_val}_{metric_name}", metric_value)
+            self.log(f"{train_or_val}_{metric_name}", metric_value, batch_size=batch_size)
         return loss
 
     def loss_fn(self, y_pred, y_true, masked_token_indices):
