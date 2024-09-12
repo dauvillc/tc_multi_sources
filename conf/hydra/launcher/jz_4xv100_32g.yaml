@@ -12,4 +12,4 @@ additional_parameters:
 setup:
   - module purge
   - source ${oc.env:HOME}/.bash_profile
-  - v100
+  - module load pytorch-gpu/py3/2.3.0
