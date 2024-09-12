@@ -4,7 +4,7 @@ defaults:
   - override /sources: amsr2_5freqs
   - override /lightning_module: mae
   - override /trainer: 4gpus
-  - override /lr_scheduler: cosine_warmup_100epochs.yaml
+  - override /lr_scheduler: cosine_warmup_150epochs.yaml
   - override /model: vit_60M
 
 wandb:

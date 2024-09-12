@@ -4,7 +4,7 @@ defaults:
   - override /sources: sat_interp_37GHz
   - override /lightning_module: mae
   - override /trainer: 4gpus
-  - override /lr_scheduler: cosine_warmup_100epochs.yaml
+  - override /lr_scheduler: cosine_warmup_150epochs.yaml
 
 wandb:
   name: sat_interp_37GHz
