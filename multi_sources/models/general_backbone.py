@@ -1,7 +1,6 @@
 """Implements a general backbone for the mask-autoencoding task,
 which can be used with custom blocks."""
 
-import torch
 import torch.nn as nn
 from multi_sources.models.utils import pair
 
@@ -77,26 +76,25 @@ class MultisourceGeneralBackbone(nn.Module):
             self.blocks.append(block)
 
     def forward(self, inputs, attention_mask=None):
-        """Forward pass. See the class docstring for the input/output format."""
+        """
+        Args:
+            inputs (list): List of tuples (c, v) for each source, where:
+                - c (b, n, dim_coords) is the coordinates of the tokens.
+                - v (b, n, dim_pixels) is the values of the tokens.
+                    Some tokens may be masked.
+            attention_mask (list): List of attention masks for each source,
+                of shape (b, n).
+        Returns:
+            List of tensors of shape (b, n, dim_pixels), which are the predicted values
+            of the tokens.
+        """
         # Unpack the inputs
         coords_seq, pixels_seq = zip(*inputs)
-        # Save the number of tokens in each sequence
-        n_tokens_seq = [coords.shape[1] for coords in coords_seq]
-        # Concatenate the sequences from each source into one sequence
-        coords_seq = torch.cat(coords_seq, dim=1)
-        pixels_seq = torch.cat(pixels_seq, dim=1)
-        # If an attention mask is provided, concatenate it
-        if attention_mask is not None:
-            attention_mask = torch.cat(attention_mask, dim=1)
-        # If the coordinates embedding size is the same as the pixel embedding size,
-        # sum them (the coords act as positional encodings)
-        if self.coords_dim == self.pixels_dim and self.sum_coords_to_pixels:
-            pixels_seq = pixels_seq + coords_seq
         # Apply the blocks with skip connections
         for block in self.blocks:
             for norm, layer in block:
-                layer_out = layer(norm(pixels_seq), coords_seq, mask=attention_mask)
-                pixels_seq = layer_out + pixels_seq
-        # Split the sequences back into the original sequences
-        pixels_seq = pixels_seq.split(n_tokens_seq, dim=1)
+                layer_out = [norm(pixels) for pixels in pixels_seq]
+                layer_out = layer(layer_out, coords_seq, mask=attention_mask)
+                # Add a skip connection
+                pixels_seq = [pixels + layer_out for pixels, layer_out in zip(pixels_seq, layer_out)]
         return pixels_seq

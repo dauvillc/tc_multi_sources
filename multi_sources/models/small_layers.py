@@ -14,4 +14,14 @@ class FeedForward(nn.Module):
         )
 
     def forward(self, pixels_seq, coords_seq, **kwargs):
-        return self.net(pixels_seq)
+        """
+        Args:
+            pixels (list of torch.Tensor): Embedded sequence of tokens from the pixels,
+                for each source. Each tensor should have shape (bs, n_tokens, pixel_dim).
+            coords (list of torch.Tensor): Embedded sequence of tokens from the coordinates,
+                for each source.
+                Each tensor should have shape (bs, n_tokens, coords_dim).
+        Returns:
+            list of torch.Tensor: The output of the FFN for each source.
+        """
+        return [self.net(pixels) for pixels in pixels_seq]

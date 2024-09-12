@@ -13,11 +13,11 @@ class AttentionMap(nn.Module):
 
     def __init__(self, dim_head, relative_pos=False, rel_pos_dim_head=None):
         super().__init__()
-        self.scale = dim_head ** -0.5
+        self.scale = dim_head**-0.5
 
         self.relative_pos = relative_pos
         if self.relative_pos:
-            self.rel_pos_scale = rel_pos_dim_head ** -0.5
+            self.rel_pos_scale = rel_pos_dim_head**-0.5
 
     def forward(self, keys, queries, pos_key=None, pos_query=None, mask=None):
         """
@@ -101,7 +101,25 @@ class CoordinatesAttention(nn.Module):
         self.attention = SelfAttention(coords_dim, pixel_dim, **attention_kwargs)
 
     def forward(self, pixel_values, coords):
-        return self.attention(coords, pixel_values)
+        """
+        Args:
+            pixel_values (list of torch.Tensor): Embedded sequence of tokens from the pixels,
+                for each source. Each tensor should have shape (bs, n_tokens, pixel_dim).
+            coords (list of torch.Tensor): Embedded sequence of tokens from the coordinates,
+                for each source.
+                Each tensor should have shape (bs, n_tokens, coords_dim).
+        Returns:
+            list of torch.Tensor: The updated pixel values.
+        """
+        # Save the length of each sequence.
+        seq_lens = [seq.shape[1] for seq in pixel_values]
+        # For both pixel values and coordinates, concatenate the sequences from all sources.
+        pixel_values = torch.cat(pixel_values, dim=1)
+        coords = torch.cat(coords, dim=1)
+        # Feed the sequences to the attention block, using the coordinates as keys and queries.
+        updated_pixel_values = self.attention(coords, pixel_values)
+        # Split the updated pixel values back into sequences.
+        return torch.split(updated_pixel_values, seq_lens, dim=1)
 
 
 class PixelsAttention(nn.Module):
@@ -114,7 +132,25 @@ class PixelsAttention(nn.Module):
         self.attention = SelfAttention(pixel_dim, pixel_dim, **attention_kwargs)
 
     def forward(self, pixel_values, coords):
-        return self.attention(pixel_values, pixel_values)
+        """
+        Args:
+            pixel_values (list of torch.Tensor): Embedded sequence of tokens from the pixels,
+                for each source. Each tensor should have shape (bs, n_tokens, pixel_dim).
+            coords (list of torch.Tensor): Embedded sequence of tokens from the coordinates,
+                for each source.
+                Each tensor should have shape (bs, n_tokens, coords_dim).
+                Not actually used in this module, but kept for compatibility with the general backbone.
+        Returns:
+            list of torch.Tensor: The updated pixel values.
+        """
+        # Save the length of each sequence.
+        seq_lens = [seq.shape[1] for seq in pixel_values]
+        # Concatenate the sequences from all sources.
+        pixel_values = torch.cat(pixel_values, dim=1)
+        # Feed the sequences to the attention block, using the pixel values as keys and queries.
+        updated_pixel_values = self.attention(pixel_values, pixel_values)
+        # Split the updated pixel values back into sequences.
+        return torch.split(updated_pixel_values, seq_lens, dim=1)
 
 
 class PixelsCoordinatesAttention(nn.Module):
@@ -135,6 +171,24 @@ class PixelsCoordinatesAttention(nn.Module):
         self.output_proj = nn.Sequential(nn.Linear(inner_dim, pixel_dim), nn.Dropout(dropout))
 
     def forward(self, pixels, coords, mask=None):
+        """
+        Args:
+            pixels (list of torch.Tensor): Embedded sequence of tokens from the pixels,
+                for each source. Each tensor should have shape (bs, n_tokens, pixel_dim).
+            coords (list of torch.Tensor): Embedded sequence of tokens from the coordinates,
+                for each source.
+                Each tensor should have shape (bs, n_tokens, coords_dim).
+            mask (list of torch.Tensor): Mask for the attention map, for each source.
+                Each tensor should have shape (bs, n_tokens).
+        Returns:
+            list of torch.Tensor: The updated pixel values.
+        """
+        # Save the length of each sequence.
+        seq_lens = [seq.shape[1] for seq in pixels]
+        # Concatenate the sequences from all sources.
+        pixels = torch.cat(pixels, dim=1)
+        coords = torch.cat(coords, dim=1)
+        mask = torch.cat(mask, dim=1) if mask is not None else None
         # Project the pixel values and coordinates to the query, key and value spaces.
         # The values come from the pixels.
         qkv_pixels = self.pixels_to_qkv(pixels).chunk(3, dim=-1)
@@ -149,4 +203,42 @@ class PixelsCoordinatesAttention(nn.Module):
         attn = self.attention_map(kp, qp, kc, qc, mask=mask)
         out = torch.matmul(attn, v)
         out = rearrange(out, "b h n d -> b n (h d)")
-        return self.output_proj(out)
+        out = self.output_proj(out)
+        # Split the updated pixel values back into sequences.
+        return torch.split(out, seq_lens, dim=1)
+
+
+class TemporalWindowedAttention(nn.Module):
+    """Attention block that uses windowed attention over the temporal dimension,
+    as well as coordinates embeddings as relative positional encodings."""
+    def __init__(self, pixel_dim, coords_dim, inner_dim, num_heads=8, dropout=0.0, window_size=4):
+        super().__init__()
+        assert inner_dim % num_heads == 0
+        assert window_size % 2 == 0
+        self.num_heads = num_heads
+        self.window_size = window_size
+
+        self.pixels_to_qkv = nn.Linear(pixel_dim, inner_dim * 3, bias=False)
+        self.coords_to_qk = nn.Linear(coords_dim, inner_dim * 2, bias=False)
+
+        dim_head = inner_dim // num_heads
+        self.attention_map = AttentionMap(dim_head, relative_pos=True, rel_pos_dim_head=dim_head)
+        self.output_proj = nn.Sequential(nn.Linear(inner_dim, pixel_dim), nn.Dropout(dropout))
+
+    def forward(self, pixels, coords, mask=None):
+        """
+        Args:
+            pixels (list of torch.Tensor): Embedded sequence of tokens from the pixels,
+                for each source. Each tensor should have shape (bs, n_tokens, pixel_dim).
+                The sources are assumed to be sorted in increasing order of time.
+            coords (list of torch.Tensor): Embedded sequence of tokens from the coordinates,
+                for each source.
+                Each tensor should have shape (bs, n_tokens, coords_dim).
+            mask (list of torch.Tensor): Mask for the attention map, for each source.
+                Each tensor should have shape (bs, n_tokens).
+        Returns:
+            list of torch.Tensor: The updated pixel values.
+        """
+        # TODO
+        pass
+
