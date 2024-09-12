@@ -152,8 +152,10 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         # min_available_sources sources are available.
         available_sources_count = self.available_sources.sum(axis=1)
         mask = available_sources_count >= min_available_sources
-        self.df = self.df[mask].reset_index(drop=True)
+        self.reference_df = self.df[mask].reset_index(drop=True)
         self.available_sources = self.available_sources[mask].reset_index(drop=True)
+        # At this point, self.df contains the info about every element that can be yielded
+        # within a sample, while self.reference_df contains every element that defines a sample.
 
         # ========================================================================================
         # Load the data means and stds
@@ -181,7 +183,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                 at the given index.
         """
         source_shapes = self._get_source_shapes()
-        sample = self.df.iloc[idx]
+        sample = self.reference_df.iloc[idx]
         sid, t0 = sample["sid"], sample["time"]
         # Isolate the rows of self.df corresponding to the sample sid
         sample_df = self.df[self.df["sid"] == sid]
@@ -395,7 +397,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         return normalized_context, normalized_values
 
     def __len__(self):
-        return len(self.df)
+        return len(self.reference_df)
 
     def _get_source_names(self):
         """Returns a list of the source names (before splitting the sources)."""
