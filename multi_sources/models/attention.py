@@ -127,6 +127,7 @@ class ValuesCoordinatesAttention(nn.Module):
         coords = torch.cat([data["embedded_coords"] for data in inputs.values()], dim=1)
         if attention_mask is not None:
             attention_mask = torch.cat([mask for mask in attention_mask.values()], dim=1)
+
         # Project the values and coordinates to the query, key and value spaces.
         qkv_values = self.values_to_qkv(values).chunk(3, dim=-1)
         qk_coords = self.coords_to_qk(coords).chunk(2, dim=-1)
@@ -141,42 +142,34 @@ class ValuesCoordinatesAttention(nn.Module):
         out = torch.matmul(attn, v)
         out = rearrange(out, "b h n d -> b n (h d)")
         out = self.output_proj(out)
+
         # Split the updated values sequence back into sequences for each source.
         source_seqs = torch.split(out, [data["embedded_values"].shape[1] for data in inputs.values()], dim=1)
         return {source_name: seq for source_name, seq in zip(inputs.keys(), source_seqs)}
 
 
-class TemporalWindowedAttention(nn.Module):
-    """Attention block that uses windowed attention over the temporal dimension,
-    as well as coordinates embeddings as relative positional encodings."""
-
+class WindowedValuesCoordinatesAttention(nn.Module):
+    """Attention block that uses a window over the source dimension so that the cost isn't
+    quadratic over that dimension:
+    - The sources are first sorted in chronological order.
+    - The sources are then grouped in windows of size window_size.
+    - The attention is computed over the sources in each window.
+    Two layers are actually used, with the windows being shifted between the two so that the
+    attention can be propagated across the source dimension.
+    """
     def __init__(self, values_dim, coords_dim, inner_dim, num_heads=8, dropout=0.0, window_size=4):
-        super().__init__()
-        assert inner_dim % num_heads == 0
-        assert window_size % 2 == 0
-        self.num_heads = num_heads
-        self.window_size = window_size
-
-        self.values_to_qkv = nn.Linear(values_dim, inner_dim * 3, bias=False)
-        self.coords_to_qk = nn.Linear(coords_dim, inner_dim * 2, bias=False)
-
-        dim_head = inner_dim // num_heads
-        self.attention_map = AttentionMap(dim_head, relative_pos=True, rel_pos_dim_head=dim_head)
-        self.output_proj = nn.Sequential(nn.Linear(inner_dim, values_dim), nn.Dropout(dropout))
-
-    def forward(self, values, coords, mask=None):
         """
         Args:
-            values (list of torch.Tensor): Embedded sequence of tokens from the values,
-                for each source. Each tensor should have shape (bs, n_tokens, values_dim).
-                The sources are assumed to be sorted in increasing order of time.
-            coords (list of torch.Tensor): Embedded sequence of tokens from the coordinates,
-                for each source.
-                Each tensor should have shape (bs, n_tokens, coords_dim).
-            mask (list of torch.Tensor): Mask for the attention map, for each source.
-                Each tensor should have shape (bs, n_tokens).
-        Returns:
-            list of torch.Tensor: The updated values.
+            values_dim (int): Embedding dimension of the values.
+            coords_dim (int): Embedding dimension of the coordinates.
+            inner_dim (int): Inner dimension of the attention block.
+            num_heads (int): Number of heads in the attention block.
+            dropout (float): Dropout rate.
+            window_size (int): Number of sources included in each window. Must be even.
         """
+        super().__init__()
+        if window_size % 2 != 0:
+            raise ValueError("Window size must be even.")
+        self.window_size = window_size
         # TODO
         pass
