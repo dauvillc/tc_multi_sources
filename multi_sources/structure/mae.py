@@ -112,9 +112,7 @@ class MultisourceMAE(pl.LightningModule):
 
         # Linear embeddings
         in_dim = self.patch_size[0] * self.patch_size[1]
-        self.coord_embedding = LinearEmbedding(
-            in_dim * 2, coords_dim
-        )  # latitude and longitude
+        self.coord_embedding = LinearEmbedding(in_dim * 2, coords_dim)  # latitude and longitude
         self.landmask_embedding = LinearEmbedding(in_dim, values_dim)
         self.value_embedding = LinearEmbedding(in_dim, values_dim)
         self.mask_embedding = LinearEmbedding(in_dim, values_dim)
@@ -127,12 +125,8 @@ class MultisourceMAE(pl.LightningModule):
                 raise ValueError(
                     "If share_source_embeddings is True, context_variables must be passed"
                 )
-            self.source_to_values_embedding = SharedSourceEmbedding(
-                context_variables, values_dim
-            )
-            self.source_to_coord_embedding = SharedSourceEmbedding(
-                context_variables, coords_dim
-            )
+            self.source_to_values_embedding = SharedSourceEmbedding(context_variables, values_dim)
+            self.source_to_coord_embedding = SharedSourceEmbedding(context_variables, coords_dim)
         else:
             self.source_to_values_embedding = SourceEmbedding(source_names, values_dim)
             self.source_to_coord_embedding = SourceEmbedding(source_names, coords_dim)
@@ -160,15 +154,9 @@ class MultisourceMAE(pl.LightningModule):
         input_ = {}
         for i, (source, data) in enumerate(x.items()):
             # Pad the image tensors to the next multiple of the patch size
-            c = pad_to_next_multiple_of(
-                normed_coords[i], self.patch_size, value=float("nan")
-            )
-            lm = pad_to_next_multiple_of(
-                data["landmask"], self.patch_size, value=float("nan")
-            )
-            v = pad_to_next_multiple_of(
-                data["values"], self.patch_size, value=float("nan")
-            )
+            c = pad_to_next_multiple_of(normed_coords[i], self.patch_size, value=float("nan"))
+            lm = pad_to_next_multiple_of(data["landmask"], self.patch_size, value=float("nan"))
+            v = pad_to_next_multiple_of(data["values"], self.patch_size, value=float("nan"))
             d = pad_to_next_multiple_of(
                 data["dist_to_center"], self.patch_size, value=float("nan")
             )
@@ -200,9 +188,7 @@ class MultisourceMAE(pl.LightningModule):
             for k, v in input_[source].items():
                 if isinstance(v, torch.Tensor) and v.dtype == torch.float32:
                     if torch.isnan(v).any():
-                        raise ValueError(
-                            f"NaN values found in source {source} tensor {k}"
-                        )
+                        raise ValueError(f"NaN values found in source {source} tensor {k}")
         return input_
 
     def tokenize(self, x):
@@ -254,12 +240,8 @@ class MultisourceMAE(pl.LightningModule):
                     source_type, data["context"].unsqueeze(1)
                 )
             else:
-                source_to_values_embedding = self.source_to_values_embedding(
-                    source, (B, L)
-                )
-                source_to_coord_embedding = self.source_to_coord_embedding(
-                    source, (B, L)
-                )
+                source_to_values_embedding = self.source_to_values_embedding(source, (B, L))
+                source_to_coord_embedding = self.source_to_coord_embedding(source, (B, L))
 
             # Sum the values, availability mask, land mask and source embeddings
             v = v + lm + m + source_to_values_embedding
@@ -375,9 +357,7 @@ class MultisourceMAE(pl.LightningModule):
                 before tokenization.
         """
         x = self.embed(x)
-        encoder_x, token_perms, n_tokens, masked_tokens_indices = self.to_encoder_input(
-            x
-        )
+        encoder_x, token_perms, n_tokens, masked_tokens_indices = self.to_encoder_input(x)
         encoder_y = self.encoder(encoder_x)
 
         decoder_x = self.to_decoder_input(encoder_y, x, token_perms, n_tokens)
@@ -391,7 +371,7 @@ class MultisourceMAE(pl.LightningModule):
             attn_masks[source] = attn_mask
         pred = self.decoder(decoder_x, attn_masks)
         # Project the predicted values to the original space
-        pred ={source: self.output_proj(v) for source, v in pred.items()}
+        pred = {source: self.output_proj(v) for source, v in pred.items()}
         # If an output convolutional layer is specified, apply it
         if self.output_convs is not None:
             # Convert the predictions back to images, apply the convolutional layer,
@@ -438,9 +418,7 @@ class MultisourceMAE(pl.LightningModule):
         # Compute other metrics
         for metric_name, metric_fn in self.metrics.items():
             metric_value = metric_fn(pred, x)
-            self.log(
-                f"{train_or_val}_{metric_name}", metric_value, batch_size=batch_size
-            )
+            self.log(f"{train_or_val}_{metric_name}", metric_value, batch_size=batch_size)
         return loss
 
     def loss_fn(self, y_pred, y_true, masked_token_indices):
@@ -450,9 +428,7 @@ class MultisourceMAE(pl.LightningModule):
             pred = y_pred[source]
             B, L, D = pred.shape
             # Retrieve the indices of the masked tokens
-            masked_indices = (
-                masked_token_indices[source].unsqueeze(-1).expand(-1, -1, D)
-            )
+            masked_indices = masked_token_indices[source].unsqueeze(-1).expand(-1, -1, D)
             # For those tokens, retrieve the availability mask (as masked tokens can
             # correspond to missing data in the ground truth).
             mask = true_data["mask"].gather(1, masked_indices).float()
@@ -460,10 +436,7 @@ class MultisourceMAE(pl.LightningModule):
             # that are too far from the center
             if self.loss_max_distance_from_center is not None:
                 d_masked_tokens = true_data["dist_to_center"].gather(1, masked_indices)
-                mask = (
-                    mask
-                    * (d_masked_tokens < self.loss_max_distance_from_center).float()
-                )
+                mask = mask * (d_masked_tokens < self.loss_max_distance_from_center).float()
             m_sum = mask.sum()
             if m_sum.item() == 0:
                 # If all masked tokens are missing data, skip the loss computation
@@ -503,9 +476,7 @@ class MultisourceMAE(pl.LightningModule):
                 # we'll replace the predicted values with the true values
                 otp = true_data["values"].clone()
                 B, L, D = pred[source].shape
-                masked_indices = (
-                    masked_tokens_indices[source].unsqueeze(-1).expand(-1, -1, D)
-                )
+                masked_indices = masked_tokens_indices[source].unsqueeze(-1).expand(-1, -1, D)
                 otp.scatter_(1, masked_indices, pred[source].gather(1, masked_indices))
                 output[source] = otp
             else:
@@ -528,21 +499,13 @@ class MultisourceMAE(pl.LightningModule):
         """
         decay = self.adamw_kwargs.pop("weight_decay", 0.0)
         decay_params = {
-            k: True
-            for k, v in self.named_parameters()
-            if "weight" in k and "norm" not in k
+            k: True for k, v in self.named_parameters() if "weight" in k and "norm" not in k
         }
         optimizer = torch.optim.AdamW(
             [
+                {"params": [v for k, v in self.named_parameters() if k in decay_params]},
                 {
-                    "params": [
-                        v for k, v in self.named_parameters() if k in decay_params
-                    ]
-                },
-                {
-                    "params": [
-                        v for k, v in self.named_parameters() if k not in decay_params
-                    ],
+                    "params": [v for k, v in self.named_parameters() if k not in decay_params],
                     "weight_decay": decay,
                 },
             ],
