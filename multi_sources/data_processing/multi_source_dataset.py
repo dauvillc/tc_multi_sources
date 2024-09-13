@@ -206,7 +206,6 @@ class MultiSourceDataset(torch.utils.data.Dataset):
 
                 # No element available for this source
                 # Create a tensor of the appropriate shape filled with NaNs
-                A = torch.tensor(-1, dtype=torch.float32)
                 source_channels = self._get_n_data_variables(source_name)
                 DT = torch.tensor(float("nan"), dtype=torch.float32)
                 C = torch.full(
@@ -232,7 +231,6 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                     for dvar in source.data_vars:
                         output[f"{source_name}_{dvar}"] = {
                             "source_type": source_type,
-                            "avail": A,
                             "dt": DT,
                             "context": CT,
                             "coords": C,
@@ -258,7 +256,6 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                     )
                     output[source_name] = {
                         "source_type": source_type,
-                        "avail": A,
                         "dt": DT,
                         "context": CT,
                         "coords": C,
@@ -270,7 +267,6 @@ class MultiSourceDataset(torch.utils.data.Dataset):
             else:
                 time = df["time"].iloc[0]
                 dt = t0 - time
-                A = torch.tensor(1, dtype=torch.float32)
                 DT = torch.tensor(
                     dt.total_seconds() / self.dt_max.total_seconds(),
                     dtype=torch.float32,
@@ -301,7 +297,6 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                             CT, V = self.normalize(CT, V, source, dvar)
                             output[f"{source_name}_{dvar}"] = {
                                 "source_type": source_type,
-                                "avail": A,
                                 "dt": DT,
                                 "context": CT,
                                 "coords": C,
@@ -335,7 +330,6 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                         CT, V = self.normalize(CT, V, source)
                         output[source_name] = {
                             "source_type": source_type,
-                            "avail": A,
                             "dt": DT,
                             "context": CT,
                             "coords": C,
