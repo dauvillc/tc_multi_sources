@@ -18,7 +18,7 @@ def main(cfg: DictConfig):
     cfg = OmegaConf.to_object(cfg)
     # Create the dataset
     dataset_dir = cfg["paths"]["preprocessed_dataset"]
-    split = 'train'
+    split = "train"
     included_vars = read_variables_dict(cfg["sources"])
     dataset = MultiSourceDataset(dataset_dir, split, included_vars)
 
@@ -43,7 +43,9 @@ def main(cfg: DictConfig):
     # of the samples in the dataset.
     profiler = Profiler()
     profiler.start()
-    dataloader = DataLoader(dataset, batch_size=32, num_workers=cfg['num_workers'], shuffle=True)
+    dataloader = DataLoader(
+        dataset, batch_size=32, num_workers=cfg["num_workers"], shuffle=True
+    )
 
     data_means, data_stds = defaultdict(int), defaultdict(int)
     context_means, context_stds = defaultdict(int), defaultdict(int)
@@ -60,8 +62,12 @@ def main(cfg: DictConfig):
                 # context
                 ct = data["context"]
                 ct_nonan = ct[~ct.isnan()]
-                context_means[source_name] = context_means[source_name] + ct_nonan.mean().item()
-                context_stds[source_name] = context_stds[source_name] + ct_nonan.std().item()
+                context_means[source_name] = (
+                    context_means[source_name] + ct_nonan.mean().item()
+                )
+                context_stds[source_name] = (
+                    context_stds[source_name] + ct_nonan.std().item()
+                )
 
     profiler.stop()
     profiler.write_html("tests/outputs/profile_multi_source_dataset.html")
@@ -73,7 +79,9 @@ def main(cfg: DictConfig):
         context_means[source_name] = context_means[source_name] / len(dataloader)
         context_stds[source_name] = context_stds[source_name] / len(dataloader)
         print(f"Source {source_name}:")
-        print(f"Data mean: {data_means[source_name]}, Data std: {data_stds[source_name]}")
+        print(
+            f"Data mean: {data_means[source_name]}, Data std: {data_stds[source_name]}"
+        )
         print(
             f"Context mean: {context_means[source_name]}, Context std: {context_stds[source_name]}"
         )

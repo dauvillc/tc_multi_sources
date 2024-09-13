@@ -7,7 +7,7 @@ defaults:
   - lightning_module: mae
   - model: general_backbone
   - trainer: 1gpu
-  - lr_scheduler: cosine_warmup_150epochs
+  - lr_scheduler: cosine_warmup_50epochs
   - optimizer: default_adamw
   - _self_
 
