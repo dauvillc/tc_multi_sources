@@ -98,7 +98,6 @@ class MultisourceGeneralBackbone(nn.Module):
                 new_x = {}
                 for source_name, data in x.items():
                     new_x[source_name] = {}
-                    new_x[source_name]["embedded_values"] = data["embedded_values"]
                     new_x[source_name]["embedded_coords"] = data["embedded_coords"]
                     new_x[source_name]["dt"] = data["dt"]
                     new_x[source_name]["embedded_dt"] = data["embedded_dt"]
@@ -107,7 +106,6 @@ class MultisourceGeneralBackbone(nn.Module):
                 # Apply the layer and add the skip connection
                 new_values = layer(new_x, attention_mask=attention_mask)  # dict {source_name: tensor}
                 for source_name, data in new_x.items():
-                    new_val = new_values[source_name] + new_x[source_name]["embedded_values"]
-                    new_x[source_name]["embedded_values"] = new_val
+                    new_x[source_name]["embedded_values"] = new_values[source_name] + data["embedded_values"]
                 x = new_x
         return {source_name: x[source_name]['embedded_values'] for source_name in x.keys()}
