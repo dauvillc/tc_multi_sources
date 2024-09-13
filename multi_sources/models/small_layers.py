@@ -5,10 +5,10 @@ class FeedForward(nn.Module):
     def __init__(self, values_dim, coords_dim, inner_dim, dropout=0.0):
         super().__init__()
         self.net = nn.Sequential(
-            nn.LayerNorm(values_dim),
             nn.Linear(values_dim, inner_dim),
             nn.GELU(),
             nn.Dropout(dropout),
+            nn.LayerNorm(inner_dim),
             nn.Linear(inner_dim, values_dim),
             nn.Dropout(dropout),
         )
