@@ -104,8 +104,12 @@ class MultisourceGeneralBackbone(nn.Module):
                     # Normalize the values in each source
                     new_x[source_name]["embedded_values"] = norm(data["embedded_values"])
                 # Apply the layer and add the skip connection
-                new_values = layer(new_x, attention_mask=attention_mask)  # dict {source_name: tensor}
+                new_values = layer(
+                    new_x, attention_mask=attention_mask
+                )  # dict {source_name: tensor}
                 for source_name, data in new_x.items():
-                    new_x[source_name]["embedded_values"] = new_values[source_name] + data["embedded_values"]
+                    new_x[source_name]["embedded_values"] = (
+                        new_values[source_name] + x[source_name]["embedded_values"]
+                    )
                 x = new_x
-        return {source_name: x[source_name]['embedded_values'] for source_name in x.keys()}
+        return {source_name: x[source_name]["embedded_values"] for source_name in x.keys()}
