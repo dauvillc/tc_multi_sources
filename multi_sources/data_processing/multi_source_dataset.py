@@ -196,7 +196,8 @@ class MultiSourceDataset(torch.utils.data.Dataset):
             source_name = source.name
             source_type = source.type
             # Isolate the rows of sample_df corresponding to the right source
-            df = sample_df[sample_df["source_name"] == source_name]
+            # and where the time is less than or equal to t0
+            df = sample_df[(sample_df["source_name"] == source_name) & (sample_df["time"] <= t0)]
             # Sort by descending time so that the first row is the closest to t0
             df = df.sort_values("time", ascending=False)
             # Check that there is at least one element available for this source,
