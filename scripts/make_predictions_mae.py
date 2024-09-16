@@ -22,15 +22,12 @@ def main(cfg: DictConfig):
     # experiment
     exp_cfg["dataloader"].update(cfg["dataloader"])
     exp_cfg["paths"].update(cfg["paths"])
+    exp_cfg['dataset']['val']['dataset_dir'] = cfg['paths']['preprocessed_dataset']
     # Seed everything with the seed used in the experiment
     pl.seed_everything(exp_cfg["seed"], workers=True)
 
     # Create the validation dataset and dataloader
-    val_dataset = hydra.utils.instantiate(
-        exp_cfg["dataset"]["val"],
-        metadata_path=cfg["paths"]["metadata"],
-        dataset_dir=cfg["paths"]["preprocessed_dataset"],
-    )
+    val_dataset = hydra.utils.instantiate(exp_cfg["dataset"]["val"],)
     val_dataloader = DataLoader(val_dataset, **exp_cfg["dataloader"])
     print("Validation dataset size:", len(val_dataset))
 
@@ -42,6 +39,7 @@ def main(cfg: DictConfig):
 
     # Instantiate the model and the lightning module
     source_names = val_dataset.get_source_names()
+    context_vars = val_dataset.get_source_types_context_vars()
     encoder = instantiate(exp_cfg["model"]["encoder"])
     decoder = instantiate(exp_cfg["model"]["decoder"])
     output_convs = None
@@ -59,6 +57,7 @@ def main(cfg: DictConfig):
         decoder=decoder,
         cfg=exp_cfg,
         output_convs=output_convs,
+        context_vars=context_vars,
     )
 
     # If we are saving the attention maps, wrap the decoder with the AttentionRecorder class

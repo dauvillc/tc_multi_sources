@@ -9,8 +9,10 @@ from lightning.pytorch.callbacks import BasePredictionWriter
 class MultiSourceWriter(BasePredictionWriter):
     """Can be used as callback to a Lightning Trainer to write to disk the predictions of a model
     such that:
-    - The targets are of the form {source_name: (dt, c, d, lm, v, m)}
-        where v are the values to predict.
+    - The targets are of the form {source_name: D} where D is a dictionary with the following keys:
+        - dt: The datetime of the observation
+        - values: The values to predict
+        - coords: The coordinates of the observation
     - The outputs are of the form {source_name: v'} where v' are the predicted values.
         A source may not be included in the outputs.
 
@@ -42,14 +44,12 @@ class MultiSourceWriter(BasePredictionWriter):
         batch, pred = prediction
         # We'll write to the info file in append mode
         info_file = self.root_dir / "info.csv"
-        # An item in the batch is of the form {source_name: (dt, c, d, lm, v, m)}
-        # We're interested in c (lat/lon) and v (values to predict)
-        for source_name, (dt, c, _, _, v, _) in batch.items():
+        for source_name, data in batch.items():
             target_dir = self.targets_dir / source_name
             target_dir.mkdir(parents=True, exist_ok=True)
-            targets = v.detach().cpu().numpy()
+            targets = data['values'].detach().cpu().numpy()
             # Append the lat/lon to the targets
-            latlon = c.detach().cpu().numpy()
+            latlon = data['coords'].detach().cpu().numpy()
             targets_with_coords = np.concatenate([latlon, targets], axis=1)
             np.save(target_dir / f"{batch_idx}.npy", targets_with_coords)
 
@@ -64,7 +64,7 @@ class MultiSourceWriter(BasePredictionWriter):
                 {
                     "source_name": [source_name] * batch_size,
                     "batch_idx": [batch_idx] * batch_size,
-                    "dt": dt.detach().cpu().numpy(),
+                    "dt": data['dt'].detach().cpu().numpy(),
                 },
             )
             include_header = not info_file.exists()

@@ -461,12 +461,12 @@ class MultisourceMAE(pl.LightningModule):
     def predict_step(self, batch, batch_idx):
         """Defines a prediction step for the model.
         Returns:
-            batch (dict of str to tuple of tensors): The input batch.
+            batch (dict of str to dict of str to tensor): The input batch.
             pred (dict of str to tensor): The predicted values.
         """
         batch = self.preproc_input(batch)
         # Save the shapes of the padded tensors to reconstruct the images
-        padded_shapes = {source: x[1].shape[-2:] for source, x in batch.items()}
+        padded_shapes = {source: x['values'].shape[-2:] for source, x in batch.items()}
         x = self.tokenize(batch)
         pred, masked_tokens_indices = self.forward(x, padded_shapes)
         output = {}
