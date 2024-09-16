@@ -8,5 +8,5 @@ run_id: ???
 num_workers: 4
 
 display_attention_maps: False
-n_displayed_batches: 2
+n_displayed_batches: 10
 n_samples_per_batch: 16
