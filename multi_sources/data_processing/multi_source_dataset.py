@@ -31,8 +31,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
     For a given storm S and reference time t0,
     the dataset returns the element from each source that is closest
     to t0 and between t0 and t0 - dt_max.
-    If for a given source, no element is available for the storm S and time t0, the element is
-    filled with NaNs.
+    If a source is not available for the storm S at time t0, it is not included in the sample.
     """
 
     def __init__(
@@ -202,70 +201,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
             df = df.sort_values("time", ascending=False)
             # Check that there is at least one element available for this source,
             # and that the time delta is within the acceptable range
-            if len(df) == 0 or t0 - df["time"].iloc[0] >= self.dt_max:
-                source_shape = source_shapes[source_name]
-
-                # No element available for this source
-                # Create a tensor of the appropriate shape filled with NaNs
-                source_channels = self._get_n_data_variables(source_name)
-                DT = torch.tensor(float("nan"), dtype=torch.float32)
-                C = torch.full(
-                    (2, *source_shape), fill_value=float("nan"), dtype=torch.float32
-                )
-                LM = torch.full(
-                    source_shape, fill_value=float("nan"), dtype=torch.float32
-                )
-                D = torch.full(
-                    source_shape, fill_value=float("nan"), dtype=torch.float32
-                )
-                # Either consider each variable as a separate source, or keep the source as a
-                # multi-channel image.
-                if self.single_channel_sources:
-                    CT = torch.full(
-                        (self._get_n_context_variables(source_name),),
-                        fill_value=float("nan"),
-                        dtype=torch.float32,
-                    )
-                    V = torch.full(
-                        (1, *source_shape), fill_value=float("nan"), dtype=torch.float32
-                    )
-                    for dvar in source.data_vars:
-                        output[f"{source_name}_{dvar}"] = {
-                            "source_type": source_type,
-                            "dt": DT,
-                            "context": CT,
-                            "coords": C,
-                            "landmask": LM,
-                            "dist_to_center": D,
-                            "values": V,
-                        }
-                else:
-                    # If the source is multi-channel, each channel brings its own context variables
-                    # so the number of context vars is multiplied by the number of channels.
-                    CT = torch.full(
-                        (
-                            source.n_context_variables()
-                            * self._get_n_data_variables(source_name),
-                        ),
-                        fill_value=float("nan"),
-                        dtype=torch.float32,
-                    )
-                    V = torch.full(
-                        (source_channels, *source_shape),
-                        fill_value=float("nan"),
-                        dtype=torch.float32,
-                    )
-                    output[source_name] = {
-                        "source_type": source_type,
-                        "dt": DT,
-                        "context": CT,
-                        "coords": C,
-                        "landmask": LM,
-                        "dist_to_center": D,
-                        "values": V,
-                    }
-
-            else:
+            if len(df) > 0 and t0 - df["time"].iloc[0] < self.dt_max:
                 time = df["time"].iloc[0]
                 dt = t0 - time
                 DT = torch.tensor(
