@@ -10,6 +10,7 @@ from torch.utils.data import DataLoader
 from omegaconf import DictConfig, OmegaConf
 from utils.checkpoints import load_experiment_cfg_from_checkpoint
 from utils.utils import update
+from multi_sources.data_processing.collate_fn import multi_source_collate_fn
 
 
 @hydra.main(version_base=None, config_path="../conf", config_name="train")
@@ -39,10 +40,12 @@ def main(cfg: DictConfig):
 
     # Create the training dataset and dataloader
     train_dataset = hydra.utils.instantiate(cfg["dataset"]["train"])
-    train_dataloader = DataLoader(train_dataset, **cfg["dataloader"], shuffle=True)
+    train_dataloader = DataLoader(train_dataset, **cfg["dataloader"], shuffle=True,
+                                  collate_fn=multi_source_collate_fn)
     # Create the validation dataset and dataloader
     val_dataset = hydra.utils.instantiate(cfg["dataset"]["val"])
-    val_dataloader = DataLoader(val_dataset, **cfg["dataloader"])
+    val_dataloader = DataLoader(val_dataset, **cfg["dataloader"], shuffle=False,
+                                collate_fn=multi_source_collate_fn)
     print("Train dataset size:", len(train_dataset))
     print("Validation dataset size:", len(val_dataset))
 

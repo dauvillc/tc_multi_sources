@@ -5,6 +5,7 @@ from pathlib import Path
 from hydra.utils import get_class, instantiate
 from omegaconf import DictConfig, OmegaConf
 from multi_sources.data_processing.writer_mae import MultiSourceWriter
+from multi_sources.data_processing.collate_fn import multi_source_collate_fn
 from multi_sources.models.recorder import AttentionRecorder
 from utils.checkpoints import load_experiment_cfg_from_checkpoint
 
@@ -28,7 +29,8 @@ def main(cfg: DictConfig):
 
     # Create the validation dataset and dataloader
     val_dataset = hydra.utils.instantiate(exp_cfg["dataset"]["val"],)
-    val_dataloader = DataLoader(val_dataset, **exp_cfg["dataloader"])
+    val_dataloader = DataLoader(val_dataset, **exp_cfg["dataloader"], shuffle=False,
+                                collate_fn=multi_source_collate_fn)
     print("Validation dataset size:", len(val_dataset))
 
     # Create the results directory
