@@ -10,6 +10,7 @@ from torch.utils.data import DataLoader
 from tqdm import trange
 from multi_sources.data_processing.multi_source_dataset import MultiSourceDataset
 from multi_sources.data_processing.utils import read_variables_dict
+from multi_sources.data_processing.collate_fn import multi_source_collate_fn
 from pyinstrument import Profiler
 
 
@@ -44,7 +45,8 @@ def main(cfg: DictConfig):
     profiler = Profiler()
     profiler.start()
     dataloader = DataLoader(
-        dataset, batch_size=32, num_workers=cfg["num_workers"], shuffle=True
+        dataset, batch_size=32, num_workers=cfg["num_workers"], shuffle=True,
+        collate_fn=multi_source_collate_fn
     )
 
     data_means, data_stds = defaultdict(int), defaultdict(int)
