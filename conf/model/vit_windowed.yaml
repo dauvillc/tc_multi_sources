@@ -1,0 +1,53 @@
+encoder:
+  _target_: multi_sources.models.general_backbone.MultisourceGeneralBackbone
+  patch_size: ${lightning_module.patch_size}
+  coords_dim: ${lightning_module.coords_dim}
+  values_dim: ${lightning_module.values_dim}
+  n_blocks: 4
+  layers:
+    windowed_self_attention:
+      layer_class:
+        _target_: hydra.utils.get_class
+        path: multi_sources.models.attention.WindowedValuesCoordinatesAttention
+      inner_dim: 512
+      num_heads: 8
+      shifted_windows: False
+    ff2:
+      layer_class:
+        _target_: hydra.utils.get_class
+        path: multi_sources.models.small_layers.FeedForward
+      inner_dim: 512
+    shifted_windowed_self_attention:
+      layer_class:
+        _target_: hydra.utils.get_class
+        path: multi_sources.models.attention.WindowedValuesCoordinatesAttention
+      inner_dim: 512
+      num_heads: 8
+      shifted_windows: True
+
+decoder:
+  _target_: multi_sources.models.general_backbone.MultisourceGeneralBackbone
+  patch_size: ${lightning_module.patch_size}
+  coords_dim: ${lightning_module.coords_dim}
+  values_dim: ${lightning_module.values_dim}
+  n_blocks: 2
+  layers:
+    windowed_self_attention:
+      layer_class:
+        _target_: hydra.utils.get_class
+        path: multi_sources.models.attention.WindowedValuesCoordinatesAttention
+      inner_dim: 512
+      num_heads: 8
+      shifted_windows: False
+    ff2:
+      layer_class:
+        _target_: hydra.utils.get_class
+        path: multi_sources.models.small_layers.FeedForward
+      inner_dim: 512
+    shifted_windowed_self_attention:
+      layer_class:
+        _target_: hydra.utils.get_class
+        path: multi_sources.models.attention.WindowedValuesCoordinatesAttention
+      inner_dim: 512
+      num_heads: 8
+      shifted_windows: True
