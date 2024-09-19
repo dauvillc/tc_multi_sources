@@ -10,7 +10,7 @@ encoder:
         path: multi_sources.models.attention.WindowedValuesMetadataAttention
       inner_dim: 512
       num_heads: 8
-      window_size: 2
+      window_size: 4
       shifted_windows: False
     ff1:
       layer_class:
@@ -23,7 +23,7 @@ encoder:
         path: multi_sources.models.attention.WindowedValuesMetadataAttention
       inner_dim: 512
       num_heads: 8
-      window_size: 2
+      window_size: 4
       shifted_windows: True
     ff2:
       layer_class:
@@ -43,7 +43,7 @@ decoder:
         path: multi_sources.models.attention.WindowedValuesMetadataAttention
       inner_dim: 512
       num_heads: 8
-      window_size: 2
+      window_size: 4
       shifted_windows: False
     ff1:
       layer_class:
@@ -56,7 +56,7 @@ decoder:
         path: multi_sources.models.attention.WindowedValuesMetadataAttention
       inner_dim: 512
       num_heads: 8
-      window_size: 2
+      window_size: 4
       shifted_windows: True
     ff2:
       layer_class:
