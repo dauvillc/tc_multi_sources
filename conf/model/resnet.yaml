@@ -1,7 +1,7 @@
 encoder:
   _target_: multi_sources.models.general_backbone.MultisourceGeneralBackbone
   patch_size: ${lightning_module.patch_size}
-  coords_dim: ${lightning_module.coords_dim}
+  metadata_dim: ${lightning_module.metadata_dim}
   values_dim: ${lightning_module.values_dim}
   n_blocks: 0
   layers:
@@ -9,7 +9,7 @@ encoder:
 decoder:
   _target_: multi_sources.models.general_backbone.MultisourceGeneralBackbone
   patch_size: ${lightning_module.patch_size}
-  coords_dim: ${lightning_module.coords_dim}
+  metadata_dim: ${lightning_module.metadata_dim}
   values_dim: ${lightning_module.values_dim}
   n_blocks: 0
   layers:

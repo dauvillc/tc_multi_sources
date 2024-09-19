@@ -39,11 +39,10 @@ class MultisourceMAE(pl.LightningModule):
     - "dist_to_center" is a tensor of shape (H, W) containing the distance
         to the center of the storm.
     - "values" is a tensor of shape (n_variables, H, W) containing the variables for the source.
-    The structure uses an encoder and a decoder. The encoder receives the tokens as
-    a list of tuples (C, V) and outputs a tensor of shape (b, n_tokens, d_model).
+    The structure uses an encoder and a decoder.
     Masked tokens are not included in the encoder's input nor output.
     The decoder receives the encoder's output as well as the masked tokens (whose value has been
-    set to a learnable [MASK] token) and outputs a tensor of shape (b, n_tokens, n_variables).
+    set to a learnable [MASK] token).
     """
 
     def __init__(
@@ -55,7 +54,7 @@ class MultisourceMAE(pl.LightningModule):
         masking_ratio,
         patch_size,
         values_dim,
-        coords_dim,
+        metadata_dim,
         adamw_kwargs,
         lr_scheduler_kwargs,
         loss_max_distance_from_center,
@@ -74,7 +73,7 @@ class MultisourceMAE(pl.LightningModule):
             masking_ratio (float): The ratio of tokens to mask.
             patch_size (tuple of int): The size of the patches to split the images into.
             values_dim (int): The dimension of the values embeddings.
-            coords_dim (int): The dimension of the coordinate embeddings.
+            metadata_dim (int): The dimension of the metadata embeddings.
             adamw_kwargs (dict): The arguments to pass to torch.optim.AdamW (other than params).
             lr_scheduler_kwargs (dict): The arguments to pass to the learning rate scheduler.
             loss_max_distance_from_center (int or None): If specified, only pixels within this
@@ -99,7 +98,7 @@ class MultisourceMAE(pl.LightningModule):
         self.masking_ratio = masking_ratio
         self.patch_size = pair(patch_size)
         self.values_dim = values_dim
-        self.coords_dim = coords_dim
+        self.metadata_dim = metadata_dim
         self.lr_scheduler_kwargs = lr_scheduler_kwargs
         self.adamw_kwargs = adamw_kwargs
         self.metrics = metrics
@@ -112,11 +111,11 @@ class MultisourceMAE(pl.LightningModule):
 
         # Linear embeddings
         in_dim = self.patch_size[0] * self.patch_size[1]
-        self.coord_embedding = LinearEmbedding(in_dim * 2, coords_dim)  # latitude and longitude
+        self.coord_embedding = LinearEmbedding(in_dim * 2, metadata_dim)  # latitude and longitude
         self.landmask_embedding = LinearEmbedding(in_dim, values_dim)
         self.value_embedding = LinearEmbedding(in_dim, values_dim)
         self.mask_embedding = LinearEmbedding(in_dim, values_dim)
-        self.time_embedding = LinearEmbedding(1, coords_dim)
+        self.time_embedding = LinearEmbedding(1, metadata_dim)
 
         # The source embedding are learned, and will be summed both to
         # the values and coord embeddings
@@ -126,13 +125,13 @@ class MultisourceMAE(pl.LightningModule):
                     "If share_source_embeddings is True, context_variables must be passed"
                 )
             self.source_to_values_embedding = SharedSourceEmbedding(context_variables, values_dim)
-            self.source_to_coord_embedding = SharedSourceEmbedding(context_variables, coords_dim)
+            self.source_to_meta_embedding = SharedSourceEmbedding(context_variables, metadata_dim)
         else:
             self.source_to_values_embedding = SourceEmbedding(source_names, values_dim)
-            self.source_to_coord_embedding = SourceEmbedding(source_names, coords_dim)
+            self.source_to_meta_embedding = SourceEmbedding(source_names, metadata_dim)
 
         self.values_norm = nn.LayerNorm(values_dim)
-        self.coords_norm = nn.LayerNorm(coords_dim)
+        self.meta_norm = nn.LayerNorm(metadata_dim)
 
         # Projection of the predicted values to the original space
         self.output_proj = nn.Linear(self.values_dim, in_dim)
@@ -236,29 +235,29 @@ class MultisourceMAE(pl.LightningModule):
                 source_to_values_embedding = self.source_to_values_embedding(
                     source_type, data["context"].unsqueeze(1)
                 )
-                source_to_coord_embedding = self.source_to_coord_embedding(
+                source_to_meta_embedding = self.source_to_meta_embedding(
                     source_type, data["context"].unsqueeze(1)
                 )
             else:
                 source_to_values_embedding = self.source_to_values_embedding(source, (B, L))
-                source_to_coord_embedding = self.source_to_coord_embedding(source, (B, L))
+                source_to_meta_embedding = self.source_to_meta_embedding(source, (B, L))
 
             # Sum the values, availability mask, land mask and source embeddings
-            v = v + lm + m + source_to_values_embedding
-            # Sum the coords, time and source embeddings
-            c = c + embedded_dt + source_to_coord_embedding
+            values = v + lm + m + source_to_values_embedding
+            # Sum the coords, time and source embeddings to form the meta embeddings
+            meta = c + embedded_dt + source_to_meta_embedding
             # Normalize the embeddings
-            c = self.coords_norm(c)
-            v = self.values_norm(v)
+            meta = self.meta_norm(c)
+            values = self.values_norm(v)
 
             output[source] = {
                 "dt": dt,
                 "embedded_dt": embedded_dt,
                 "context": data["context"],
-                "embedded_coords": c,
+                "embedded_metadata": meta,
                 "embedded_landmask": lm,
                 "dist_to_center": data["dist_to_center"],
-                "embedded_values": v,
+                "embedded_values": values,
                 "mask": m,
             }
         return output
@@ -270,7 +269,7 @@ class MultisourceMAE(pl.LightningModule):
         Returns:
             encoder_x (dict of str to dict of str to tensor): The input for the encoder.
                 encoder_x[source_name] is a map with the keys ['dt', 'embedded_dt',
-                'embedded_source', 'embedded_coords', 'embedded_values']
+                'embedded_source', 'embedded_metadata', 'embedded_values']
             token_perms (dict of str to tensor): The permutation of the full sequence used
                 to shuffle the tokens.
             n_tokens (dict of str to int): The number of tokens in the original input.
@@ -281,22 +280,22 @@ class MultisourceMAE(pl.LightningModule):
         token_perms, n_tokens_map = {}, {}
         masked_tokens_indices = {}
         for source, data in x.items():
-            c, v = data["embedded_coords"], data["embedded_values"]
+            m, v = data["embedded_metadata"], data["embedded_values"]
             B, L, D_v = v.shape  # batch size, sequence length, model dimension
-            D_c = c.shape[-1]  # coord dimension
+            D_m = m.shape[-1]  # metadata dimension
             # Compute the number of tokens to keep based on the size of the input
             # and the masking ratio
-            n_tokens = c.shape[1]
+            n_tokens = m.shape[1]
             n_kept = int(n_tokens * (1 - self.masking_ratio))
             # Randomly select the tokens to keep using the method from
             # "Masked Autoencoders Are Scalable Vision Learners" He et al. 2021
             # Shuffle the tokensnd keep the first n_masked.
-            noise = torch.rand(B, L, device=c.device)
+            noise = torch.rand(B, L, device=m.device)
             perm = torch.argsort(noise, dim=1)
             kept_indices = perm[:, :n_kept].unsqueeze(-1)
             kept_indices_v = kept_indices.expand(-1, -1, D_v)
-            kept_indices_c = kept_indices.expand(-1, -1, D_c)
-            c = torch.gather(c, dim=1, index=kept_indices_c)
+            kept_indices_m = kept_indices.expand(-1, -1, D_m)
+            m = torch.gather(m, dim=1, index=kept_indices_m)
             v = torch.gather(v, dim=1, index=kept_indices_v)
             # Save the permutation and the original number of tokens for later
             # reconstruction of the original shape
@@ -308,7 +307,7 @@ class MultisourceMAE(pl.LightningModule):
             encoder_x[source] = {
                 "dt": data["dt"],
                 "embedded_dt": data["embedded_dt"],
-                "embedded_coords": c,
+                "embedded_metadata": m,
                 "embedded_values": v,
             }
 
@@ -342,7 +341,7 @@ class MultisourceMAE(pl.LightningModule):
             decoder_x[source] = {
                 "dt": x_data["dt"],
                 "embedded_dt": x_data["embedded_dt"],
-                "embedded_coords": x_data["embedded_coords"],
+                "embedded_metadata": x_data["embedded_metadata"],
                 "embedded_values": y,
             }
         return decoder_x

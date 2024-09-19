@@ -2,7 +2,7 @@ import torch.nn as nn
 
 
 class FeedForward(nn.Module):
-    def __init__(self, values_dim, coords_dim, inner_dim, dropout=0.0):
+    def __init__(self, values_dim, metadata_dim, inner_dim, dropout=0.0):
         super().__init__()
         self.net = nn.Sequential(
             nn.Linear(values_dim, inner_dim),
@@ -17,8 +17,7 @@ class FeedForward(nn.Module):
         """
         Args:
             x (dict of str: dict of str: tensor): Dictionary of inputs, such that
-                x['source_name'] contains the keys "dt", "embedded_dt", "embedded_coords",
-                and "embedded_values".
+                x['source_name'] contains at least the key "embedded_values". 
         Returns:
             dict of str: tensor: Dictionary of outputs, such that
                 outputs['source_name'] contains the predicted values of the tokens.

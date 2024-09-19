@@ -7,56 +7,39 @@ from multi_sources.models.utils import pair
 
 
 class MultisourceGeneralBackbone(nn.Module):
-    """General backbone for the multisource mask-autoencoding task.
-    The model receives a list of tuples (c, v) as input, where:
-    - c (b, n, dim_coords) is the coordinates of the tokens.
-    - v (b, n, dim_values) is the values of the tokens.
-        Some tokens may be masked.
-    The model returns a list of tensors of shape (b, n, dim_values), which are the
-    predicted values of the tokens.
-    """
+    """General backbone for the multisource mask-autoencoding task."""
 
     def __init__(
         self,
-        patch_size,
         n_blocks,
-        coords_dim=None,
-        values_dim=None,
+        metadata_dim,
+        values_dim,
         layers={},
         output_block=None,
-        sum_coords_to_values=False,
+        sum_meta_to_values=False,
     ):
         """
         Args:
-            patch_size (int or tuple): size of the patches.
             n_blocks (int): number of blocks in the backbone.
-            coords_dim (int): Embedding dimension for the geographical coordinates.
-                Defaults to patch_height * patch_width * 2.
-            values_dim (int): Embedding dimension for the values.
-                Defaults to patch_height * patch_width.
+            metadata_dim (int): Embedding dimension for the metadata of each source.
+            values_dim (int): Embedding dimension for the values of each source. 
             layers (dict) Dict defining the successive layers that compose the backbone,
                 as {layer_name: layer_kwargs}.
                 For each layer, the kwargs must include the key 'layer_class',
                 which should be a nn.Module class. The other keys are the arguments
                 to this class's constructor.
                 The class's constructor must be of the form
-                `layer_class(values_dim, coords_dim, **kwargs)`.
+                `layer_class(values_dim, metadata_dim, **kwargs)`.
                 The class's forward method must be of the form
-                `forward(values_seq, coords_seq) -> values_seq`.
+                `forward(values_seq, metadata_seq) -> values_seq`.
                 Each block in the backbone will be composed of these layers, in the order
                 they appear in the dict.
-            sum_coords_to_values (bool): Whether to sum the coordinates embeddings to the
+            sum_meta_to_values (bool): Whether to sum the metadata embeddings to the
                 values embeddings at the beginning of the backbone.
         """
         super().__init__()
-        self.patch_size = pair(patch_size)
-        ph, pw = self.patch_size
-        if coords_dim is None:
-            coords_dim = ph * pw * 2  # 2 for the latitude and longitude
-        if values_dim is None:
-            values_dim = ph * pw
-        self.values_dim, self.coords_dim = values_dim, coords_dim
-        self.sum_coords_to_values = sum_coords_to_values
+        self.values_dim, self.meta_dim = values_dim, metadata_dim
+        self.sum_meta_to_values = sum_meta_to_values
         # Build the successive blocks
         self.blocks = nn.ModuleList()
         for _ in range(n_blocks):
@@ -65,12 +48,12 @@ class MultisourceGeneralBackbone(nn.Module):
                 layer_class = layer_kwargs["layer_class"]
                 kwargs = {k: v for k, v in layer_kwargs.items() if k != "layer_class"}
                 # Before each block, add a layer normalization for the values
-                # (the coords don't change between blocks, so no need to re-normalize them).
+                # (the metadata don't change between blocks, so no need to re-normalize them).
                 block.append(
                     nn.ModuleList(
                         [
                             nn.LayerNorm(values_dim),
-                            layer_class(self.values_dim, self.coords_dim, **kwargs),
+                            layer_class(self.values_dim, self.meta_dim, **kwargs),
                         ]
                     )
                 )
@@ -80,7 +63,7 @@ class MultisourceGeneralBackbone(nn.Module):
         """
         Args:
             x (dict of str: dict of str: tensor): Dictionary of inputs, such that
-                inputs[source_name] contains the keys "dt", "embedded_dt", "embedded_coords",
+                inputs[source_name] contains the keys "dt", "embedded_dt", "embedded_metadata",
                 and "embedded_values".
             attention_mask (list): List of attention masks for each source,
                 of shape (b, n).
@@ -98,7 +81,7 @@ class MultisourceGeneralBackbone(nn.Module):
                 new_x = {}
                 for source_name, data in x.items():
                     new_x[source_name] = {}
-                    new_x[source_name]["embedded_coords"] = data["embedded_coords"]
+                    new_x[source_name]["embedded_metadata"] = data["embedded_metadata"]
                     new_x[source_name]["dt"] = data["dt"]
                     new_x[source_name]["embedded_dt"] = data["embedded_dt"]
                     # Normalize the values in each source
