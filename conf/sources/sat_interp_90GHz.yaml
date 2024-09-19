@@ -12,6 +12,12 @@ tc_primed:
   ATMS_NPP:
     S3:
       variables: ['TB_88.2QV']
+  AMSUB_NOAA16:
+    S1:
+      variables: ['TB_89.0QV']
+  AMSUB_NOAA17:
+    S1:
+      variables: ['TB_89.0QV']
   GMI_GPM:
     S1:
       variables: ['TB_89.0V']
@@ -19,6 +25,9 @@ tc_primed:
     S1:
       variables: ['TB_89.0V']
   MHS_METOPB:
+    S1:
+      variables: ['TB_89.0V']
+  MHS_METOPC:
     S1:
       variables: ['TB_89.0V']
   MHS_NOAA18:

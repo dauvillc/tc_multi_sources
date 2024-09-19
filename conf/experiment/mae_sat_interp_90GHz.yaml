@@ -11,7 +11,7 @@ wandb:
 
 dataset:
   train:
-    dt_max: 24
+    dt_max: 12
     min_available_sources: 2
 
 dataloader:
