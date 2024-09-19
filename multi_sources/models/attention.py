@@ -191,7 +191,7 @@ class WindowedValuesCoordinatesAttention(nn.Module):
         shifted_windows,
         num_heads=8,
         dropout=0.0,
-        window_size=2,
+        window_size=4,
     ):
         """
         Args:
