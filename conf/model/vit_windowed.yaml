@@ -3,7 +3,7 @@ encoder:
   patch_size: ${lightning_module.patch_size}
   coords_dim: ${lightning_module.coords_dim}
   values_dim: ${lightning_module.values_dim}
-  n_blocks: 4
+  n_blocks: 8
   layers:
     windowed_self_attention:
       layer_class:
@@ -30,7 +30,7 @@ decoder:
   patch_size: ${lightning_module.patch_size}
   coords_dim: ${lightning_module.coords_dim}
   values_dim: ${lightning_module.values_dim}
-  n_blocks: 2
+  n_blocks: 6
   layers:
     windowed_self_attention:
       layer_class:
