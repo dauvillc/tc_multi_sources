@@ -14,10 +14,10 @@ tc_primed:
       variables: ['TB_88.2QV']
   AMSUB_NOAA16:
     S1:
-      variables: ['TB_89.0QV']
+      variables: ['TB_89.0_0.9QV']
   AMSUB_NOAA17:
     S1:
-      variables: ['TB_89.0QV']
+      variables: ['TB_89.0_0.9QV']
   GMI_GPM:
     S1:
       variables: ['TB_89.0V']
