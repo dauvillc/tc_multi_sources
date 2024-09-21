@@ -247,8 +247,8 @@ class MultisourceMAE(pl.LightningModule):
             # Sum the coords, time and source embeddings to form the meta embeddings
             meta = c + embedded_dt + source_to_meta_embedding
             # Normalize the embeddings
-            meta = self.meta_norm(c)
-            values = self.values_norm(v)
+            meta = self.meta_norm(meta)
+            values = self.values_norm(values)
 
             output[source] = {
                 "dt": dt,
