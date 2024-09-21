@@ -323,6 +323,10 @@ class AdaptiveValuesMetadataAttention(nn.Module):
         }
         # Concatenate the metadata vectors into a single tensor.
         metadata = torch.stack(list(metadata.values()), dim=1)  # (b, S, D_meta)
+        # If there are less sources than the window size, we'll use all sources.
+        ws = self.window_size
+        if ws >= metadata.shape[1]:
+            ws = metadata.shape[1]
         # Compute the attention map between the metadata vectors.
         qm, km = self.meta_to_qk(metadata).chunk(2, dim=-1)
         meta_attn = self.attention_map(km, qm)  # (b, S, S)
@@ -356,7 +360,6 @@ class AdaptiveValuesMetadataAttention(nn.Module):
         # Select the top-W sources for each source.
         bs, S, N, D_v = values.shape
         D_m = meta.shape[-1]
-        ws = self.window_size
         top_indices = top_indices.view(bs, S, ws, 1, 1)
         values = values.view(bs, 1, S, N, -1).expand(-1, S, -1, -1, -1)
         meta = meta.view(bs, 1, S, N, -1).expand(-1, S, -1, -1, -1)
