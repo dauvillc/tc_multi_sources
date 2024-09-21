@@ -334,7 +334,7 @@ class AdaptiveValuesMetadataAttention(nn.Module):
         # ensure this, we'll set the diagonal of the attention map to over 1.
         meta_attn = meta_attn + 2 * torch.eye(meta_attn.shape[1]).to(meta_attn.device)
         # Select the top-W sources for each source.
-        _, top_indices = torch.topk(meta_attn, self.window_size, dim=2, sorted=True)
+        _, top_indices = torch.topk(meta_attn, ws, dim=2, sorted=True)
         # We can't use gahter directly as the sources have varying sequence lengths.
         # First, we need to pad the sequences of each source to the same length.
         max_tokens = max(data["embedded_values"].shape[1] for data in inputs.values())
