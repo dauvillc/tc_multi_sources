@@ -55,43 +55,6 @@ class AttentionMap(nn.Module):
         return F.softmax(dots, dim=-1)
 
 
-class SelfAttention(nn.Module):
-    """A self-attention block that can use values that are different from the keys/queries."""
-
-    def __init__(self, key_dim, value_dim, inner_dim, num_heads=8, dropout=0.0):
-        super().__init__()
-        if inner_dim % num_heads != 0:
-            raise ValueError(
-                f"Inner dimension {inner_dim} must be divisible by the number of heads {num_heads}"
-            )
-        self.qk_norm = nn.LayerNorm(key_dim)
-        self.norm_value = nn.LayerNorm(value_dim)
-
-        self.to_qk = nn.Linear(key_dim, inner_dim * 2, bias=False)
-        self.to_v = nn.Linear(value_dim, inner_dim, bias=False)
-        self.num_heads = num_heads
-
-        dim_head = inner_dim // num_heads
-        self.attention_map = AttentionMap(dim_head)
-
-        self.output_proj = nn.Sequential(nn.Linear(inner_dim, value_dim), nn.Dropout(dropout))
-
-    def forward(self, keys, values, mask=None):
-        keys = self.qk_norm(keys)
-        values = self.norm_value(values)
-
-        q, k = self.to_qk(keys).chunk(2, dim=-1)
-        q, k = map(lambda x: rearrange(x, "b n (h d) -> b h n d", h=self.num_heads), (q, k))
-
-        v = self.to_v(values)
-        v = rearrange(v, "b n (h d) -> b h n d", h=self.num_heads)
-
-        attn = self.attention_map(k, q, mask=mask)
-        out = torch.matmul(attn, v)
-        out = rearrange(out, "b h n d -> b n (h d)")
-        return self.output_proj(out)
-
-
 class ValuesMetadataAttentionInternal(nn.Module):
     """Self-attention block that uses the values values as well as the
     metadata to compute the attention weights,
@@ -290,7 +253,6 @@ class WindowedValuesMetadataAttention(nn.Module):
         x = x[:, :n_sources, :, :]
         # Unsort the sources to restore the original order.
         unsorted_indices = sorted_indices.argsort(dim=1).unsqueeze(-1).expand(x.shape)
-        unsorted_indices = unsorted_indices
         x = torch.gather(x, 1, unsorted_indices)
         # Reform the dictionary of outputs.
         result = {source_name: x[:, i] for i, source_name in enumerate(inputs.keys())}
@@ -299,3 +261,127 @@ class WindowedValuesMetadataAttention(nn.Module):
             original_tokens = inputs[source_name]["embedded_values"].shape[1]
             result[source_name] = data[:, :original_tokens, :]
         return result
+
+
+class AdaptiveValuesMetadataAttention(nn.Module):
+    """Attention block that uses a window over the source dimension so that the cost isn't
+    quadratic over that dimension. The window size is fixed, but the sources chosen in each
+    window are adaptively selected based on the metadata.
+    - For each source, the metadata tokens are aggregated into a single metadata vector.
+    - An attention map is computed between the metadata vectors.
+    - For each source, a window is defined as the sources with the top-W attention weights.
+    - The attention is computed over the sources in each window.
+    """
+
+    def __init__(
+        self,
+        values_dim,
+        metadata_dim,
+        inner_dim,
+        num_heads=8,
+        dropout=0.0,
+        window_size=3,
+    ):
+        """
+        Args:
+            values_dim (int): Embedding dimension of the values.
+            metadata_dim (int): Embedding dimension of the metadata.
+            inner_dim (int): Inner dimension of the attention block.
+            num_heads (int): Number of heads in the attention block.
+            dropout (float): Dropout rate.
+            window_size (int): Number of sources included in each window.
+        """
+        super().__init__()
+        self.window_size = window_size
+
+        # Layers to compute the attention map between the metadata vectors.
+        # We'll only use one head for this attention map.
+        self.meta_to_qk = nn.Linear(metadata_dim, inner_dim * 2, bias=False)
+        self.attention_map = AttentionMap(inner_dim)
+
+        self.attention_block = ValuesMetadataAttentionInternal(
+            values_dim, metadata_dim, inner_dim, num_heads, dropout
+        )
+
+    def forward(self, inputs, attention_mask=None):
+        """
+        Args:
+            inputs (dict of str: dict of str: tensor): Dictionary of inputs, such that
+                inputs[source_name] contains the keys "embedded_metadata" and "embedded_values".
+            attention_mask (dict of str: tensor): Dictionary of attention masks for each source,
+                such that attention_mask[source_name] has shape (b, n).
+
+        Returns:
+            dict of str: tensor: Dictionary of outputs, such that
+                outputs[source_name] contains the predicted values of the tokens.
+        """
+        # Average the metadata tokens for each source, so that each source can be represented
+        # by a single metadata vector.
+        metadata = {
+            source_name: data["embedded_metadata"].mean(dim=1)
+            for source_name, data in inputs.items()
+        }
+        # Concatenate the metadata vectors into a single tensor.
+        metadata = torch.stack(list(metadata.values()), dim=1)  # (b, S, D_meta)
+        # Compute the attention map between the metadata vectors.
+        qm, km = self.meta_to_qk(metadata).chunk(2, dim=-1)
+        meta_attn = self.attention_map(km, qm)  # (b, S, S)
+        # For each source S, we want S to be included in its own window. To
+        # ensure this, we'll set the diagonal of the attention map to over 1.
+        meta_attn = meta_attn + 2 * torch.eye(meta_attn.shape[1]).to(meta_attn.device)
+        # Select the top-W sources for each source.
+        _, top_indices = torch.topk(meta_attn, self.window_size, dim=2, sorted=True)
+        # We can't use gahter directly as the sources have varying sequence lengths.
+        # First, we need to pad the sequences of each source to the same length.
+        max_tokens = max(data["embedded_values"].shape[1] for data in inputs.values())
+        values, meta = [], []
+        attn_masks = []
+        for source_name, data in inputs.items():
+            source_values = data["embedded_values"]
+            source_meta = data["embedded_metadata"]
+            padding = max_tokens - source_values.shape[1]
+            values.append(F.pad(source_values, (0, 0, 0, padding)))
+            meta.append(F.pad(source_meta, (0, 0, 0, padding))
+            )
+            if attention_mask is None:
+                source_attn_mask = torch.full(
+                    (source_values.shape[0], source_values.shape[1]), False, dtype=torch.bool
+                ).to(source_values.device)
+            else:
+                source_attn_mask = attention_mask[source_name]
+            attn_masks.append(F.pad(source_attn_mask, (0, padding), value=True))
+        values = torch.stack(values, dim=1)  # (b, S, max_tokens, values_dim)
+        meta = torch.stack(meta, dim=1) # (b, S, max_tokens, metadata_dim)
+        attn_masks = torch.stack(attn_masks, dim=1) # (b, S, max_tokens)
+        # Select the top-W sources for each source.
+        bs, S, N, D_v = values.shape
+        D_m = meta.shape[-1]
+        ws = self.window_size
+        top_indices = top_indices.view(bs, S, ws, 1, 1)
+        values = values.view(bs, 1, S, N, -1).expand(-1, S, -1, -1, -1)
+        meta = meta.view(bs, 1, S, N, -1).expand(-1, S, -1, -1, -1)
+        attn_masks = attn_masks.view(bs, 1, S, N).expand(-1, S, -1, -1)
+        values = torch.gather(values, 2, top_indices.expand((bs, S, ws, N, D_v)))
+        meta = torch.gather(meta, 2, top_indices.expand((bs, S, ws, N, D_m)))
+        attn_masks = torch.gather(attn_masks, 2, top_indices[..., 0].expand((bs, S, ws, N)))
+        # Group the tokens of the same window together.
+        values = rearrange(values, "b s w n d -> (b s) (w n) d")
+        meta = rearrange(meta, "b s w n d -> (b s) (w n) d")
+        attn_masks = rearrange(attn_masks, "b s w n -> (b s) (w n)")
+
+        # Apply the attention block to the windows.
+        x = self.attention_block(values, meta, attn_masks)
+
+        # Go back from windows to sources.
+        x = rearrange(x, "(b s) (w n) d -> b s w n d", s=S, w=ws)
+        # For each source, the first element along the window dimension is the source itself.
+        x = x[:, :, 0]
+        # Reform the dictionary of outputs.
+        result = {source_name: x[:, i] for i, source_name in enumerate(inputs.keys())}
+        # Remove the padding over the tokens dimension.
+        for source_name, data in result.items():
+            original_tokens = inputs[source_name]["embedded_values"].shape[1]
+            result[source_name] = data[:, :original_tokens, :]
+        return result
+
+
