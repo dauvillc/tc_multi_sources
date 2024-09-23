@@ -36,6 +36,18 @@ tc_primed:
   MHS_NOAA19:
     S1:
       variables: ['TB_89.0V']
+  SSMI_F11:
+    S2:
+      variables: ['TB_85.5V']
+  SSMI_F13:
+    S2:
+      variables: ['TB_85.5V']
+  SSMI_F14:
+    S2:
+      variables: ['TB_85.5V']
+  SSMI_F15:
+    S2:
+      variables: ['TB_85.5V']
   SSMIS_F16:
     S4:
       variables: ['TB_91.665V']
