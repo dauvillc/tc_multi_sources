@@ -5,8 +5,11 @@ defaults:
   - _self_
 
 run_id: ???
-num_workers: 4
+num_workers: 0
 
-display_attention_maps: False
-n_displayed_batches: 10
-n_samples_per_batch: 16
+evaluation_classes:
+  visual:
+    _target_: multi_sources.eval.visualization.VisualEvaluation
+
+
+

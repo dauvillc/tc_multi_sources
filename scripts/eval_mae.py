@@ -3,16 +3,32 @@ Runs the evaluation on the validation or test set for a given run_id.
 The predictions from that run must have been previously saved using
 scripts/make_predictions_mae.py.
 
-# The predictions are saved in the following format:
-# targets:
-# - root_dir / targets / source_name / <batch_index.npy>
-# predictions:
-# - root_dir / outputs / source_name / <batch_index.npy>
-# info dataframe:
-# - root_dir / info.csv
-# Each batch is an array of shape (batch_size, channels, height, width).
-# the info dataframe contains the following columns:
-# source_name (str), batch_idx (int), dt (float)
+The predictions are saved in the following format:
+targets:
+- root_dir / targets / source_name / <batch_index.npy>
+predictions:
+- root_dir / outputs / source_name / <batch_index.npy>
+info dataframe:
+- root_dir / info.csv
+
+Each batch is an array of shape (batch_size, channels, height, width).
+Note that a given batch may not be included in all sources, and a batch
+can be included in the targets but not in the predictions.
+
+The info dataframe contains the following columns:
+source_name (str), batch_idx (int), index_in_batch (int), dt (float).
+
+The hydra configuration used to run this script must include
+the entry 'evaluation_classes', of the form
+evaluation_classes:
+  eval_1:
+    _target_: 'multi_sources.eval.path.to.evaluation_class'
+    arg1: val1
+    arg2: val2
+  ...
+where 'multi_sources.eval.path.to.evaluation_class' is the path to the
+evaluation class to be used. The class must inherit from
+AbstractEvaluationMetric and implement the method evaluate_source.
 """
 
 from pathlib import Path
@@ -20,162 +36,63 @@ import matplotlib.pyplot as plt
 import numpy as np
 import hydra
 import pandas as pd
-from tqdm import trange, tqdm
+from hydra.utils import get_class, instantiate
 from omegaconf import DictConfig, OmegaConf
 from concurrent.futures import ProcessPoolExecutor
-
-
-def process_batch(
-    batch_idx,
-    batch_df,
-    results_dir,
-    targets_dir,
-    outputs_dir,
-    attention_maps_dir,
-    source_names,
-    cfg,
-):
-    """Processes a single batch, by displaying the inputs, target and prediction
-    on a single figure for each element in the batch."""
-    # Load the batch for every source
-    targets = {
-        source_name: np.load(targets_dir / source_name / f"{batch_idx}.npy")
-        for source_name in source_names
-    }
-    outputs = {
-        source_name: np.load(outputs_dir / source_name / f"{batch_idx}.npy")
-        for source_name in source_names
-    }
-    n_sources = len(source_names)
-    # The number of elements is the batch size that was used to write the predictions,
-    # but it can be reduced in the config via the 'n_samples_per_batch' parameter
-    batch_size = targets[source_names[0]].shape[0]
-    n_elements = min(batch_size, cfg["n_samples_per_batch"])
-    # For each element in the batch, display it in an individual figure
-    # such that:
-    # - There are two columns, one for the prediction (left) and one for the target (right)
-    # - There is one row per source
-    n_rows = n_sources
-    n_cols = 2
-    for i in range(n_elements):
-        fig, axes = plt.subplots(n_rows, n_cols, figsize=(n_cols * 5, n_rows * 5), squeeze=False)
-        for j, source_name in enumerate(source_names):
-            info = batch_df[batch_df.source_name == source_name].iloc[i]
-            target = targets[source_name][i]
-            # The target array has shape (3, height, width)
-            # The first two channels are the latitude and longitude of each pixel
-            coords = target[:2]
-            target = target[2]
-            # Plot the target
-            ax = axes[j, 0]
-            ax.imshow(target, cmap="gray")
-            ax.axis("off")
-            # In the title, display the source name and the dt
-            ax.set_title(f"{source_name} dt: {info['dt']:.2f}")
-            # Set the ticks to the coordinates
-            ax.set_xticks(np.arange(target.shape[1]))
-            ax.set_xticklabels(coords[0, 0])
-            ax.set_yticks(np.arange(target.shape[0]))
-            ax.set_yticklabels(coords[1, :, 0])
-            # Plot the prediction
-            prediction = outputs[source_name][i][0]
-            ax = axes[j, 1]
-            ax.imshow(prediction, cmap="gray")
-            ax.axis("off")
-            # Set the ticks to the coordinates
-            ax.set_xticks(np.arange(prediction.shape[1]))
-            ax.set_xticklabels(coords[0, 0])
-            ax.set_yticks(np.arange(prediction.shape[0]))
-            ax.set_yticklabels(coords[1, :, 0])
-
-        plt.tight_layout()
-        plt.suptitle("Target (left) vs Prediction (right)")
-        plt.savefig(results_dir / f"{batch_idx}_{i}.png")
-        plt.close()
-
-    # If results_dir/attention_maps exists, it contains the attention maps for every batch
-    # as <batch_idx>.npy, of shape (B, head, n_tokens, n_tokens)
-    if attention_maps_dir.exists() and cfg["display_attention_maps"]:
-        attention_maps = np.load(attention_maps_dir / f"{batch_idx}.npy")
-        # Display the attention maps for the first element in the batch,
-        # with at most 4 columns
-        n_heads = attention_maps.shape[1]
-        n_cols = min(n_heads, 4)
-        n_rows = (n_heads + n_cols - 1) // n_cols
-        fig, axes = plt.subplots(n_rows, n_cols, figsize=(n_cols * 5, n_rows * 5), squeeze=False)
-        for i in range(n_heads):
-            ax = axes[i // n_cols, i % n_cols]
-            ax.imshow(attention_maps[0, i], cmap="viridis")
-            ax.set_title(f"Head {i}")
-            ax.axis("off")
-        plt.tight_layout()
-        plt.savefig(results_dir / f"{batch_idx}_attention_maps.png")
 
 
 @hydra.main(version_base=None, config_path="../conf", config_name="eval")
 def main(cfg: DictConfig):
     cfg = OmegaConf.to_object(cfg)
+    num_workers = cfg["num_workers"]
     if "run_id" not in cfg:
-        raise ValueError("Usage: python scripts/eval.py run_id=<wandb_run_id>")
+        raise ValueError("Usage: python scripts/eval_mae.py run_id=<wandb_run_id>")
     run_id = cfg["run_id"]
 
     root_dir = Path(cfg["paths"]["predictions"]) / run_id
     if not root_dir.exists():
         raise ValueError(
             f"Predictions for run_id {run_id} do not exist.\
-                Please run scripts/make_predictions.py first."
+                Please run scripts/make_predictions_mae.py first."
         )
-    targets_dir = root_dir / "targets"
-    outputs_dir = root_dir / "outputs"
-    attention_maps_dir = root_dir / "attention_maps"
     info_filepath = root_dir / "info.csv"
-    # Fetch the list of source names
-    source_names = [source_name.name for source_name in targets_dir.iterdir()]
-
+    # Load the info dataframe written by the writer.
+    info_df = pd.read_csv(info_filepath)
+    # Create the results directory
     results_dir = Path(cfg["paths"]["results"]) / run_id
     results_dir.mkdir(parents=True, exist_ok=True)
 
-    num_workers = cfg["num_workers"]
-    n_displayed_batches = cfg["n_displayed_batches"]
+    # Instantiate the evaluation classes
+    evaluation_classes = cfg["evaluation_classes"]
+    evaluators = {}
+    print("Building evaluation classes")
+    for eval_name, evaluator_cfg in evaluation_classes.items():
+        evaluator = instantiate(evaluator_cfg, predictions_dir=root_dir, results_dir=results_dir)
+        evaluators[eval_name] = evaluator
 
-    # ==== VISUAL EVALUATION ====
-    # Load the info dataframe
-    info_df = pd.read_csv(info_filepath)
-    # Keep only the first n_displayed_batches batches
-    info_df = info_df[info_df.batch_idx < n_displayed_batches]
-    if num_workers < 2:
-        # Process the batch sequentially
-        for batch in trange(n_displayed_batches):
-            batch_df = info_df[info_df.batch_idx == batch]
-            process_batch(
-                batch,
-                batch_df,
-                results_dir,
-                targets_dir,
-                outputs_dir,
-                attention_maps_dir,
-                source_names,
-                cfg,
-            )
-    else:
-        # Process the batch in parallel
-        with ProcessPoolExecutor(max_workers=num_workers) as executor:
-            futures = [
-                executor.submit(
-                    process_batch,
-                    batch,
-                    info_df[info_df.batch_idx == batch],
-                    results_dir,
-                    targets_dir,
-                    outputs_dir,
-                    attention_maps_dir,
-                    source_names,
-                    cfg,
+    # For each evaluator, evaluate each source
+    for eval_name, evaluator in evaluators.items():
+        print(f"Evaluating {eval_name}")
+        if num_workers > 1:
+            with ProcessPoolExecutor(num_workers) as executor:
+                futures = []
+                for source_name in info_df["source_name"].unique():
+                    futures.append(
+                        executor.submit(
+                            evaluator.evaluate_source,
+                            source_name,
+                            info_df[info_df["source_name"] == source_name],
+                            verbose=False,
+                        )
+                    )
+                for future in futures:
+                    future.result()
+        else:
+            for source_name in info_df["source_name"].unique():
+                print(f"Processing source {source_name}")
+                evaluator.evaluate_source(
+                    source_name, info_df[info_df["source_name"] == source_name]
                 )
-                for batch in range(n_displayed_batches)
-            ]
-            for future in tqdm(futures, total=n_displayed_batches):
-                future.result()
 
 
 if __name__ == "__main__":

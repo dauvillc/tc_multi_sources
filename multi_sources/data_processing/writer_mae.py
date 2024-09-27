@@ -53,17 +53,21 @@ class MultiSourceWriter(BasePredictionWriter):
             targets_with_coords = np.concatenate([latlon, targets], axis=1)
             np.save(target_dir / f"{batch_idx}.npy", targets_with_coords)
 
-            output_dir = self.outputs_dir / source_name
-            output_dir.mkdir(parents=True, exist_ok=True)
-            outputs = pred[source_name].detach().cpu().numpy()
-            # The output will be saved
-            np.save(output_dir / f"{batch_idx}.npy", outputs)
+            if source_name in pred:
+                # If no prediction was made for this source,
+                # skip it.
+                output_dir = self.outputs_dir / source_name
+                output_dir.mkdir(parents=True, exist_ok=True)
+                outputs = pred[source_name].detach().cpu().numpy()
+                # The output will be saved
+                np.save(output_dir / f"{batch_idx}.npy", outputs)
 
             batch_size = latlon.shape[0]
             info_df = pd.DataFrame(
                 {
                     "source_name": [source_name] * batch_size,
                     "batch_idx": [batch_idx] * batch_size,
+                    "index_in_batch": np.arange(batch_size),
                     "dt": data['dt'].detach().cpu().numpy(),
                 },
             )

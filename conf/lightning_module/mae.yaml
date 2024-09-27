@@ -4,6 +4,7 @@ values_dim: 1024
 metadata_dim: 1024
 masking_ratio: 0.25
 loss_max_distance_from_center: null
+mask_full_sources: True
 share_source_embeddings: False
 lr_scheduler_kwargs: ${lr_scheduler}
 adamw_kwargs: ${optimizer}
