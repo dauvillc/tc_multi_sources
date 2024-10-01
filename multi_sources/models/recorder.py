@@ -43,3 +43,8 @@ class AttentionRecorder(nn.Module):
 
     def forward(self, *args):
         return self.model(*args)
+
+
+class SourceEmbeddingRecorder(nn.Module):
+    # TODO
+    pass

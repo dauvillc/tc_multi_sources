@@ -51,9 +51,8 @@ def main(cfg: DictConfig):
 
     source_names = train_dataset.get_source_names()
     context_vars = train_dataset.get_source_types_context_vars()
-    # Create the encoder and decoder
-    encoder = instantiate(cfg["model"]["encoder"])
-    decoder = instantiate(cfg["model"]["decoder"])
+    # Create the backbone
+    backbone = instantiate(cfg["model"]["backbone"])
     output_convs = None
     if "output_conv" in cfg["model"] and cfg["model"]["output_conv"]:
         # Instantiate one output conv per source
@@ -66,8 +65,7 @@ def main(cfg: DictConfig):
         pl_module = lightning_module_class.load_from_checkpoint(
             checkpoint_path,
             source_names=source_names,
-            encoder=encoder,
-            decoder=decoder,
+            backbone=backbone,
             cfg=cfg,
             output_convs=output_convs,
             context_variables=context_vars,
@@ -76,8 +74,7 @@ def main(cfg: DictConfig):
         pl_module = instantiate(
             cfg["lightning_module"],
             source_names,
-            encoder,
-            decoder,
+            backbone,
             cfg,
             output_convs=output_convs,
             context_variables=context_vars,

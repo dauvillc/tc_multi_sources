@@ -42,8 +42,7 @@ def main(cfg: DictConfig):
     # Instantiate the model and the lightning module
     source_names = val_dataset.get_source_names()
     context_vars = val_dataset.get_source_types_context_vars()
-    encoder = instantiate(exp_cfg["model"]["encoder"])
-    decoder = instantiate(exp_cfg["model"]["decoder"])
+    backbone = instantiate(exp_cfg["model"]["backbone"])
     output_convs = None
     if "output_conv" in exp_cfg["model"] and exp_cfg["model"]["output_conv"]:
         # Instantiate one output conv per source
@@ -55,8 +54,7 @@ def main(cfg: DictConfig):
     module = lightning_module_class.load_from_checkpoint(
         checkpoint_path,
         n_sources=source_names,
-        encoder=encoder,
-        decoder=decoder,
+        backbone=backbone,
         cfg=exp_cfg,
         output_convs=output_convs,
         context_vars=context_vars,
@@ -66,11 +64,10 @@ def main(cfg: DictConfig):
     if cfg["save_attention_maps"]:
         maps_dir = run_results_dir / "attention_maps"
         maps_dir.mkdir(parents=True, exist_ok=True)
-        module.decoder = AttentionRecorder(module.decoder, maps_dir)
+        module.backbone = AttentionRecorder(module.backbone, maps_dir)
 
     # Make predictions using the MultiSourceWriter class, which is a custom implementation of
     # BasePredictionWriter.
-    module.use_groundtruth_for_unmasked_tokens(cfg["use_groundtruth_for_unmasked_tokens"])
     module.eval()
     writer = MultiSourceWriter(run_results_dir)
     trainer = pl.Trainer(
