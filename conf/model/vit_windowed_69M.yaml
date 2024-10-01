@@ -1,33 +1,30 @@
-encoder:
+backbone:
   _target_: multi_sources.models.general_backbone.MultisourceGeneralBackbone
   metadata_dim: ${lightning_module.metadata_dim}
   values_dim: ${lightning_module.values_dim}
-  n_blocks: 12
+  n_blocks: 4
   layers:
-    self_attention:
+    windowed_self_attention:
       layer_class:
         _target_: hydra.utils.get_class
-        path: multi_sources.models.attention.ValuesMetadataAttention
+        path: multi_sources.models.attention.WindowedValuesMetadataAttention
       inner_dim: 1024
       num_heads: 8
-    ff2:
+      window_size: 4
+      shifted_windows: False
+    ff1:
       layer_class:
         _target_: hydra.utils.get_class
         path: multi_sources.models.small_layers.FeedForward
       inner_dim: 1024
-
-decoder:
-  _target_: multi_sources.models.general_backbone.MultisourceGeneralBackbone
-  metadata_dim: ${lightning_module.metadata_dim}
-  values_dim: ${lightning_module.values_dim}
-  n_blocks: 8
-  layers:
-    self_attention:
+    shifted_windowed_self_attention:
       layer_class:
         _target_: hydra.utils.get_class
-        path: multi_sources.models.attention.ValuesMetadataAttention
+        path: multi_sources.models.attention.WindowedValuesMetadataAttention
       inner_dim: 1024
       num_heads: 8
+      window_size: 4
+      shifted_windows: True
     ff2:
       layer_class:
         _target_: hydra.utils.get_class

@@ -4,14 +4,14 @@ defaults:
   - override /sources: sat_interp_37GHz
   - override /lightning_module: mae
   - override /trainer: 4gpus
-  - override /lr_scheduler: cosine_warmup_300epochs.yaml
+  - override /lr_scheduler: cosine_warmup_150epochs.yaml
 
 wandb:
   name: sat_interp_37GHz
 
 dataset:
   train:
-    dt_max: 24
+    dt_max: 6
     min_available_sources: 2
 
 dataloader:
