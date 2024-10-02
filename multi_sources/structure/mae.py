@@ -357,6 +357,10 @@ class MultisourceMAE(pl.LightningModule):
 
         # Compute the loss for each source
         losses = self.loss_fn(pred, x, avail_tensors)
+        # If len(losses) == 0, i.e. for all masked sources the tokens were missing,
+        # raise an error.
+        if len(losses) == 0:
+            raise ValueError("No tokens to compute the loss on")
         for source, loss in losses.items():
             self.log(
                 f"{train_or_val}_loss_{source}",
