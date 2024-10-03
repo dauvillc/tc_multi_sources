@@ -122,6 +122,7 @@ class MultisourceMAE(pl.LightningModule):
             self.source_to_meta_embedding = SourceEmbedding(source_names, metadata_dim)
 
         self.values_norm = nn.LayerNorm(values_dim)
+        self.additional_values_info_norm = nn.LayerNorm(values_dim)
         self.meta_norm = nn.LayerNorm(metadata_dim)
 
         # Projection of the predicted values to the original space
@@ -234,23 +235,17 @@ class MultisourceMAE(pl.LightningModule):
                 source_to_values_embedding = self.source_to_values_embedding(source, (B, L))
                 source_to_meta_embedding = self.source_to_meta_embedding(source, (B, L))
 
-            # Sum the values, availability mask, land mask and source embeddings
-            values = v + lm + am + source_to_values_embedding
-            # Sum the coords, time and source embeddings to form the meta embeddings
-            meta = c + embedded_dt + source_to_meta_embedding
-            # Normalize the embeddings
-            meta = self.meta_norm(meta)
-            values = self.values_norm(values)
-
             output[source] = {
                 "avail": data["avail"],
                 "dt": dt,
+                "embedded_coords": c,
+                "embedded_source_meta": source_to_meta_embedding,
+                "embedded_source_values": source_to_values_embedding,
                 "embedded_dt": embedded_dt,
                 "context": data["context"],
-                "embedded_metadata": meta,
                 "embedded_landmask": lm,
                 "dist_to_center": data["dist_to_center"],
-                "embedded_values": values,
+                "embedded_values": v,
                 "avail_mask": am,
             }
         return output
@@ -259,7 +254,7 @@ class MultisourceMAE(pl.LightningModule):
         """Masks a portion of the sources. A missing source cannot be chosen to be masked.
         Supposes that there are at least as many non-missing sources as the number of sources
         to mask. The number of sources to mask is determined by self.masking ratio.
-        When a source is masked, all of its tokens are replaced by the [MASK] token.
+        When a source is masked, all of its values are replaced by the [MASK] token.
         Tokens from missing sources are also replaced by the [MASK] token, but their availability
         is left to -1 so that the loss is not computed for them.
         Args:
@@ -291,16 +286,13 @@ class MultisourceMAE(pl.LightningModule):
         # Create the mask for the sources
         masked_x = {}
         for i, (source, data) in enumerate(x.items()):
+            # First, retrieve each entry before masking
+            masked_x[source] = {k: v for k, v in data.items()}
             B, L, D = data["embedded_values"].shape
             whether_masked = masked_sources_matrix[:, i]  # (B,)
             # For samples in which the source is masked, set the availability to 0
             avail_tensor = torch.where(whether_masked, 0, data["avail"])
-            masked_x[source] = {
-                "avail": avail_tensor,
-                "dt": data["dt"],
-                "embedded_dt": data["embedded_dt"],
-                "embedded_metadata": data["embedded_metadata"],
-            }
+            masked_x[source]["avail"] = avail_tensor
             # For samples in which the source is masked or missing,
             # replace the tokens by the [MASK] token.
             values = data["embedded_values"]  # (B, L, D)
@@ -309,6 +301,49 @@ class MultisourceMAE(pl.LightningModule):
             )
             masked_x[source]["embedded_values"] = masked_values
         return masked_x
+
+    def sum_and_normalize(self, x):
+        """Computes additional information about the values of the sources,
+            computes the values embeddings and metadata embeddings, and normalizes them.
+        Args:
+            x (dict of str to dict of str to tensor): output of the embed or mask methods.
+        Returns:
+            x (dict of str to dict of str to tensor): Dict D such that D[source_name] contains
+                the keys ['dt', 'embedded_dt', 'embedded_metadata', 'embedded_values', 'avail',
+                'additional_values_info'].
+        """
+        out = {}
+        # The additional values info is the sum of:
+        # - the embedded landmask
+        # - the embedded availability mask
+        # - the source-to-values embedding
+        # - the embedded time delta.
+        for source, data in x.items():
+            out[source] = {
+                "avail": data["avail"],
+                "dt": data["dt"],
+                "embedded_dt": data["embedded_dt"],
+            }
+            additional_values_info = (
+                data["embedded_landmask"]
+                + data["avail_mask"]
+                + data["embedded_source_values"]
+                + data["embedded_dt"]
+            )
+            # Normalize the additional values info
+            additional_values_info = self.additional_values_info_norm(additional_values_info)
+            out[source]["additional_values_info"] = additional_values_info
+            # Sum the additional values info to the values embeddings
+            embedded_values = data["embedded_values"] + additional_values_info
+            # Compute the metadata embeddings from the time delta, the coordinates and
+            # the source embeddings
+            embedded_metadata = (
+                data["embedded_coords"] + data["embedded_source_meta"] + data["embedded_dt"]
+            )
+            # Normalize the values and metadata embeddings
+            out[source]["embedded_values"] = self.values_norm(embedded_values)
+            out[source]["embedded_metadata"] = self.meta_norm(embedded_metadata)
+        return out
 
     def forward(self, x, padded_shapes):
         """Computes the forward pass of the model.
@@ -319,18 +354,20 @@ class MultisourceMAE(pl.LightningModule):
                 0 if it was masked, and -1 if it was missing.
         """
         x = self.embed(x)
-        # Mask a portion of the sources
-        masked_x = self.mask(x)
-        avail_tensors = {source: data["avail"] for source, data in masked_x.items()}
+        # Mask a portion of the sources (replace the tokens by the [MASK] token)
+        x = self.mask(x)
+        avail_tensors = {source: data["avail"] for source, data in x.items()}
+        # Compute the final values and metadata embeddings and normalize them
+        x = self.sum_and_normalize(x)
         # Create an attention mask for each source that is either missing or masked
         attn_masks = {}
-        for source, data in masked_x.items():
+        for source, data in x.items():
             B, L = data["embedded_values"].shape[:2]
             attn_mask = data["avail"] < 1  # (B,)
             attn_mask = attn_mask.view(B, 1).expand(B, L)
             attn_masks[source] = attn_mask
-        # Forward masked_x through the backbone
-        pred = self.backbone(masked_x, attn_masks)
+        # Forward x through the backbone
+        pred = self.backbone(x, attn_masks)
         # Project the predicted values to the original space
         pred = {source: self.output_proj(v) for source, v in pred.items()}
         # If an output convolutional layer is specified, apply it
