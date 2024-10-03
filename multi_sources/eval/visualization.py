@@ -80,7 +80,7 @@ class VisualEvaluation(AbstractEvaluationMetric):
             axes[i, 0].set_xticklabels(np.round(lon_ticks, 2))
             if pred is not None:
                 axes[i, 1].imshow(pred[i], cmap="viridis")
-            # Use the same ticks as for the target
+            # Use the same ticks as for the target.
             axes[i, 1].set_yticks(np.linspace(0, lat.shape[0], num=10))
             axes[i, 1].set_yticklabels(np.round(lat_ticks, 2))
             axes[i, 1].set_xticks(np.linspace(0, lat.shape[1], num=10))
@@ -91,4 +91,6 @@ class VisualEvaluation(AbstractEvaluationMetric):
         # Add the source name and the time delta to the title
         title = f"{source_name} - dt = {dt}h"
         fig.suptitle(title)
+        # Separate the suptitle from the plots
+        plt.tight_layout(rect=[0, 0.03, 1, 0.95])
         return fig
