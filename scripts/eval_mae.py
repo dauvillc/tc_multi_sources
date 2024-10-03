@@ -39,6 +39,7 @@ import pandas as pd
 from hydra.utils import get_class, instantiate
 from omegaconf import DictConfig, OmegaConf
 from concurrent.futures import ProcessPoolExecutor
+from multi_sources.eval.abstract_evaluation_metric import AbstractMultisourceEvaluationMetric
 
 
 @hydra.main(version_base=None, config_path="../conf", config_name="eval")
@@ -73,26 +74,32 @@ def main(cfg: DictConfig):
     # For each evaluator, evaluate each source
     for eval_name, evaluator in evaluators.items():
         print(f"Evaluating {eval_name}")
-        if num_workers > 1:
-            with ProcessPoolExecutor(num_workers) as executor:
-                futures = []
-                for source_name in info_df["source_name"].unique():
-                    futures.append(
-                        executor.submit(
-                            evaluator.evaluate_source,
-                            source_name,
-                            info_df[info_df["source_name"] == source_name],
-                            verbose=False,
-                        )
-                    )
-                for future in futures:
-                    future.result()
+        if isinstance(evaluator, AbstractMultisourceEvaluationMetric):
+            # This evaluator processes all sources together
+            evaluator.evaluate_sources(info_df)
         else:
-            for source_name in info_df["source_name"].unique():
-                print(f"Processing source {source_name}")
-                evaluator.evaluate_source(
-                    source_name, info_df[info_df["source_name"] == source_name]
-                )
+            # This evaluator processes each source separately.
+            # This allows for parallel processing of sources, if requested.
+            if num_workers > 1:
+                with ProcessPoolExecutor(num_workers) as executor:
+                    futures = []
+                    for source_name in info_df["source_name"].unique():
+                        futures.append(
+                            executor.submit(
+                                evaluator.evaluate_source,
+                                source_name,
+                                info_df[info_df["source_name"] == source_name],
+                                verbose=False,
+                            )
+                        )
+                    for future in futures:
+                        future.result()
+            else:
+                for source_name in info_df["source_name"].unique():
+                    print(f"Processing source {source_name}")
+                    evaluator.evaluate_source(
+                        source_name, info_df[info_df["source_name"] == source_name]
+                    )
 
 
 if __name__ == "__main__":
