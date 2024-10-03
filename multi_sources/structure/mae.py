@@ -121,7 +121,6 @@ class MultisourceMAE(pl.LightningModule):
             self.source_to_values_embedding = SourceEmbedding(source_names, values_dim)
             self.source_to_meta_embedding = SourceEmbedding(source_names, metadata_dim)
 
-        self.values_norm = nn.LayerNorm(values_dim)
         self.additional_values_info_norm = nn.LayerNorm(values_dim)
         self.meta_norm = nn.LayerNorm(metadata_dim)
 
@@ -304,7 +303,8 @@ class MultisourceMAE(pl.LightningModule):
 
     def sum_and_normalize(self, x):
         """Computes additional information about the values of the sources,
-            computes the values embeddings and metadata embeddings, and normalizes them.
+        which will be used within the backbone. Computes the metadata embeddings
+        and normalizes them.
         Args:
             x (dict of str to dict of str to tensor): output of the embed or mask methods.
         Returns:
@@ -323,6 +323,7 @@ class MultisourceMAE(pl.LightningModule):
                 "avail": data["avail"],
                 "dt": data["dt"],
                 "embedded_dt": data["embedded_dt"],
+                "embedded_values": data["embedded_values"],
             }
             additional_values_info = (
                 data["embedded_landmask"]
@@ -330,18 +331,15 @@ class MultisourceMAE(pl.LightningModule):
                 + data["embedded_source_values"]
                 + data["embedded_dt"]
             )
-            # Normalize the additional values info
+            # Normalize the additional values info and store it.
             additional_values_info = self.additional_values_info_norm(additional_values_info)
             out[source]["additional_values_info"] = additional_values_info
-            # Sum the additional values info to the values embeddings
-            embedded_values = data["embedded_values"] + additional_values_info
             # Compute the metadata embeddings from the time delta, the coordinates and
             # the source embeddings
             embedded_metadata = (
                 data["embedded_coords"] + data["embedded_source_meta"] + data["embedded_dt"]
             )
-            # Normalize the values and metadata embeddings
-            out[source]["embedded_values"] = self.values_norm(embedded_values)
+            # Normalize the metadata embeddings
             out[source]["embedded_metadata"] = self.meta_norm(embedded_metadata)
         return out
 

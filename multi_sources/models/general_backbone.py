@@ -64,7 +64,7 @@ class MultisourceGeneralBackbone(nn.Module):
         Args:
             x (dict of str: dict of str: tensor): Dictionary of inputs, such that
                 inputs[source_name] contains the keys "dt", "embedded_dt", "embedded_metadata",
-                and "embedded_values".
+                "embedded_values", "additional_values_info".
             attention_mask (list): List of attention masks for each source,
                 of shape (b, n).
         Returns:
@@ -84,8 +84,12 @@ class MultisourceGeneralBackbone(nn.Module):
                     new_x[source_name]["embedded_metadata"] = data["embedded_metadata"]
                     new_x[source_name]["dt"] = data["dt"]
                     new_x[source_name]["embedded_dt"] = data["embedded_dt"]
+                    add_values_info = data["additional_values_info"]
+                    new_x[source_name]["additional_values_info"] = add_values_info
+                    # Sum the additional values to the embedded values
+                    new_values = data["embedded_values"] + add_values_info
                     # Normalize the values in each source
-                    new_x[source_name]["embedded_values"] = norm(data["embedded_values"])
+                    new_x[source_name]["embedded_values"] = norm(new_values)
                 # Apply the layer and add the skip connection
                 new_values = layer(
                     new_x, attention_mask=attention_mask
