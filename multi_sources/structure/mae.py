@@ -122,6 +122,7 @@ class MultisourceMAE(pl.LightningModule):
             self.source_to_meta_embedding = SourceEmbedding(source_names, metadata_dim)
 
         self.additional_values_info_norm = nn.LayerNorm(values_dim)
+        self.values_norm = nn.LayerNorm(values_dim)
         self.meta_norm = nn.LayerNorm(metadata_dim)
 
         # Projection of the predicted values to the original space
@@ -323,7 +324,6 @@ class MultisourceMAE(pl.LightningModule):
                 "avail": data["avail"],
                 "dt": data["dt"],
                 "embedded_dt": data["embedded_dt"],
-                "embedded_values": data["embedded_values"],
             }
             additional_values_info = (
                 data["embedded_landmask"] + data["embedded_source_values"] + data["embedded_dt"]
@@ -342,8 +342,9 @@ class MultisourceMAE(pl.LightningModule):
             embedded_metadata = (
                 data["embedded_coords"] + data["embedded_source_meta"] + data["embedded_dt"]
             )
-            # Normalize the metadata embeddings
+            # Normalize the metadata and values embeddings
             out[source]["embedded_metadata"] = self.meta_norm(embedded_metadata)
+            out[source]["embedded_values"] = self.values_norm(data["embedded_values"])
         return out
 
     def forward(self, x, padded_shapes):
