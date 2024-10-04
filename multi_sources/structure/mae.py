@@ -245,7 +245,7 @@ class MultisourceMAE(pl.LightningModule):
                 "embedded_landmask": lm,
                 "dist_to_center": data["dist_to_center"],
                 "embedded_values": v,
-                "avail_mask": am,
+                "embedded_avail_mask": am,
             }
         return output
 
@@ -326,10 +326,13 @@ class MultisourceMAE(pl.LightningModule):
                 "embedded_values": data["embedded_values"],
             }
             additional_values_info = (
-                data["embedded_landmask"]
-                + data["avail_mask"]
-                + data["embedded_source_values"]
-                + data["embedded_dt"]
+                data["embedded_landmask"] + data["embedded_source_values"] + data["embedded_dt"]
+            )
+            # Where the source is not masked, add the embedded availability mask
+            additional_values_info = torch.where(
+                (data["avail"] == 1).view(-1, 1, 1),
+                data["embedded_avail_mask"] + additional_values_info,
+                additional_values_info,
             )
             # Normalize the additional values info and store it.
             additional_values_info = self.additional_values_info_norm(additional_values_info)
