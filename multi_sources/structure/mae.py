@@ -55,6 +55,7 @@ class MultisourceMAE(pl.LightningModule):
         loss_max_distance_from_center,
         share_source_embeddings=False,
         context_variables=None,
+        use_attention_masks=False,
         output_convs=None,
         metrics={},
     ):
@@ -81,6 +82,8 @@ class MultisourceMAE(pl.LightningModule):
             n_context_variables (dict of str to list of str): Must be passed if
                 share_source_embeddings is True. Maps each source type to the list of
                 its context variables.
+            use_attention_masks (bool): If True, the model will use attention masks to
+                ignore the tokens that are missing or masked.
             output_convs (dict of str to nn.Module, optional): Map from source name to
                 a convolutional layer to apply to the output of the model.
             metrics (dict of str: callable): The metrics to compute during training and validation.
@@ -98,6 +101,7 @@ class MultisourceMAE(pl.LightningModule):
         self.metrics = metrics
         self.loss_max_distance_from_center = loss_max_distance_from_center
         self.share_source_embeddings = share_source_embeddings
+        self.use_attention_masks = use_attention_masks
         self.save_hyperparameters(ignore=["backbone", "metrics"])
 
         # Linear embeddings
@@ -361,13 +365,15 @@ class MultisourceMAE(pl.LightningModule):
         avail_tensors = {source: data["avail"] for source, data in x.items()}
         # Compute the final values and metadata embeddings and normalize them
         x = self.sum_and_normalize(x)
-        # Create an attention mask for each source that is either missing or masked
-        attn_masks = {}
-        for source, data in x.items():
-            B, L = data["embedded_values"].shape[:2]
-            attn_mask = data["avail"] < 1  # (B,)
-            attn_mask = attn_mask.view(B, 1).expand(B, L)
-            attn_masks[source] = attn_mask
+        # If required, create an attention mask for each source that is either missing or masked.
+        attn_masks = None
+        if self.use_attention_masks:
+            attn_masks = {}
+            for source, data in x.items():
+                B, L = data["embedded_values"].shape[:2]
+                attn_mask = data["avail"] < 1  # (B,)
+                attn_mask = attn_mask.view(B, 1).expand(B, L)
+                attn_masks[source] = attn_mask
         # Forward x through the backbone
         pred = self.backbone(x, attn_masks)
         # Project the predicted values to the original space
