@@ -77,15 +77,15 @@ class VisualEvaluation(AbstractMultisourceEvaluationMetric):
                     # the source mas masked).
                     if pred is not None and sample_info["avail"].item() == 0:
                         axes[i, 1].imshow(pred[0], cmap="viridis")
-                        # Indicate the dt in the title
-                        dt = sample_info["dt"].item()
-                        axes[i, 1].set_title(f"pred. - dt={dt}")
                         # Set the same ticks as for the target
                         axes[i, 1].set_xticks(lon_ticks)
                         axes[i, 1].set_xticklabels(lon_labels)
                         axes[i, 1].set_yticks(lat_ticks)
                         axes[i, 1].set_yticklabels(lat_labels)
                         axes[i, 1].tick_params(axis="x", rotation=45)
+                    # Indicate the dt in the title
+                    dt = sample_info["dt"].item()
+                    axes[i, 1].set_title(f"pred. - dt={dt}")
                 # Save the figure
                 plt.tight_layout()
                 plt.savefig(self.results_dir / f"{batch_idx}_{idx}.png")
