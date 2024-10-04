@@ -20,16 +20,18 @@ class MultiSourceWriter(BasePredictionWriter):
     root_dir/targets/source_name/<batch_idx>.npy
     root_dir/outputs/source_name/<batch_idx>.npy
     Additionally, the file root_dir/info.csv is written with the following columns:
-    source_name, batch_idx, dt
+    source_name, avail, batch_idx, index_in_batch, dt
     """
 
-    def __init__(self, root_dir):
+    def __init__(self, root_dir, dt_max):
         """
         Args:
             root_dir (str or Path): The root directory where the predictions will be written.
+            dt_max (pd.Timedelta): The maximum time delta in the dataset.
         """
         super().__init__(write_interval="batch")
         self.root_dir = Path(root_dir)
+        self.dt_max = dt_max
 
     def setup(self, trainer, pl_module, stage):
         self.root_dir.mkdir(parents=True, exist_ok=True)
@@ -41,7 +43,7 @@ class MultiSourceWriter(BasePredictionWriter):
     def write_on_batch_end(
         self, trainer, pl_module, prediction, batch_indices, batch, batch_idx, dataloader_idx
     ):
-        batch, pred = prediction
+        batch, pred, avail_tensors = prediction
         # We'll write to the info file in append mode
         info_file = self.root_dir / "info.csv"
         for source_name, data in batch.items():
@@ -59,16 +61,22 @@ class MultiSourceWriter(BasePredictionWriter):
                 output_dir = self.outputs_dir / source_name
                 output_dir.mkdir(parents=True, exist_ok=True)
                 outputs = pred[source_name].detach().cpu().numpy()
-                # The output will be saved
                 np.save(output_dir / f"{batch_idx}.npy", outputs)
 
             batch_size = latlon.shape[0]
+            # We'll also save the time deltas of the samples. The deltas
+            # in data['dt'] are coded as a fraction between 0 and 1 of the
+            # maximum datetime in the dataset. We'll convert them into
+            # actual Timedeltas here.
+            dt = data['dt'].detach().cpu().numpy() * self.dt_max
+            dt = pd.Series(dt, name="dt")
             info_df = pd.DataFrame(
                 {
                     "source_name": [source_name] * batch_size,
+                    "avail": avail_tensors[source_name].detach().cpu().numpy(),
                     "batch_idx": [batch_idx] * batch_size,
                     "index_in_batch": np.arange(batch_size),
-                    "dt": data['dt'].detach().cpu().numpy(),
+                    "dt": dt,
                 },
             )
             include_header = not info_file.exists()

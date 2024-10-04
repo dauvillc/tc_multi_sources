@@ -464,12 +464,13 @@ class MultisourceMAE(pl.LightningModule):
         Returns:
             batch (dict of str to dict of str to tensor): The input batch.
             pred (dict of str to tensor): The predicted values.
+            avail_tensors (dict of str to tensor): The availability tensors for each source.
         """
         batch = self.preproc_input(batch)
         # Save the shapes of the padded tensors to reconstruct the images
         padded_shapes = {source: x["values"].shape[-2:] for source, x in batch.items()}
         x = self.tokenize(batch)
-        pred, _ = self.forward(x, padded_shapes)
+        pred, avail_tensors = self.forward(x, padded_shapes)
         output = {}
         for source, true_data in x.items():
             output[source] = pred[source].clone()
@@ -477,7 +478,7 @@ class MultisourceMAE(pl.LightningModule):
         for source, v in output.items():
             pH, pW = padded_shapes[source]
             output[source] = patches_to_img(v, pH, pW, self.patch_size)
-        return batch, output
+        return batch, output, avail_tensors
 
     def configure_optimizers(self):
         """Configures the optimizer for the model.

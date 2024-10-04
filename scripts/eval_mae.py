@@ -59,6 +59,7 @@ def main(cfg: DictConfig):
     info_filepath = root_dir / "info.csv"
     # Load the info dataframe written by the writer.
     info_df = pd.read_csv(info_filepath)
+    info_df['dt'] = pd.to_timedelta(info_df['dt']).dt.round('min')
     # Create the results directory
     results_dir = Path(cfg["paths"]["results"]) / run_id
     results_dir.mkdir(parents=True, exist_ok=True)

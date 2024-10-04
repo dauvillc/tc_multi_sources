@@ -28,7 +28,7 @@ class VisualEvaluation(AbstractMultisourceEvaluationMetric):
         """
         Args:
             info_df (pd.DataFrame): DataFrame with at least the following columns:
-                source_name, batch_idx, index_in_batch, dt.
+                source_name, avail, batch_idx, index_in_batch, dt.
             **kwargs: Additional keyword arguments.
         """
         # Browse the batch indices in the DataFrame
@@ -70,14 +70,16 @@ class VisualEvaluation(AbstractMultisourceEvaluationMetric):
                     axes[i, 0].set_yticklabels(lat_labels)
                     # For the longitude labels, use a 45-degree rotation
                     axes[i, 0].tick_params(axis="x", rotation=45)
+                    sample_info = batch_info[(batch_info["source_name"] == source)
+                                                & (batch_info["index_in_batch"] == idx)]
                     # Show the prediction on the right, if the prediction is not None
-                    if pred is not None:
+                    # and if the availability is 0 (i.e. the target is available and
+                    # the source mas masked).
+                    if pred is not None and sample_info["avail"].item() == 0:
                         axes[i, 1].imshow(pred[0], cmap="viridis")
                         # Indicate the dt in the title
-                        sample_info = batch_info[(batch_info["source_name"] == source)
-                                                 & (batch_info["index_in_batch"] == idx)]
-                        dt = sample_info["dt"].values[0]
-                        axes[i, 1].set_title(f"pred. - dt={dt:.2f}h")
+                        dt = sample_info["dt"].item()
+                        axes[i, 1].set_title(f"pred. - dt={dt}")
                         # Set the same ticks as for the target
                         axes[i, 1].set_xticks(lon_ticks)
                         axes[i, 1].set_xticklabels(lon_labels)

@@ -69,7 +69,7 @@ def main(cfg: DictConfig):
     # Make predictions using the MultiSourceWriter class, which is a custom implementation of
     # BasePredictionWriter.
     module.eval()
-    writer = MultiSourceWriter(run_results_dir)
+    writer = MultiSourceWriter(run_results_dir, val_dataset.dt_max)
     trainer = pl.Trainer(
         **cfg["trainer"],
         callbacks=[writer],

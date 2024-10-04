@@ -61,7 +61,7 @@ class AbstractSourcewiseEvaluationMetric(AbstractEvaluationMetric):
         Args:
             source_name (str): Name of the source.
             info_df (pd.DataFrame): DataFrame with at least the following columns:
-                batch_idx, index_in_batch, dt.
+                avail, batch_idx, index_in_batch, dt.
             **kwargs: Additional keyword arguments.
         """
         pass
@@ -82,7 +82,7 @@ class AbstractMultisourceEvaluationMetric(AbstractEvaluationMetric):
         
         Args:
             info_df (pd.DataFrame): DataFrame with at least the following columns:
-                source_name, batch_idx, index_in_batch, dt.
+                source_name, avail, batch_idx, index_in_batch, dt.
             **kwargs: Additional keyword arguments.
         """
         pass
