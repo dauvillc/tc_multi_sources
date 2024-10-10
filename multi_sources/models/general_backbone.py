@@ -64,7 +64,7 @@ class MultisourceGeneralBackbone(nn.Module):
         Args:
             x (dict of str: dict of str: tensor): Dictionary of inputs, such that
                 inputs[source_name] contains the keys "dt", "embedded_dt", "embedded_metadata",
-                "embedded_values", "additional_values_info".
+                "embedded_values", "additional_values_info", "tokens_shape".
             attention_mask (list): List of attention masks for each source,
                 of shape (b, n).
         Returns:
@@ -80,10 +80,13 @@ class MultisourceGeneralBackbone(nn.Module):
                 # we pass to the layer.
                 new_x = {}
                 for source_name, data in x.items():
-                    new_x[source_name] = {}
-                    new_x[source_name]["embedded_metadata"] = data["embedded_metadata"]
-                    new_x[source_name]["dt"] = data["dt"]
-                    new_x[source_name]["embedded_dt"] = data["embedded_dt"]
+                    # Copy the entries that don't change.
+                    new_x[source_name] = {
+                        "embedded_metadata": data["embedded_metadata"],
+                        "dt": data["dt"],
+                        "embedded_dt": data["embedded_dt"],
+                        "tokens_shape": data["tokens_shape"],
+                    }
                     add_values_info = data["additional_values_info"]
                     new_x[source_name]["additional_values_info"] = add_values_info
                     # Sum the additional values to the embedded values

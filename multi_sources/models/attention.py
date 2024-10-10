@@ -137,6 +137,10 @@ class ValuesMetadataAttention(nn.Module):
         return {source_name: seq for source_name, seq in zip(inputs.keys(), source_seqs)}
 
 
+#================================================================================================#
+# The following code isn't used anymore and should be removed in the future.
+
+
 class WindowedValuesMetadataAttention(nn.Module):
     """Attention block that uses a window over the source dimension so that the cost isn't
     quadratic over that dimension:
@@ -345,8 +349,7 @@ class AdaptiveValuesMetadataAttention(nn.Module):
             source_meta = data["embedded_metadata"]
             padding = max_tokens - source_values.shape[1]
             values.append(F.pad(source_values, (0, 0, 0, padding)))
-            meta.append(F.pad(source_meta, (0, 0, 0, padding))
-            )
+            meta.append(F.pad(source_meta, (0, 0, 0, padding)))
             if attention_mask is None:
                 source_attn_mask = torch.full(
                     (source_values.shape[0], source_values.shape[1]), False, dtype=torch.bool
@@ -355,8 +358,8 @@ class AdaptiveValuesMetadataAttention(nn.Module):
                 source_attn_mask = attention_mask[source_name]
             attn_masks.append(F.pad(source_attn_mask, (0, padding), value=True))
         values = torch.stack(values, dim=1)  # (b, S, max_tokens, values_dim)
-        meta = torch.stack(meta, dim=1) # (b, S, max_tokens, metadata_dim)
-        attn_masks = torch.stack(attn_masks, dim=1) # (b, S, max_tokens)
+        meta = torch.stack(meta, dim=1)  # (b, S, max_tokens, metadata_dim)
+        attn_masks = torch.stack(attn_masks, dim=1)  # (b, S, max_tokens)
         # Select the top-W sources for each source.
         bs, S, N, D_v = values.shape
         D_m = meta.shape[-1]
@@ -386,5 +389,3 @@ class AdaptiveValuesMetadataAttention(nn.Module):
             original_tokens = inputs[source_name]["embedded_values"].shape[1]
             result[source_name] = data[:, :original_tokens, :]
         return result
-
-

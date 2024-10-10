@@ -187,9 +187,17 @@ class MultisourceMAE(pl.LightningModule):
         return input_
 
     def tokenize(self, x):
-        """Converts the input sources into tokens."""
+        """Converts the input sources into flattened sequences of tokens.
+        Appends to the source dicts the key "tokens_shape" such that
+        x[source]["tokens_shape"] = (Nw, Nh), where Nw and Nh are the number of tokens
+        along the width and height of the image before flattening.
+        """
         output = {}
         for source, data in x.items():
+            # Compute the number of patches along the width and height
+            h, w = data["coords"].shape[-2:]
+            Nw = (w + self.patch_size[1] - 1) // self.patch_size[1]
+            Nh = (h + self.patch_size[0] - 1) // self.patch_size[0]
             # c and v are image tensors of shape (b, c, h, w)
             c = img_to_patches(data["coords"], self.patch_size)
             v = img_to_patches(data["values"], self.patch_size)
@@ -199,6 +207,7 @@ class MultisourceMAE(pl.LightningModule):
             am = img_to_patches(data["avail_mask"].unsqueeze(1), self.patch_size)
             output[source] = {
                 "source_type": data["source_type"],
+                "tokens_shape": (Nw, Nh),
                 "avail": data["avail"],
                 "dt": data["dt"],
                 "context": data["context"],
@@ -240,6 +249,7 @@ class MultisourceMAE(pl.LightningModule):
                 source_to_meta_embedding = self.source_to_meta_embedding(source, (B, L))
 
             output[source] = {
+                "tokens_shape": data["tokens_shape"],
                 "avail": data["avail"],
                 "dt": dt,
                 "embedded_coords": c,
@@ -266,10 +276,9 @@ class MultisourceMAE(pl.LightningModule):
         Returns:
             masked_x (dict of str to dict of str to tensor): The input sources with a portion
                 of the sources masked.
-                masked_x[source_name] is a map with the keys ['dt', 'embedded_dt',
-                'embedded_metadata', 'embedded_values', 'avail'].
-                where 'avail' is a tensor of shape (B, 1) containing 1 if the source is available,
-                0 if it was masked, and -1 if it was missing.
+                The entry 'avail' is added, with its value being a tensor of shape (B, 1)
+                containing 1 if the source is available, 0 if it was masked, and -1 if
+                it was missing.
         """
         n_sources = len(x)
         n_sources_to_mask = max(1, int(n_sources * self.masking_ratio))
@@ -315,7 +324,7 @@ class MultisourceMAE(pl.LightningModule):
         Returns:
             x (dict of str to dict of str to tensor): Dict D such that D[source_name] contains
                 the keys ['dt', 'embedded_dt', 'embedded_metadata', 'embedded_values', 'avail',
-                'additional_values_info'].
+                'additional_values_info', 'tokens_shape'].
         """
         out = {}
         # The additional values info is the sum of:
@@ -326,6 +335,7 @@ class MultisourceMAE(pl.LightningModule):
         for source, data in x.items():
             out[source] = {
                 "avail": data["avail"],
+                "tokens_shape": data["tokens_shape"],
                 "dt": data["dt"],
                 "embedded_dt": data["embedded_dt"],
             }

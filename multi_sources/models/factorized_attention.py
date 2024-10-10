@@ -5,6 +5,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange
 from multi_sources.models.attention import ValuesMetadataAttentionInternal
+from multi_sources.models.window_utils import source_to_2D_windows, windows_2D_to_source
 
 
 class MultisourcesAnchoredCrossAttention(nn.Module):
@@ -98,45 +99,35 @@ class MultisourcesAnchoredCrossAttention(nn.Module):
         return outputs
 
 
-class FactorizedMultisourcesAttention(nn.Module):
-    """Computes attention in two steps:
-    - First across the sources, using an anchor points system.
-    - Then within each source independently.
-    The attention is computed using both the values and the metadata embeddings.
-    """
+class SeparateWindowedValuesMetadataAttention(nn.Module):
+    """Attention block that computes the attention over each source independently,
+    using a spatial window over the tokens as in the Swin Transformer."""
 
     def __init__(
         self,
         values_dim,
         metadata_dim,
         inner_dim,
-        num_anchor_points,
         num_heads=8,
         dropout=0.0,
+        window_size=8,
+        use_shifted_windows=False,
     ):
         """
         Args:
             values_dim (int): Embedding dimension of the values.
             metadata_dim (int): Embedding dimension of the metadata.
             inner_dim (int): Inner dimension of the attention block.
-            num_anchor_points (int): Number of anchor points.
             num_heads (int): Number of heads in the attention block.
             dropout (float): Dropout rate.
+            window_size (int): Number of tokens included in each window.
+            use_shifted_windows (bool): Whether to shift the windows by half the window size.
         """
         super().__init__()
-        self.values_dim = values_dim
-        self.metadata_dim = metadata_dim
-        self.inner_dim = inner_dim
-        self.num_heads = num_heads
-        if inner_dim % num_heads != 0:
-            raise ValueError("Inner dimension must be divisible by the number of heads.")
-        self.dim_head = inner_dim // num_heads
-        self.dropout = dropout
+        self.window_size = window_size
+        self.use_shifted_windows = use_shifted_windows
 
-        self.cross_attention = MultisourcesAnchoredCrossAttention(
-            values_dim, metadata_dim, inner_dim, num_anchor_points, num_heads, dropout
-        )
-        self.self_attention = ValuesMetadataAttentionInternal(
+        self.attention = ValuesMetadataAttentionInternal(
             values_dim, metadata_dim, inner_dim, num_heads, dropout
         )
 
@@ -144,8 +135,8 @@ class FactorizedMultisourcesAttention(nn.Module):
         """
         Args:
             inputs (dict of str: dict of str: tensor): Dictionary of inputs, such that
-                inputs[source_name] contains the keys "embedded_metadata"
-                and "embedded_values".
+                inputs[source_name] contains the keys "embedded_metadata" and "embedded_values",
+                "tokens_shape".
             attention_mask (dict of str: tensor): Dictionary of attention masks for each source,
                 such that attention_mask[source_name] has shape (b, n).
 
@@ -153,13 +144,42 @@ class FactorizedMultisourcesAttention(nn.Module):
             dict of str: tensor: Dictionary of outputs, such that
                 outputs[source_name] contains the predicted values of the tokens.
         """
-        # Compute the attention across the sources;
-        updated_values = self.cross_attention(inputs, attention_mask)
-        # Compute the self-attention over each source;
-        outputs = {}
-        for source_name, source_inputs in inputs.items():
-            values = updated_values[source_name]
-            metadata = source_inputs["embedded_metadata"]
-            attn_mask = attention_mask[source_name] if attention_mask is not None else None
-            outputs[source_name] = self.self_attention(values, metadata, attn_mask)
-        return outputs
+        shift = self.window_size // 2 if self.use_shifted_windows else 0
+        # For each source, partition the values, metadata and attention mask into windows.
+        values, metadata, masks = [], [], []
+        for source_name, data in inputs.items():
+            source_values = data["embedded_values"]
+            source_metadata = data["embedded_metadata"]
+            source_mask = attention_mask[source_name] if attention_mask is not None else None
+            tokens_shape = data["tokens_shape"]
+            # Partitions the values, metadata and the mask, and also sets mask = True
+            # where padding is added for the partitioning.
+            (source_values, source_metadata), source_mask = source_to_2D_windows(
+                [source_values, source_metadata],
+                tokens_shape,
+                self.window_size,
+                shift,
+                source_mask,
+            )
+            values.append(source_values)
+            metadata.append(source_metadata)
+            masks.append(source_mask)
+        # Save the size of each source along the batch dimension.
+        source_sizes = [v.shape[0] for v in values]
+        # Concatenate the windows from all sources.
+        values = torch.cat(values, dim=0)
+        metadata = torch.cat(metadata, dim=0)
+        masks = torch.cat(masks, dim=0)
+        # Feed the windows to the attention block.
+        att_out = self.attention(values, metadata, masks)
+        # Split the attention output back to the sources.
+        att_out = torch.split(att_out, source_sizes, dim=0)
+        # Reconstruct the source from the windows.
+        out = {}
+        for source_name, source_out in zip(inputs.keys(), att_out):
+            # Reconstruct the source from the windows.
+            tokens_shape = inputs[source_name]["tokens_shape"]
+            out[source_name] = windows_2D_to_source(
+                [source_out], tokens_shape, self.window_size, shift
+            )[0]  # Takes in and returns a list of tensors
+        return out
