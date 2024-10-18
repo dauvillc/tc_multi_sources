@@ -155,6 +155,8 @@ class MultisourceMAE(pl.LightningModule):
             d = pad_to_next_multiple_of(
                 data["dist_to_center"], self.patch_size, value=float("nan")
             )
+            # Deduce the availability mask level from where the values are missing
+            am = torch.isnan(v)[:, 0]  # (B, H, W)
             # Don't modify the tensors in-place, as we need to keep the NaN values
             # for the loss computation
             dt = torch.nan_to_num(data["dt"], nan=-1.0)
@@ -166,8 +168,6 @@ class MultisourceMAE(pl.LightningModule):
             c = torch.nan_to_num(c, nan=-1)
             # For the distance tensor, fill the nan values with +inf
             d = torch.nan_to_num(d, nan=float("inf"))
-            # Deduce the availability mask level from the distance tensor
-            am = d != float("inf")
             input_[source] = {
                 "source_type": data["source_type"],
                 "avail": data["avail"],
