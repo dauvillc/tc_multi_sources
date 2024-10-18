@@ -17,7 +17,6 @@ def img_to_patches(img, patch_size):
     Returns:
         torch.Tensor: Patch tensor of shape (B, n_tokens, dim).
     """
-    B, C, H, W = img.shape
     patch_H, patch_W = pair(patch_size)
     img = rearrange(img, "b c (h p1) (w p2) -> b (h w) (p1 p2 c)", p1=patch_H, p2=patch_W)
     return img
