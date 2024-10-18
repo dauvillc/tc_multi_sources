@@ -156,7 +156,8 @@ class MultisourceMAE(pl.LightningModule):
                 data["dist_to_center"], self.patch_size, value=float("nan")
             )
             # Deduce the availability mask level from where the values are missing
-            am = torch.isnan(v)[:, 0]  # (B, H, W)
+            # am = True where the values are available
+            am = ~torch.isnan(v)[:, 0]  # (B, H, W)
             # Don't modify the tensors in-place, as we need to keep the NaN values
             # for the loss computation
             dt = torch.nan_to_num(data["dt"], nan=-1.0)
