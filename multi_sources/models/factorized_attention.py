@@ -99,6 +99,106 @@ class MultisourcesAnchoredCrossAttention(nn.Module):
         return outputs
 
 
+class MultisourcesAnchoredTemporalAttention(nn.Module):
+    """Computes attention across the sources using an anchor points system.
+    K evenly spaced anchor tokens are gathered from each source. The ith anchor token
+    of every source is concatenated into a single sequence, forming K sequences. The
+    attention is computed separately for each of these sequences, and the updated tokens
+    are then summed back to the original tokens of each source.
+    """
+
+    def __init__(
+        self, values_dim, metadata_dim, inner_dim, num_anchor_points, num_heads=8, dropout=0.0
+    ):
+        """
+        Args:
+            values_dim (int): Embedding dimension of the values.
+            metadata_dim (int): Embedding dimension of the metadata.
+            inner_dim (int): Inner dimension of the attention block.
+            num_anchor_points (int): Number of anchor points.
+            num_heads (int): Number of heads in the attention block.
+            dropout (float): Dropout rate.
+        """
+        super().__init__()
+        self.values_dim = values_dim
+        self.metadata_dim = metadata_dim
+        self.inner_dim = inner_dim
+        self.num_anchor_points = num_anchor_points
+        self.num_heads = num_heads
+        self.dropout = dropout
+
+        self.attention = ValuesMetadataAttentionInternal(
+            values_dim, metadata_dim, inner_dim, num_heads, dropout
+        )
+
+    def forward(self, inputs, attention_mask=None):
+        """
+        Args:
+            inputs (dict of str: dict of str: tensor): Dictionary of inputs, such that
+                inputs[source_name] contains the keys "embedded_metadata"
+                and "embedded_values".
+            attention_mask (dict of str: tensor): Dictionary of attention masks for each source,
+                such that attention_mask[source_name] has shape (b, n).
+
+        Returns:
+            dict of str: tensor: Dictionary of outputs, such that
+                outputs[source_name] contains the predicted values of the tokens.
+        """
+        # For each source:
+        # - Read the length of that source's sequence;
+        # - Gather the anchor tokens from the values and metadata (and
+        #   attention masks if provided);
+        # - Save the indices of the anchor tokens;
+        anchor_values, anchor_metadata, anchor_masks = {}, {}, {}
+        anchor_indices = {}
+        for source_name, source_inputs in inputs.items():
+            _, n = source_inputs["embedded_values"].shape[:2]
+            indices = (
+                torch.linspace(0, n - 1, self.num_anchor_points)
+                .long()
+                .to(source_inputs["embedded_values"].device)
+            )
+            anchor_values[source_name] = source_inputs["embedded_values"][:, indices]
+            anchor_metadata[source_name] = source_inputs["embedded_metadata"][:, indices]
+            if attention_mask is not None:
+                anchor_masks[source_name] = attention_mask[source_name][:, indices]
+            anchor_indices[source_name] = indices
+        # Stack the anchor tokens from all sources; then split them into K sequences
+        # of anchor tokens.
+        anchor_values = torch.stack(
+            [anchor_values[source_name] for source_name in inputs], dim=1
+        )  # (b, S, K, d)
+        anchor_values = rearrange(anchor_values, "b S K d -> (b K) S d")
+        anchor_metadata = torch.stack(
+            [anchor_metadata[source_name] for source_name in inputs], dim=1
+        )
+        anchor_metadata = rearrange(anchor_metadata, "b S K d -> (b K) S d")
+        if attention_mask is not None:
+            anchor_masks = torch.stack(
+                [anchor_masks[source_name] for source_name in inputs], dim=1
+            )
+            anchor_masks = rearrange(anchor_masks, "b S K -> (b K) S")
+        else:
+            anchor_masks = None
+        # Compute the attention across the anchor tokens;
+        out = self.attention(anchor_values, anchor_metadata, anchor_masks)
+        # Split back the sequences of anchor tokens to the sources;
+        out = rearrange(out, "(b K) S d -> b K S d", K=self.num_anchor_points)
+        out = torch.split(out, 1, dim=2) # Tuple of S tensors of shape (b, K, 1, d)
+        # Sum the output to the original tokens of each source;
+        outputs = {}
+        for i, (source_name, source_inputs) in enumerate(inputs.items()):
+            indices = anchor_indices[source_name]
+            outputs[source_name] = source_inputs["embedded_values"].clone()
+            bs, _, values_dim = outputs[source_name].shape
+            outputs[source_name].scatter_(
+                1,
+                indices.view(1, -1, 1).expand(bs, -1, values_dim),
+                out[i].squeeze(2) + outputs[source_name][:, indices],
+            )
+        return outputs
+
+
 class SeparateWindowedValuesMetadataAttention(nn.Module):
     """Attention block that computes the attention over each source independently,
     using a spatial window over the tokens as in the Swin Transformer."""
@@ -181,5 +281,45 @@ class SeparateWindowedValuesMetadataAttention(nn.Module):
             tokens_shape = inputs[source_name]["tokens_shape"]
             out[source_name] = windows_2D_to_source(
                 [source_out], tokens_shape, self.window_size, shift
-            )[0]  # Takes in and returns a list of tensors
+            )[
+                0
+            ]  # Takes in and returns a list of tensors
         return out
+
+
+class SeparateValuesMetadataAttention(nn.Module):
+    """Attention block that computes the attention over each source independently."""
+
+    def __init__(self, values_dim, metadata_dim, inner_dim, num_heads=8, dropout=0.0):
+        """
+        Args:
+            values_dim (int): Embedding dimension of the values.
+            metadata_dim (int): Embedding dimension of the metadata.
+            inner_dim (int): Inner dimension of the attention block.
+            num_heads (int): Number of heads in the attention block.
+            dropout (float): Dropout rate.
+        """
+        super().__init__()
+        self.attention = ValuesMetadataAttentionInternal(
+            values_dim, metadata_dim, inner_dim, num_heads, dropout
+        )
+
+    def forward(self, inputs, attention_mask=None):
+        """
+        Args:
+            inputs (dict of str: dict of str: tensor): Dictionary of inputs, such that
+                inputs[source_name] contains the keys "embedded_metadata" and "embedded_values".
+            attention_mask (dict of str: tensor): Dictionary of attention masks for each source,
+                such that attention_mask[source_name] has shape (b, n).
+
+        Returns:
+            dict of str: tensor: Dictionary of outputs, such that
+                outputs[source_name] contains the predicted values of the tokens.
+        """
+        outputs = {}
+        for source_name, source_inputs in inputs.items():
+            mask = attention_mask[source_name] if attention_mask is not None else None
+            outputs[source_name] = self.attention(
+                source_inputs["embedded_values"], source_inputs["embedded_metadata"], mask
+            )
+        return outputs

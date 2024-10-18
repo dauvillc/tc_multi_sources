@@ -4,6 +4,13 @@ backbone:
   values_dim: ${lightning_module.values_dim}
   n_blocks: 4
   layers:
+    cross_attention:
+      layer_class:
+        _target_: hydra.utils.get_class
+        path: multi_sources.models.factorized_attention.MultisourcesAnchoredCrossAttention
+      inner_dim: 1024
+      num_anchor_points: 64
+      num_heads: 8
     spatial_attention:
       layer_class:
         _target_: hydra.utils.get_class
@@ -19,13 +26,6 @@ backbone:
       inner_dim: 1024
       window_size: 7
       use_shifted_windows: true
-      num_heads: 8
-    cross_attention:
-      layer_class:
-        _target_: hydra.utils.get_class
-        path: multi_sources.models.factorized_attention.MultisourcesAnchoredCrossAttention
-      inner_dim: 1024
-      num_anchor_points: 64
       num_heads: 8
     ff1:
       layer_class:

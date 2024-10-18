@@ -1,0 +1,24 @@
+backbone:
+  _target_: multi_sources.models.general_backbone.MultisourceGeneralBackbone
+  metadata_dim: ${lightning_module.metadata_dim}
+  values_dim: ${lightning_module.values_dim}
+  n_blocks: 5
+  layers:
+    cross_attention:
+      layer_class:
+        _target_: hydra.utils.get_class
+        path: multi_sources.models.factorized_attention.MultisourcesAnchoredCrossAttention
+      inner_dim: 1024
+      num_anchor_points: 64
+      num_heads: 8
+    spatial_attention:
+      layer_class:
+        _target_: hydra.utils.get_class
+        path: multi_sources.models.factorized_attention.SeparateValuesMetadataAttention
+      inner_dim: 1024
+      num_heads: 8
+    ff1:
+      layer_class:
+        _target_: hydra.utils.get_class
+        path: multi_sources.models.small_layers.FeedForward
+      inner_dim: 1024
