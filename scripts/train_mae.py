@@ -15,6 +15,8 @@ from multi_sources.data_processing.collate_fn import multi_source_collate_fn
 
 @hydra.main(version_base=None, config_path="../conf", config_name="train")
 def main(cfg: DictConfig):
+    OmegaConf.register_new_resolver("eval", eval)
+    OmegaConf.register_new_resolver("nan", lambda : float("nan"))
     cfg = OmegaConf.to_object(cfg)
     # If resume_run_id is in the config, load this run's cfg
     resume_run_id = cfg["resume_run_id"] if "resume_run_id" in cfg else None

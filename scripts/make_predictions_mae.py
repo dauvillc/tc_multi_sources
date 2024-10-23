@@ -12,6 +12,8 @@ from utils.checkpoints import load_experiment_cfg_from_checkpoint
 
 @hydra.main(version_base=None, config_path="../conf", config_name="make_predictions")
 def main(cfg: DictConfig):
+    OmegaConf.register_new_resolver("eval", eval)
+    OmegaConf.register_new_resolver("nan", lambda : float("nan"))
     cfg = OmegaConf.to_object(cfg)
     run_id = cfg["run_id"]
 
