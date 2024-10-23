@@ -3,6 +3,7 @@ defaults:
   - wandb: default
   - sources: sat_interp_37GHz
   - dataset: default
+  - data_augmentation: none
   - dataloader: local
   - lightning_module: mae
   - model: general_backbone

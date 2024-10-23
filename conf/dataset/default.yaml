@@ -15,7 +15,7 @@ train:
   min_available_sources: ???
   # Number of workers for the data loading
   num_workers: ${dataloader.num_workers}
-  enable_data_augmentation: false
+  data_augmentation: ${data_augmentation}
 
 # Validation dataset
 val:
@@ -29,3 +29,4 @@ val:
   dt_max: ${dataset.train.dt_max}
   min_available_sources: ${dataset.train.min_available_sources}
   num_workers: ${dataloader.num_workers}
+  data_augmentation: null

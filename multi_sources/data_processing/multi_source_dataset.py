@@ -45,7 +45,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         num_workers=0,
         include_seasons=None,
         exclude_seasons=None,
-        enable_data_augmentation=False,
+        data_augmentation=None
     ):
         """
         Args:
@@ -74,7 +74,8 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                 If None, all years are included.
             exclude_seasons (list of int): The years to exclude from the dataset.
                 If None, no years are excluded.
-            enable_data_augmentation (bool): If True, data augmentation is enabled.
+            data_augmentation (None or MultiSourceDataAugmentation): If not None, instance
+                of MultiSourceDataAugmentation to apply to the data.
         """
         self.dataset_dir = Path(dataset_dir)
         self.constants_dir = self.dataset_dir / "constants"
@@ -82,7 +83,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         self.variables_dict = included_variables_dict
         self.dt_max = pd.Timedelta(dt_max, unit="h")
         self.single_channel_sources = single_channel_sources
-        self.enable_data_augmentation = enable_data_augmentation
+        self.data_augmentation = data_augmentation
 
         print(f"{split}: Browsing requested sources and loading metadata...")
         # Load the sourcs metadata
@@ -274,6 +275,10 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                             "dist_to_center": D,
                             "values": V,
                         }
+        # (Optional) Data augmentation
+        if self.data_augmentation is not None:
+            output = self.data_augmentation(output)
+
         return output
 
     def normalize(self, context, values, source, dvar=None):
