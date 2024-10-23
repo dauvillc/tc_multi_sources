@@ -1,0 +1,4 @@
+_target_: multi_sources.data_processing.data_augmentation.MultisourcesDataAugmentation
+augmentation_functions:
+  - _target_: multi_sources.data_processing.data_augmentation.Add_noise_to_timedelta
+    relative_noise_std: 0.1

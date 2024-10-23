@@ -1,0 +1,8 @@
+_target_: multi_sources.data_processing.data_augmentation.MultisourcesDataAugmentation
+augmentation_functions:
+  - _target_: multi_sources.data_processing.data_augmentation.Add_noise_to_timedelta
+    relative_noise_std: 0.1
+  - _target_: multi_sources.data_processing.data_augmentation.wrap_tv_image_transform
+    transform:
+      _target_: torchvision.transforms.v2.RandomHorizontalFlip
+      p: 0.5

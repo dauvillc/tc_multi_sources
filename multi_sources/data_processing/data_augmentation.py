@@ -56,9 +56,26 @@ class MultisourcesDataAugmentation:
                 batch[source_name] contains the augmented data of the source.
         """
         for source_name, data in batch.items():
+            # If the source is 2D, convert the values, coords, landmask, and dist_to_center
+            # to Image tv tensors so that random torchvision transform apply the same
+            # transformation to all of them.
+            if data["values"].ndim == 3:
+                data['values'] = tv_tensors.Image(data['values'])
+                data['coords'] = tv_tensors.Image(data['coords'])
+                data['landmask'] = tv_tensors.Image(data['landmask'])
+                data['dist_to_center'] = tv_tensors.Image(data['dist_to_center'])
             for augmentation_function in self.augmentation_functions:
                 data = augmentation_function(data)
-            batch[source_name] = data
+            # Convert the values, coords, landmask, and dist_to_center back to tensors
+            data['values'] = data['values'].data
+            data['coords'] = data['coords'].data
+            data['landmask'] = data['landmask'].data
+            data['dist_to_center'] = data['dist_to_center'].data
+            # If the data was 2D, converting to Image added a channel dim, which
+            # we don't want for the landmask and dist_to_center
+            if data["values"].ndim == 3:
+                data['landmask'] = data['landmask'][0]
+                data['dist_to_center'] = data['dist_to_center'][0]
 
         return batch
 
@@ -78,16 +95,16 @@ def wrap_tv_image_transform(transform):
         coords = data["coords"]
         landmask = data["landmask"]
         dist_to_center = data["dist_to_center"]
-        # Convert them to Image tv tensors so that torchvision applies
-        # the same transformation to all of them
-        values = tv_tensors.Image(values)
-        coords = tv_tensors.Image(coords)
-        landmask = tv_tensors.Image(landmask)
-        dist_to_center = tv_tensors.Image(dist_to_center)
         # Apply the transform
         values, coords, landmask, dist_to_center = transform(
             values, coords, landmask, dist_to_center
         )
+        data['values'] = values
+        data['coords'] = coords
+        data['landmask'] = landmask
+        data['dist_to_center'] = dist_to_center
+
+        return data
 
     return wrapped
 
