@@ -7,7 +7,7 @@ from torchvision.transforms import v2 as transforms
 from torchvision import tv_tensors
 
 
-class MultisourcesDataAugmentation:
+class MultisourceDataAugmentation:
     """Class to apply data augmentation to the data of a multiple sources. The augmentations
     are applied to each source separately, and which augmentations are applied to each source
     depends on the dimensionality of the source.

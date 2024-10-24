@@ -8,6 +8,7 @@ from netCDF4 import Dataset
 from pathlib import Path
 from multi_sources.data_processing.source import Source
 from multi_sources.data_processing.utils import compute_sources_availability
+from multi_sources.data_processing.data_augmentation import MultisourceDataAugmentation
 
 
 class MultiSourceDataset(torch.utils.data.Dataset):
@@ -276,7 +277,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                             "values": V,
                         }
         # (Optional) Data augmentation
-        if self.data_augmentation is not None:
+        if isinstance(self.data_augmentation, MultisourceDataAugmentation):
             output = self.data_augmentation(output)
 
         return output
