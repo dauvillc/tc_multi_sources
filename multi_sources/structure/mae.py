@@ -56,6 +56,7 @@ class MultisourceMAE(pl.LightningModule):
         share_source_embeddings=False,
         context_variables=None,
         use_attention_masks=False,
+        normalize_coords_across_sources=False,
         output_convs=None,
         metrics={},
     ):
@@ -84,6 +85,10 @@ class MultisourceMAE(pl.LightningModule):
                 its context variables.
             use_attention_masks (bool): If True, the model will use attention masks to
                 ignore the tokens that are missing or masked.
+            normalize_coords_across_sources (bool): If True, the coordinates of each source
+                will be normalized across all sources in the batch so that the minimum
+                latitude and longitude in each example is -1 and maximum is 1.
+                If False, the latitudes are divided by 90 and longitudes by 180.
             output_convs (dict of str to nn.Module, optional): Map from source name to
                 a convolutional layer to apply to the output of the model.
             metrics (dict of str: callable): The metrics to compute during training and validation.
@@ -102,6 +107,7 @@ class MultisourceMAE(pl.LightningModule):
         self.loss_max_distance_from_center = loss_max_distance_from_center
         self.share_source_embeddings = share_source_embeddings
         self.use_attention_masks = use_attention_masks
+        self.normalize_coords_across_sources = normalize_coords_across_sources
         self.save_hyperparameters(ignore=["backbone", "metrics"])
 
         # Linear embeddings
@@ -144,7 +150,15 @@ class MultisourceMAE(pl.LightningModule):
         # Normalize the coordinates across sources to make them relative instead of absolute
         # (i.e the min coord across all sources of a sample is always 0 and the max is 1).
         coords = [source["coords"] for source in x.values()]
-        normed_coords = normalize_coords_across_sources(coords)
+        if self.normalize_coords_across_sources:
+            normed_coords = normalize_coords_across_sources(coords)
+        else:
+            # Normalize the coordinates within each source by dividing by 90 for latitudes
+            # and 180 for longitudes.
+            for source_coords in coords:
+                source_coords[:, 0] /= 90
+                source_coords[:, 1] /= 180
+            normed_coords = coords
 
         input_ = {}
         for i, (source, data) in enumerate(x.items()):

@@ -214,7 +214,10 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                 # Load the npy file containing the data for the given storm, time, and source
                 filepath = Path(df["data_path"].iloc[0])
                 with Dataset(filepath) as ds:
-                    C = np.stack([ds["latitude"][:], ds["longitude"][:]], axis=0)
+                    lat, lon = ds["latitude"][:], ds["longitude"][:]
+                    # Make sure the longitude is in the range [-180, 180]
+                    lon[lon > 180] -= 360
+                    C = np.stack([lat, lon], axis=0)
                     C = torch.tensor(C, dtype=torch.float32)
                     # Load the land mask and distance to the center of the storm
                     LM = torch.tensor(ds["land_mask"][:], dtype=torch.float32)
