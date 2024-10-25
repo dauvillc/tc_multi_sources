@@ -77,7 +77,7 @@ def main(cfg: DictConfig):
         print(f"Evaluating {eval_name}")
         if isinstance(evaluator, AbstractMultisourceEvaluationMetric):
             # This evaluator processes all sources together
-            evaluator.evaluate_sources(info_df)
+            evaluator.evaluate_sources(info_df, num_workers=num_workers)
         else:
             # This evaluator processes each source separately.
             # This allows for parallel processing of sources, if requested.

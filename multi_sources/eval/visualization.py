@@ -5,6 +5,7 @@ for a given source.
 
 import numpy as np
 import matplotlib.pyplot as plt
+from concurrent.futures import ProcessPoolExecutor
 from tqdm import tqdm
 from multi_sources.eval.abstract_evaluation_metric import AbstractMultisourceEvaluationMetric
 
@@ -24,7 +25,7 @@ class VisualEvaluation(AbstractMultisourceEvaluationMetric):
             "visual_eval", "Visualization of predictions", predictions_dir, results_dir
         )
 
-    def evaluate_sources(self, info_df, verbose=True):
+    def evaluate_sources(self, info_df, verbose=True, num_workers=0):
         """
         Args:
             info_df (pd.DataFrame): DataFrame with at least the following columns:
@@ -33,60 +34,94 @@ class VisualEvaluation(AbstractMultisourceEvaluationMetric):
         """
         # Browse the batch indices in the DataFrame
         unique_batch_indices = info_df["batch_idx"].unique()
-        iterator = tqdm(unique_batch_indices) if verbose else unique_batch_indices
-        for batch_idx in iterator:
-            # Get the sources included in the batch
-            batch_info = info_df[info_df["batch_idx"] == batch_idx]
-            sources = batch_info["source_name"].unique()
-            S = len(sources)
-            # For each source, load the targets and predictions
-            targets, preds = {}, {}
-            for source in sources:
-                targets[source], preds[source] = self.load_batch(source, batch_idx)
-            # For each sample, create a figure with the targets and predictions
-            batch_indices = batch_info["index_in_batch"].unique()
-            for idx in batch_indices:
-                # Create a figure with two columns (target and prediction) and S rows
-                fig, axes = plt.subplots(nrows=S, ncols=2, figsize=(10, 5 * S))
-                for i, source in enumerate(sources):
-                    target = targets[source][idx]
-                    pred = preds[source][idx]
-                    # The target has shape (2 + C, H, W), where the first two channels are
-                    # the latitude and longitude. We'll use those for the Y and X axes ticks,
-                    # respectively.
-                    # We'll only show the first channel of the values.
-                    lat, lon, target = target[0], target[1], target[2:][0]
-                    # Show the target on the left.
-                    axes[i, 0].imshow(target, cmap="viridis")
-                    axes[i, 0].set_title(f"{source} - target")
-                    # Set 10 ticks on each axis, and use the lat/lon values as labels
-                    lat_ticks = np.linspace(0, target.shape[0] - 1, num=10).astype(int)
-                    lon_ticks = np.linspace(0, target.shape[1] - 1, num=10).astype(int)
-                    lon_labels = lon[0][lon_ticks].round(2)
-                    lat_labels = lat[:, 0][lat_ticks].round(2)
-                    axes[i, 0].set_xticks(lon_ticks)
-                    axes[i, 0].set_xticklabels(lon_labels)
-                    axes[i, 0].set_yticks(lat_ticks)
-                    axes[i, 0].set_yticklabels(lat_labels)
-                    # For the longitude labels, use a 45-degree rotation
-                    axes[i, 0].tick_params(axis="x", rotation=45)
-                    sample_info = batch_info[(batch_info["source_name"] == source)
-                                                & (batch_info["index_in_batch"] == idx)]
-                    # Show the prediction on the right, if the prediction is not None
-                    # and if the availability is 0 (i.e. the target is available and
-                    # the source mas masked).
-                    if pred is not None and sample_info["avail"].item() == 0:
-                        axes[i, 1].imshow(pred[0], cmap="viridis")
-                        # Set the same ticks as for the target
-                        axes[i, 1].set_xticks(lon_ticks)
-                        axes[i, 1].set_xticklabels(lon_labels)
-                        axes[i, 1].set_yticks(lat_ticks)
-                        axes[i, 1].set_yticklabels(lat_labels)
-                        axes[i, 1].tick_params(axis="x", rotation=45)
-                    # Indicate the dt in the title
-                    dt = sample_info["dt"].item()
-                    axes[i, 1].set_title(f"pred. - dt={dt}")
-                # Save the figure
-                plt.tight_layout()
-                plt.savefig(self.results_dir / f"{batch_idx}_{idx}.png")
-                plt.close(fig)
+        if num_workers < 2:
+            for batch_idx in tqdm(unique_batch_indices, desc="Batches", disable=not verbose):
+                # Get the sources included in the batch
+                batch_info = info_df[info_df["batch_idx"] == batch_idx]
+                sources = batch_info["source_name"].unique()
+                # For each source, load the targets and predictions
+                targets, preds = {}, {}
+                for source in sources:
+                    targets[source], preds[source] = self.load_batch(source, batch_idx)
+                # Display the targets and predictions
+                display_batch(batch_info, batch_idx, targets, preds, self.results_dir)
+        else:
+            futures = []
+            with ProcessPoolExecutor(max_workers=num_workers) as executor:
+                for batch_idx in unique_batch_indices:
+                    # Get the sources included in the batch
+                    batch_info = info_df[info_df["batch_idx"] == batch_idx]
+                    sources = batch_info["source_name"].unique()
+                    # For each source, load the targets and predictions
+                    targets, preds = {}, {}
+                    for source in sources:
+                        targets[source], preds[source] = self.load_batch(source, batch_idx)
+                    futures.append(
+                        executor.submit(
+                            display_batch, batch_info, batch_idx, targets, preds, self.results_dir
+                        )
+                    )
+                for future in tqdm(futures, desc="Batches", disable=not verbose):
+                    future.result()
+
+
+def display_batch(batch_info, batch_idx, targets, preds, results_dir):
+    """Displays the targets and predictions for a given batch index. Auxiliary function
+    for parallel execution in the VisualEvaluation class.
+    Args:
+        batch_info (pd.DataFrame): DataFrame with the information of the batch.
+        batch_idx (int): Index of the batch to display.
+        targets (dict): Dictionary with the targets for each source.
+        preds (dict): Dictionary with the predictions for each source.
+        results_dir (Path): Directory where the results will be saved.
+    """
+    sources = batch_info["source_name"].unique()
+    S = len(sources)
+    # For each sample, create a figure with the targets and predictions
+    batch_indices = batch_info["index_in_batch"].unique()
+    for idx in batch_indices:
+        # Create a figure with two columns (target and prediction) and S rows
+        fig, axes = plt.subplots(nrows=S, ncols=2, figsize=(10, 5 * S))
+        for i, source in enumerate(sources):
+            target = targets[source][idx]
+            pred = preds[source][idx]
+            # The target has shape (2 + C, H, W), where the first two channels are
+            # the latitude and longitude. We'll use those for the Y and X axes ticks,
+            # respectively.
+            # We'll only show the first channel of the values.
+            lat, lon, target = target[0], target[1], target[2:][0]
+            # Show the target on the left.
+            axes[i, 0].imshow(target, cmap="viridis")
+            axes[i, 0].set_title(f"{source} - target")
+            # Set 10 ticks on each axis, and use the lat/lon values as labels
+            lat_ticks = np.linspace(0, target.shape[0] - 1, num=10).astype(int)
+            lon_ticks = np.linspace(0, target.shape[1] - 1, num=10).astype(int)
+            lon_labels = lon[0][lon_ticks].round(2)
+            lat_labels = lat[:, 0][lat_ticks].round(2)
+            axes[i, 0].set_xticks(lon_ticks)
+            axes[i, 0].set_xticklabels(lon_labels)
+            axes[i, 0].set_yticks(lat_ticks)
+            axes[i, 0].set_yticklabels(lat_labels)
+            # For the longitude labels, use a 45-degree rotation
+            axes[i, 0].tick_params(axis="x", rotation=45)
+            sample_info = batch_info[
+                (batch_info["source_name"] == source) & (batch_info["index_in_batch"] == idx)
+            ]
+            # Show the prediction on the right, if the prediction is not None
+            # and if the availability is 0 (i.e. the target is available and
+            # the source mas masked).
+            if pred is not None and sample_info["avail"].item() == 0:
+                axes[i, 1].imshow(pred[0], cmap="viridis")
+                # Set the same ticks as for the target
+                axes[i, 1].set_xticks(lon_ticks)
+                axes[i, 1].set_xticklabels(lon_labels)
+                axes[i, 1].set_yticks(lat_ticks)
+                axes[i, 1].set_yticklabels(lat_labels)
+                axes[i, 1].tick_params(axis="x", rotation=45)
+            # Indicate the dt in the title
+            dt = sample_info["dt"].item()
+            axes[i, 1].set_title(f"pred. - dt={dt}")
+        # Save the figure
+        plt.tight_layout()
+        plt.savefig(results_dir / f"{batch_idx}_{idx}.png")
+        plt.close(fig)
