@@ -7,6 +7,7 @@ defaults:
   - dataloader: local
   - lightning_module: mae
   - model: general_backbone
+  - trainer/default
   - trainer: 1gpu
   - lr_scheduler: cosine_warmup_50epochs
   - optimizer: default_adamw
