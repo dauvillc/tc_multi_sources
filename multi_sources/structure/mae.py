@@ -12,7 +12,11 @@ from multi_sources.utils.image_processing import (
     pair,
 )
 from multi_sources.utils.image_processing import patches_to_img
-from multi_sources.models.utils import normalize_coords_across_sources, remove_dots
+from multi_sources.models.utils import (
+    normalize_coords_across_sources,
+    embed_coords_to_sincos,
+    remove_dots,
+)
 from multi_sources.models.embedding_layers import (
     LinearEmbedding,
     SourceEmbedding,
@@ -88,7 +92,7 @@ class MultisourceMAE(pl.LightningModule):
             normalize_coords_across_sources (bool): If True, the coordinates of each source
                 will be normalized across all sources in the batch so that the minimum
                 latitude and longitude in each example is -1 and maximum is 1.
-                If False, the latitudes are divided by 90 and longitudes by 180.
+                If False, the coordinates will be normalized as sinusoïds.
             output_convs (dict of str to nn.Module, optional): Map from source name to
                 a convolutional layer to apply to the output of the model.
             metrics (dict of str: callable): The metrics to compute during training and validation.
@@ -108,11 +112,14 @@ class MultisourceMAE(pl.LightningModule):
         self.share_source_embeddings = share_source_embeddings
         self.use_attention_masks = use_attention_masks
         self.normalize_coords_across_sources = normalize_coords_across_sources
+        # Number of channels for the coordinates embeddings (2 for latitude and longitude,
+        # 3 if we embed them into lat sin, lon sin, lon cos)
+        self.n_coords_channels = 2 if normalize_coords_across_sources else 3
         self.save_hyperparameters(ignore=["backbone", "metrics"])
 
         # Linear embeddings
         in_dim = self.patch_size[0] * self.patch_size[1]
-        self.coord_embedding = LinearEmbedding(in_dim * 2, metadata_dim)  # latitude and longitude
+        self.coord_embedding = LinearEmbedding(in_dim * self.n_coords_channels, metadata_dim)
         self.landmask_embedding = LinearEmbedding(in_dim, values_dim)
         self.value_embedding = LinearEmbedding(in_dim, values_dim)
         self.mask_embedding = LinearEmbedding(in_dim, values_dim)
@@ -153,12 +160,7 @@ class MultisourceMAE(pl.LightningModule):
         if self.normalize_coords_across_sources:
             normed_coords = normalize_coords_across_sources(coords)
         else:
-            # Normalize the coordinates within each source by dividing by 90 for latitudes
-            # and 180 for longitudes.
-            for source_coords in coords:
-                source_coords[:, 0] /= 90
-                source_coords[:, 1] /= 180
-            normed_coords = coords
+            normed_coords = embed_coords_to_sincos(coords)
 
         input_ = {}
         for i, (source, data) in enumerate(x.items()):

@@ -68,3 +68,27 @@ def normalize_coords_across_sources(coords):
     # Reshape the coordinates.
     coords = [c.view(*s) for c, s in zip(coords, shapes)]
     return coords
+
+
+def embed_coords_to_sincos(coords_list):
+    """Embeds geographical coordinates (latitudes and longitudes) into
+    sine and cosine functions.
+    Args:
+        coords_list (list of torch.Tensor): list of tensors of shape (B, 2, H, W),
+            where the first channel is the latitude and the second channel is the
+            longitude, between -180 and 180.
+    Returns:
+        list of torch.Tensor: the embedded coordinates, as tensors of shape
+            (B, 3, H, W). The first is the sine of the latitude, the second is
+            the sine of the longitude, the third is the cosine of the longitude.
+    """
+    embedded_coords = []
+    for coords in coords_list:
+        lat, lon = coords.unbind(dim=1)
+        # Ensure the longitudes are in the range [-180, 180].
+        lon = torch.where(lon > 180, lon - 360, lon)
+        lat_sin = torch.sin(lat)
+        lon_sin = torch.sin(lon)
+        lon_cos = torch.cos(lon)
+        embedded_coords.append(torch.stack([lat_sin, lon_sin, lon_cos], dim=1))
+    return embedded_coords

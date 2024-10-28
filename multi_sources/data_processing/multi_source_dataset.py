@@ -216,7 +216,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                 with Dataset(filepath) as ds:
                     lat, lon = ds["latitude"][:], ds["longitude"][:]
                     # Make sure the longitude is in the range [-180, 180]
-                    lon[lon > 180] -= 360
+                    lon = np.where(lon > 180, lon - 360, lon)
                     C = np.stack([lat, lon], axis=0)
                     C = torch.tensor(C, dtype=torch.float32)
                     # Load the land mask and distance to the center of the storm
