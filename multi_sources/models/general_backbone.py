@@ -80,7 +80,8 @@ class MultisourceGeneralBackbone(nn.Module):
                 # we pass to the layer.
                 new_x = {}
                 for source_name, data in x.items():
-                    # Copy the entries that don't change.
+                    # Copy the entries that don't change to propagate them
+                    # to the next layer.
                     new_x[source_name] = {
                         "embedded_metadata": data["embedded_metadata"],
                         "dt": data["dt"],
@@ -97,9 +98,11 @@ class MultisourceGeneralBackbone(nn.Module):
                 new_values = layer(
                     new_x, attention_mask=attention_mask
                 )  # dict {source_name: tensor}
+                # Update the values with the sum of the new values and the previous values.
                 for source_name, data in new_x.items():
                     new_x[source_name]["embedded_values"] = (
                         new_values[source_name] + x[source_name]["embedded_values"]
                     )
                 x = new_x
+        # The output of the backbone is only the predicted values in latent space.
         return {source_name: x[source_name]["embedded_values"] for source_name in x.keys()}
