@@ -2,6 +2,6 @@
 warmup_steps: 15
 first_cycle_steps: 150
 cycle_mult: 1.0
-max_lr: 0.001
+max_lr: 0.0003
 min_lr: 0.000001
 gamma: 1.0
