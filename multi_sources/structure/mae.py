@@ -60,7 +60,7 @@ class MultisourceMAE(pl.LightningModule):
         share_source_embeddings=False,
         context_variables=None,
         use_attention_masks=False,
-        normalize_coords_across_sources=False,
+        normalize_coords_across_sources=True,
         output_convs=None,
         metrics={},
     ):
@@ -91,7 +91,7 @@ class MultisourceMAE(pl.LightningModule):
                 ignore the tokens that are missing or masked.
             normalize_coords_across_sources (bool): If True, the coordinates of each source
                 will be normalized across all sources in the batch so that the minimum
-                latitude and longitude in each example is -1 and maximum is 1.
+                latitude and longitude in each example is 0 and maximum is 1.
                 If False, the coordinates will be normalized as sinusoïds.
             output_convs (dict of str to nn.Module, optional): Map from source name to
                 a convolutional layer to apply to the output of the model.
@@ -112,9 +112,8 @@ class MultisourceMAE(pl.LightningModule):
         self.share_source_embeddings = share_source_embeddings
         self.use_attention_masks = use_attention_masks
         self.normalize_coords_across_sources = normalize_coords_across_sources
-        # Number of channels for the coordinates embeddings (2 for latitude and longitude,
-        # 3 if we embed them into lat sin, lon sin, lon cos)
-        self.n_coords_channels = 2 if normalize_coords_across_sources else 3
+        # Number of channels for the coordinates (lat sin, lon sin, lon cos)
+        self.n_coords_channels = 3
         self.save_hyperparameters(ignore=["backbone", "metrics"])
 
         # Linear embeddings
@@ -157,10 +156,9 @@ class MultisourceMAE(pl.LightningModule):
         # Normalize the coordinates across sources to make them relative instead of absolute
         # (i.e the min coord across all sources of a sample is always 0 and the max is 1).
         coords = [source["coords"] for source in x.values()]
+        normed_coords = embed_coords_to_sincos(coords)
         if self.normalize_coords_across_sources:
-            normed_coords = normalize_coords_across_sources(coords)
-        else:
-            normed_coords = embed_coords_to_sincos(coords)
+            normed_coords = normalize_coords_across_sources(normed_coords)
 
         input_ = {}
         for i, (source, data) in enumerate(x.items()):

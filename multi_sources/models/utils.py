@@ -15,11 +15,11 @@ def pair(x):
 def remove_dots(strs):
     """Replaces dots in a list of strings or dicts with underscores."""
     if isinstance(strs, str):
-        return strs.replace('.', '_')
+        return strs.replace(".", "_")
     if isinstance(strs, list):
-        return [s.replace('.', '_') for s in strs]
+        return [s.replace(".", "_") for s in strs]
     if isinstance(strs, dict) or isinstance(strs, DictConfig):
-        return {k.replace('.', '_'): v for k, v in strs.items()}
+        return {k.replace(".", "_"): v for k, v in strs.items()}
 
 
 def pad_to_next_multiple_of(tensor, multiple_of, **kwargs):
@@ -43,26 +43,25 @@ def pad_to_next_multiple_of(tensor, multiple_of, **kwargs):
 
 
 def normalize_coords_across_sources(coords):
-    """Normalizes the coordinates across multiple sources, by setting
-    their min to 0 and their max to 1.
-    The coordinates are assumed to be in the range [-180, 180] for
-    longitudes and [-90, 90] for latitudes. NaNs are ignored in the
-    computation of the min and max and are left so in the output.
+    """Normalizes the coordinates across multiple sources, by setting the min
+    and max of each channel to 0 and 1 respectively, across all sources.
     Args:
-        coords (list of torch.Tensor): list of tensors of shape (B, 2, H, W).
+        coords (list of torch.Tensor): list of tensors of shape (B, C, H, W).
+            For example, if lat/lon then C=2; if lat sin/lon sin/lon cos then C=3.
     Returns:
-        list of torch.Tensor: the normalized coordinates.
+        list of torch.Tensor: the normalized coordinates, as list of tensors
+            of shape (B, C, H, W). For each channel, its min across all sources is 0
+            and its max is 1.
     """
     shapes = [c.shape for c in coords]
-    flat_coords = [c.view(c.shape[0], 2, -1) for c in coords]
+    B, C = coords[0].shape[:2]
+    flat_coords = [c.view(c.shape[0], C, -1) for c in coords]
     # Compute the min and max of each source. The coordinates may contain NaNs.
-    # to avoid them, we'll replace them with +190 in the min computation (which
-    # is higher than any valid latitude or longitude), and with -190 in the max
-    # computation.
-    min_vals = [torch.nan_to_num(c, 190.).min(dim=-1)[0] for c in flat_coords]  # list of (B, 2)
-    max_vals = [torch.nan_to_num(c, -190.).max(dim=-1)[0] for c in flat_coords]
-    cross_source_min = torch.stack(min_vals, dim=0).min(dim=0)[0].view(-1, 2, 1, 1)
-    cross_source_max = torch.stack(max_vals, dim=0).max(dim=0)[0].view(-1, 2, 1, 1)
+    # to avoid them, we'll replace them with +inf for min and -inf for max.
+    min_vals = [torch.nan_to_num(c, float("inf")).min(dim=-1)[0] for c in flat_coords]
+    max_vals = [torch.nan_to_num(c, float("-inf")).max(dim=-1)[0] for c in flat_coords]
+    cross_source_min = torch.stack(min_vals, dim=0).min(dim=0)[0].view(B, C, 1, 1)
+    cross_source_max = torch.stack(max_vals, dim=0).max(dim=0)[0].view(B, C, 1, 1)
     # Normalize the latitudes and longitudes. NaNs remain NaNs.
     coords = [(c - cross_source_min) / (cross_source_max - cross_source_min) for c in coords]
     # Reshape the coordinates.
