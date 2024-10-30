@@ -2,7 +2,7 @@
 _target_: hydra_plugins.hydra_submitit_launcher.submitit_launcher.SlurmLauncher
 submitit_folder: ${hydra.sweep.dir}/.submitit/%j
 timeout_min: 6000
-cpus_per_task: 20
+cpus_per_task: 24
 gres: "gpu:8"
 name: ${hydra.job.name}
 partition: "gpu_p2"
