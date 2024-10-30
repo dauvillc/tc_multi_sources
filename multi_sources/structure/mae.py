@@ -410,7 +410,7 @@ class MultisourceMAE(pl.LightningModule):
             for source, v in pred.items():
                 pH, pW = padded_shapes[source]
                 v = patches_to_img(v, pH, pW, self.patch_size)
-                v = self.output_convs[remove_dots(source)](v)
+                v = v + self.output_convs[remove_dots(source)](v)
                 v = img_to_patches(v, self.patch_size)
                 pred[source] = v
         return pred, avail_tensors
