@@ -1,3 +1,4 @@
+dropout: 0.0
 backbone:
   _target_: multi_sources.models.general_backbone.MultisourceGeneralBackbone
   metadata_dim: ${lightning_module.metadata_dim}
@@ -10,8 +11,10 @@ backbone:
         path: multi_sources.models.attention.ValuesMetadataAttention
       inner_dim: 1024
       num_heads: 8
+      dropout: ${model.dropout}
     ff2:
       layer_class:
         _target_: hydra.utils.get_class
         path: multi_sources.models.small_layers.FeedForward
       inner_dim: 1024
+      dropout: ${model.dropout}

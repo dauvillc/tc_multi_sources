@@ -8,6 +8,7 @@ defaults:
 
 wandb:
   name: sat_interp_37GHz
+  group: 37GHz
 
 dataset:
   train:
