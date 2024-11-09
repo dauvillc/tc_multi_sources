@@ -41,7 +41,11 @@ def main(cfg: DictConfig):
     # Seed everything
     pl.seed_everything(cfg["seed"], workers=True)
     # Initialize Wandb and log the configuration
-    wandb.init(**cfg["wandb"], config=cfg, dir=cfg["paths"]["wandb_logs"])
+    if resume_run_id:
+        wandb.init(**cfg["wandb"], config=cfg, dir=cfg["paths"]["wandb_logs"], resume="allow",
+                   id=resume_run_id)
+    else:
+        wandb.init(**cfg["wandb"], config=cfg, dir=cfg["paths"]["wandb_logs"])
     # Create the logs directory if it does not exist
     Path(cfg["paths"]["wandb_logs"]).mkdir(parents=True, exist_ok=True)
 
