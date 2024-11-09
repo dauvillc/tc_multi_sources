@@ -24,9 +24,14 @@ def main(cfg: DictConfig):
         exp_cfg, checkpoint_path = load_experiment_cfg_from_checkpoint(
             cfg["paths"]["checkpoints"], resume_run_id
         )
-        # For fields that define the experiment, use the values from the checkpoint
+        # For fields that define the experiment, use the values from the checkpoint:
+        # - For the dataset, everything except the dataset_dir should come from the checkpoint.
         cfg["model"] = exp_cfg["model"]
-        cfg["dataset"] = exp_cfg["dataset"]
+        for split, split_cfg in cfg['dataset'].items():
+            for key in split_cfg.keys():
+                if key != 'dataset_dir':
+                    split_cfg[key] = exp_cfg['dataset'][split][key]
+        # The lightning module parameters should come from the checkpoint
         cfg["lightning_module"] = exp_cfg["lightning_module"]
         # The user can change fields from the checkpoint by setting them under the "change"
         # key (e.g. +change.lightning_module.masking_ratio=0.75)
@@ -100,7 +105,10 @@ def main(cfg: DictConfig):
         **cfg["trainer"]
     )
     # Train the model
-    trainer.fit(pl_module, train_dataloader, val_dataloader)
+    if resume_run_id:
+        trainer.fit(pl_module, train_dataloader, val_dataloader, ckpt_path=checkpoint_path)
+    else:
+        trainer.fit(pl_module, train_dataloader, val_dataloader)
 
 
 if __name__ == "__main__":
