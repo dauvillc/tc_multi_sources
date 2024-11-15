@@ -38,6 +38,10 @@ def main(cfg: DictConfig):
         if "change" in cfg:
             changed_cfg = cfg.pop("change")
             cfg = update(cfg, changed_cfg)
+    # Multiply the learning rate by the number of GPUs so that the effective LR
+    # is independent of the number of GPUs
+    cfg["lr_scheduler"]['max_lr'] *= cfg["trainer"]["devices"]
+    cfg["lightning_module"]['lr_scheduler_kwargs']['max_lr'] = cfg["lr_scheduler"]['max_lr']
     # Seed everything
     pl.seed_everything(cfg["seed"], workers=True)
     # Initialize Wandb and log the configuration
@@ -70,9 +74,6 @@ def main(cfg: DictConfig):
         output_convs = {
             source: instantiate(cfg["model"]["output_conv"]) for source in source_names
         }
-    # Multiply the learning rate by the number of GPUs so that the effective LR
-    # is independent of the number of GPUs
-    cfg["lr_scheduler"]['max_lr'] *= cfg["trainer"]["devices"]
     # Create the lightning module
     if resume_run_id:
         lightning_module_class = get_class(cfg["lightning_module"]["_target_"])
