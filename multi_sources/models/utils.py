@@ -86,8 +86,8 @@ def embed_coords_to_sincos(coords_list):
         lat, lon = coords.unbind(dim=1)
         # Ensure the longitudes are in the range [-180, 180].
         lon = torch.where(lon > 180, lon - 360, lon)
-        lat_sin = torch.sin(lat)
-        lon_sin = torch.sin(lon)
-        lon_cos = torch.cos(lon)
+        lat_sin = torch.sin((lat * 3.141592653589793) / 180) 
+        lon_sin = torch.sin((lon * 3.141592653589793) / 180)
+        lon_cos = torch.cos((lon * 3.141592653589793) / 180)
         embedded_coords.append(torch.stack([lat_sin, lon_sin, lon_cos], dim=1))
     return embedded_coords
