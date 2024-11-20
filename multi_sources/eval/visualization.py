@@ -83,45 +83,50 @@ def display_batch(batch_info, batch_idx, targets, preds, results_dir):
         # Create a figure with two columns (target and prediction) and S rows
         fig, axes = plt.subplots(nrows=S, ncols=2, figsize=(10, 5 * S))
         for i, source in enumerate(sources):
-            target = targets[source][idx]
-            pred = preds[source][idx]
-            # The target has shape (2 + C, H, W), where the first two channels are
-            # the latitude and longitude. We'll use those for the Y and X axes ticks,
-            # respectively.
-            # We'll only show the first channel of the values.
-            lat, lon, target = target[0], target[1], target[2:][0]
-            # Show the target on the left.
-            axes[i, 0].imshow(target, cmap="viridis")
-            axes[i, 0].set_title(f"{source} - target")
-            # Set 10 ticks on each axis, and use the lat/lon values as labels
-            lat_ticks = np.linspace(0, target.shape[0] - 1, num=10).astype(int)
-            lon_ticks = np.linspace(0, target.shape[1] - 1, num=10).astype(int)
-            lon_labels = lon[0][lon_ticks].round(2)
-            lat_labels = lat[:, 0][lat_ticks].round(2)
-            axes[i, 0].set_xticks(lon_ticks)
-            axes[i, 0].set_xticklabels(lon_labels)
-            axes[i, 0].set_yticks(lat_ticks)
-            axes[i, 0].set_yticklabels(lat_labels)
-            # For the longitude labels, use a 45-degree rotation
-            axes[i, 0].tick_params(axis="x", rotation=45)
-            sample_info = batch_info[
-                (batch_info["source_name"] == source) & (batch_info["index_in_batch"] == idx)
-            ]
-            # Show the prediction on the right, if the prediction is not None
-            # and if the availability is 0 (i.e. the target is available and
-            # the source mas masked).
-            if pred is not None and sample_info["avail"].item() == 0:
-                axes[i, 1].imshow(pred[0], cmap="viridis")
-                # Set the same ticks as for the target
-                axes[i, 1].set_xticks(lon_ticks)
-                axes[i, 1].set_xticklabels(lon_labels)
-                axes[i, 1].set_yticks(lat_ticks)
-                axes[i, 1].set_yticklabels(lat_labels)
-                axes[i, 1].tick_params(axis="x", rotation=45)
-            # Indicate the dt in the title
-            dt = sample_info["dt"].item()
-            axes[i, 1].set_title(f"pred. - dt={dt}")
+            target_ds = targets[source]
+            pred_ds = preds[source]
+            if target_ds is not None:
+                target_sample = target_ds.isel(samples=idx)
+                lat = target_sample['lat'].values
+                lon = target_sample['lon'].values
+                target = target_sample['targets'].values[0]  # Assuming first channel
+
+                axes[i, 0].imshow(target, cmap="viridis")
+                axes[i, 0].set_title(f"{source} - target")
+
+                # Set axis ticks and labels
+                set_axis_ticks(axes[i, 0], lat, lon)
+
+                sample_info = batch_info[
+                    (batch_info["source_name"] == source) & (batch_info["index_in_batch"] == idx)
+                ]
+
+                if pred_ds is not None and sample_info["avail"].item() == 0:
+                    pred_sample = pred_ds.isel(samples=idx)
+                    pred = pred_sample['outputs'].values[0]  # Assuming first channel
+
+                    axes[i, 1].imshow(pred, cmap="viridis")
+                    axes[i, 1].set_title(f"pred. - dt={sample_info['dt'].item()}")
+                    set_axis_ticks(axes[i, 1], lat, lon)
+                else:
+                    axes[i, 1].set_title(f"{source} - prediction not available")
+            else:
+                axes[i, 0].set_title(f"{source} - target not available")
+                axes[i, 1].set_title(f"{source} - prediction not available")
         # Save the figure
         plt.tight_layout()
         plt.savefig(results_dir / f"{batch_idx}_{idx}.png")
         plt.close(fig)
+
+def set_axis_ticks(ax, lat, lon):
+    """Helper function to set axis ticks and labels."""
+    H, W = lat.shape
+    lat_ticks = np.linspace(0, H - 1, num=10).astype(int)
+    lon_ticks = np.linspace(0, W - 1, num=10).astype(int)
+    lat_labels = lat[lat_ticks, 0].round(2)
+    lon_labels = lon[0, lon_ticks].round(2)
+    ax.set_xticks(lon_ticks)
+    ax.set_xticklabels(lon_labels)
+    ax.set_yticks(lat_ticks)
+    ax.set_yticklabels(lat_labels)
+    ax.tick_params(axis="x", rotation=45)

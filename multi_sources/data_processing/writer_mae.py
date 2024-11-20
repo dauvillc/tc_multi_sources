@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 from lightning.pytorch.callbacks import BasePredictionWriter
+import xarray as xr  # Import xarray
 
 
 class MultiSourceWriter(BasePredictionWriter):
@@ -11,8 +12,9 @@ class MultiSourceWriter(BasePredictionWriter):
     such that:
     - The targets are of the form {source_name: D} where D is a dictionary with the following keys:
         - dt: The datetime of the observation
-        - values: The values to predict
-        - coords: The coordinates of the observation
+        - values: The values to predict as a tensor of shape (bs, C, H, W)
+        - coords: The coordinates of each pixel as a tensor of shape (bs, 2, H, W).
+            The first channel is the latitude and the second channel is the longitude.
     - The outputs are of the form {source_name: v'} where v' are the predicted values.
         A source may not be included in the outputs.
 
@@ -52,8 +54,20 @@ class MultiSourceWriter(BasePredictionWriter):
             targets = data['values'].detach().cpu().numpy()
             # Append the lat/lon to the targets
             latlon = data['coords'].detach().cpu().numpy()
-            targets_with_coords = np.concatenate([latlon, targets], axis=1)
-            np.save(target_dir / f"{batch_idx}.npy", targets_with_coords)
+            dt = data['dt'].detach().cpu().numpy() * self.dt_max
+            # Create xarray Dataset for targets
+            targets_ds = xr.Dataset(
+                {
+                    "targets": (("samples", "channels", "H", "W"), targets),
+                },
+                coords={
+                    "samples": np.arange(targets.shape[0]),
+                    "lat": (("samples", "H", "W"), latlon[:, 0, :, :]),
+                    "lon": (("samples", "H", "W"), latlon[:, 1, :, :]),
+                    "dt": (("samples"), dt),
+                }
+            )
+            targets_ds.to_netcdf(target_dir / f"{batch_idx}.nc")
 
             if source_name in pred:
                 # If no prediction was made for this source,
@@ -61,7 +75,19 @@ class MultiSourceWriter(BasePredictionWriter):
                 output_dir = self.outputs_dir / source_name
                 output_dir.mkdir(parents=True, exist_ok=True)
                 outputs = pred[source_name].detach().cpu().numpy()
-                np.save(output_dir / f"{batch_idx}.npy", outputs)
+                # Create xarray Dataset for outputs
+                outputs_ds = xr.Dataset(
+                    {
+                        "outputs": (("samples", "channels", "H", "W"), outputs),
+                    },
+                    coords={
+                        "samples": np.arange(outputs.shape[0]),
+                        "lat": (("samples", "H", "W"), latlon[:, 0, :, :]),
+                        "lon": (("samples", "H", "W"), latlon[:, 1, :, :]),
+                        "dt": (("samples"), dt),
+                    }
+                )
+                outputs_ds.to_netcdf(output_dir / f"{batch_idx}.nc")
 
             batch_size = latlon.shape[0]
             # We'll also save the time deltas of the samples. The deltas

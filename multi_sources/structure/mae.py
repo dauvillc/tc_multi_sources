@@ -501,6 +501,11 @@ class MultisourceMAE(pl.LightningModule):
             pred (dict of str to tensor): The predicted values.
             avail_tensors (dict of str to tensor): The availability tensors for each source.
         """
+        # Save the non-normalized 'coords' entry of the batch, so that
+        # we can save them with the predictions.
+        original_coords = {source: x["coords"] for source, x in batch.items()}
+        # Save the shapes of the images before padding
+        original_shapes = {source: x["values"].shape[-2:] for source, x in batch.items()}
         batch = self.preproc_input(batch)
         # Save the shapes of the padded tensors to reconstruct the images
         padded_shapes = {source: x["values"].shape[-2:] for source, x in batch.items()}
@@ -509,10 +514,17 @@ class MultisourceMAE(pl.LightningModule):
         output = {}
         for source, true_data in x.items():
             output[source] = pred[source].clone()
-        # Convert the predictions back to images
+        # Convert the predictions back to images and remove the padding
         for source, v in output.items():
             pH, pW = padded_shapes[source]
             output[source] = patches_to_img(v, pH, pW, self.patch_size)
+            oH, oW = original_shapes[source]
+            output[source] = output[source][:, :, :oH, :oW]
+            # Also remove the padding in the batch values (i.e. the targets)
+            batch[source]["values"] = batch[source]["values"][:, :, :oH, :oW]
+        # Replace the 'coords' entry in the batch by the original coordinates
+        for source, coords in original_coords.items():
+            batch[source]["coords"] = coords
         return batch, output, avail_tensors
 
     def configure_optimizers(self):
