@@ -11,9 +11,9 @@ class Source:
         name (str): The name of the source, under the format
             "source.subsource1.subsource2. ... .subsourceN".
         source_type (str): The type of the source, e.g. "passive_microwave".
-        dim (int): The number of dimensions of the source.
+        dim (int): The number of dimensions of the source (excluding the batch dim)
         shape (tuple of int): The shape of the source, i.e. the number
-            of elements in each dimension.
+            of elements in each dimension, *excluding* the batch and channel dimensions.
         data_vars (list of str): The names of the variables in the source, i.e.
             variables that can be found in a netCDF file of the source.
         context_vars (list of str): The names of the context variables in the source, e.g.
