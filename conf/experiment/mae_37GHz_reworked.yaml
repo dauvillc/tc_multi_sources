@@ -2,7 +2,7 @@
 defaults:
   - override /paths: jz
   - override /sources: sat_interp_37GHz
-  - override /lightning_module: mae
+  - override /lightning_module: mae_reworked
   - override /trainer: 4gpus
   - override /lr_scheduler: cosine_warmup_150epochs.yaml
 
@@ -21,5 +21,6 @@ dataset:
 dataloader:
   batch_size: 32
 
-model.backbone._target_: multi_sources.models.backbone_reworked.MultisourceGeneralBackbone
-lightning_module: mae_reworked
+model:
+  backbone:
+    _target_: multi_sources.models.backbone_reworked.MultisourceGeneralBackbone
