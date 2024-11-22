@@ -248,7 +248,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                             }
                     else:
                         # The context variables can be loaded from the sample dataframe.
-                        context_df = df[source.context_vars].iloc[0].values
+                        context_df = df[source.context_vars].iloc[0]
                         # context_vars[cvar] is a dict {dvar: value} for each data variable dvar
                         # of the source. We want to obtain a tensor of shape
                         # (n_context_vars * n_data_vars,)
@@ -257,7 +257,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                                 np.array(
                                     [
                                         context_df[cvar][dvar]
-                                        for dvar in source.variables
+                                        for dvar in source.data_vars
                                     ]
                                 )
                                 for cvar in source.context_vars
@@ -266,7 +266,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                         )  # (n_data_vars, n_context_vars)
                         CT = torch.tensor(CT.flatten(), dtype=torch.float32)
                         # Load the variables in the order specified in the source
-                        V = np.stack([ds[var][:] for var in source.variables], axis=0)
+                        V = np.stack([ds[var][:] for var in source.data_vars], axis=0)
                         V = torch.tensor(V, dtype=torch.float32)
                         # Normalize the context and values tensors
                         CT, V = self.normalize(CT, V, source)
