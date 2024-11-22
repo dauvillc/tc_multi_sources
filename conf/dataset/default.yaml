@@ -25,7 +25,7 @@ val:
   included_variables_dict:
     _target_: multi_sources.data_processing.utils.read_variables_dict
     variables_dict: ${sources}
-  single_channel_sources: True
+  single_channel_sources: ${dataset.train.single_channel_sources}
   dt_max: ${dataset.train.dt_max}
   min_available_sources: ${dataset.train.min_available_sources}
   num_workers: ${dataloader.num_workers}
