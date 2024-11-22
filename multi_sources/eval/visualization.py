@@ -20,10 +20,18 @@ class VisualEvaluation(AbstractMultisourceEvaluationMetric):
     - Saves the figure to the results directory.
     """
 
-    def __init__(self, predictions_dir, results_dir):
+    def __init__(self, predictions_dir, results_dir, eval_fraction=1.0):
+        """
+        Args:
+            predictions_dir (Path): Directory with the predictions.
+            results_dir (Path): Directory where the results will be saved.
+            eval_fraction (float): Fraction of the dataset to evaluate. If less than
+                1.0, a random portion of the dataset will be displayed.
+        """
         super().__init__(
             "visual_eval", "Visualization of predictions", predictions_dir, results_dir
         )
+        self.eval_fraction = eval_fraction
 
     def evaluate_sources(self, info_df, verbose=True, num_workers=0):
         """
@@ -34,6 +42,13 @@ class VisualEvaluation(AbstractMultisourceEvaluationMetric):
         """
         # Browse the batch indices in the DataFrame
         unique_batch_indices = info_df["batch_idx"].unique()
+        # If eval_fraction < 1.0, select a random subset of the batch indices
+        if self.eval_fraction < 1.0:
+            num_batches = len(unique_batch_indices)
+            num_eval_batches = np.ceil(self.eval_fraction * num_batches).astype(int)
+            unique_batch_indices = np.random.choice(
+                unique_batch_indices, num_eval_batches, replace=False
+            )
         if num_workers < 2:
             for batch_idx in tqdm(unique_batch_indices, desc="Batches", disable=not verbose):
                 # Get the sources included in the batch
@@ -87,9 +102,9 @@ def display_batch(batch_info, batch_idx, targets, preds, results_dir):
             pred_ds = preds[source]
             if target_ds is not None:
                 target_sample = target_ds.isel(samples=idx)
-                lat = target_sample['lat'].values
-                lon = target_sample['lon'].values
-                target = target_sample['targets'].values[0]  # Assuming first channel
+                lat = target_sample["lat"].values
+                lon = target_sample["lon"].values
+                target = target_sample["targets"].values[0]  # Assuming first channel
 
                 axes[i, 0].imshow(target, cmap="viridis")
                 axes[i, 0].set_title(f"{source} - target")
@@ -103,7 +118,7 @@ def display_batch(batch_info, batch_idx, targets, preds, results_dir):
 
                 if pred_ds is not None and sample_info["avail"].item() == 0:
                     pred_sample = pred_ds.isel(samples=idx)
-                    pred = pred_sample['outputs'].values[0]  # Assuming first channel
+                    pred = pred_sample["outputs"].values[0]  # Assuming first channel
 
                     axes[i, 1].imshow(pred, cmap="viridis")
                     axes[i, 1].set_title(f"pred. - dt={sample_info['dt'].item()}")
@@ -117,6 +132,7 @@ def display_batch(batch_info, batch_idx, targets, preds, results_dir):
         plt.tight_layout()
         plt.savefig(results_dir / f"{batch_idx}_{idx}.png")
         plt.close(fig)
+
 
 def set_axis_ticks(ax, lat, lon):
     """Helper function to set axis ticks and labels."""
