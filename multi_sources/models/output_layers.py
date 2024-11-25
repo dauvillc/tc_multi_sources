@@ -21,6 +21,7 @@ class SourceSpecificProjection2d(nn.Module):
         super().__init__()
         self.patch_size = patch_size
         self.spatial_shape = spatial_shape
+        self.norm = nn.LayerNorm(latent_dim)
         # We'll deconvolve the latent space using subpixel convolutions
         self.conv = nn.Conv2d(
             in_channels=latent_dim,
@@ -41,6 +42,7 @@ class SourceSpecificProjection2d(nn.Module):
         Returns:
             torch.Tensor: The tensor of shape (B, C, H, W) containing the projected tokens.
         """
+        x = self.norm(x)
         # Transpose x from (B, L, D) to (B, D, w, h)
         x = x.transpose(1, 2).view(x.size(0), -1, *tokens_shape)
         # Apply the subpixel deconvolution
