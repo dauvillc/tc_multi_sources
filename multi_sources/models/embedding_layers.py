@@ -88,12 +88,13 @@ class ConvPatchEmbedding2d(nn.Module):
         """
         super().__init__()
         self.patch_size = patch_size
+        # Pad the image so that its spatial dimensions are multiples of the patch size
         self.pad = nn.ZeroPad2d(
             (
                 0,
-                patch_size - spatial_shape[1] % patch_size,
+                (patch_size - spatial_shape[1] % patch_size) % patch_size,
                 0,
-                patch_size - spatial_shape[0] % patch_size,
+                (patch_size - spatial_shape[0] % patch_size) % patch_size,
             )
         )
         self.embedding = nn.Conv2d(

@@ -122,7 +122,7 @@ class MultisourceMAE(pl.LightningModule):
             dt = data["dt"].float()
             # Deduce the availability mask level from where the values are missing
             # am = True where the values are available
-            am = ~torch.isnan(v)[:, 0]  # (B, H, W)
+            am = (~torch.isnan(v)[:, 0]).float()  # (B, H, W)
             # Don't modify the tensors in-place, as we need to keep the NaN values
             # for the loss computation
             dt = torch.nan_to_num(data["dt"], nan=-1.0)
@@ -313,7 +313,7 @@ class MultisourceMAE(pl.LightningModule):
             # - the value at position ... was not missing (true_data["am"] == True);
             # - If self.loss_max_distance_from_center is not None, the token is within
             #   the specified distance from the center.
-            mask = true_data["avail_mask"] & (avail_tensors[source].view(-1, 1, 1) == 0)
+            mask = (true_data["avail_mask"] <= 0) & (avail_tensors[source].view(-1, 1, 1) == 0)
             if self.loss_max_distance_from_center is not None:
                 dist = true_data["dist_to_center"]
                 mask = mask & (dist <= self.loss_max_distance_from_center)
