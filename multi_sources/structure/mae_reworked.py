@@ -135,7 +135,7 @@ class MultisourceMAE(pl.LightningModule):
             d = torch.nan_to_num(d, nan=float("inf"))
             input_[source] = {
                 "source_type": data["source_type"],
-                "avail": data["avail"].float(),
+                "avail": data["avail"],
                 "dt": dt,
                 "coords": c,
                 "landmask": lm,
@@ -313,7 +313,7 @@ class MultisourceMAE(pl.LightningModule):
             # - the value at position ... was not missing (true_data["am"] == True);
             # - If self.loss_max_distance_from_center is not None, the token is within
             #   the specified distance from the center.
-            mask = (true_data["avail_mask"] <= 0) & (avail_tensors[source].view(-1, 1, 1) == 0)
+            mask = (true_data["avail_mask"] >= 1) & (avail_tensors[source].view(-1, 1, 1) == 0)
             if self.loss_max_distance_from_center is not None:
                 dist = true_data["dist_to_center"]
                 mask = mask & (dist <= self.loss_max_distance_from_center)
@@ -344,28 +344,12 @@ class MultisourceMAE(pl.LightningModule):
         # Save the non-normalized 'coords' entry of the batch, so that
         # we can save them with the predictions.
         original_coords = {source: x["coords"] for source, x in batch.items()}
-        # Save the shapes of the images before padding
-        original_shapes = {source: x["values"].shape[-2:] for source, x in batch.items()}
         batch = self.preproc_input(batch)
-        # Save the shapes of the padded tensors to reconstruct the images
-        padded_shapes = {source: x["values"].shape[-2:] for source, x in batch.items()}
-        x = self.tokenize(batch)
-        pred, avail_tensors = self.forward(x, padded_shapes)
-        output = {}
-        for source, true_data in x.items():
-            output[source] = pred[source].clone()
-        # Convert the predictions back to images and remove the padding
-        for source, v in output.items():
-            pH, pW = padded_shapes[source]
-            output[source] = patches_to_img(v, pH, pW, self.patch_size)
-            oH, oW = original_shapes[source]
-            output[source] = output[source][:, :, :oH, :oW]
-            # Also remove the padding in the batch values (i.e. the targets)
-            batch[source]["values"] = batch[source]["values"][:, :, :oH, :oW]
+        pred, avail_tensors = self.forward(batch)
         # Replace the 'coords' entry in the batch by the original coordinates
         for source, coords in original_coords.items():
             batch[source]["coords"] = coords
-        return batch, output, avail_tensors
+        return batch, pred, avail_tensors
 
     def configure_optimizers(self):
         """Configures the optimizer for the model.

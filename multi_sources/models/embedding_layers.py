@@ -164,19 +164,22 @@ class SourceSpecificEmbedding2d(nn.Module):
             embedded_values: torch.Tensor of shape (B, num_patches, values_dim).
             embedded_meta: torch.Tensor of shape (B, num_patches, meta_dim).
         """
-        values = data["values"]
-        avail_mask = data["avail_mask"]
-        landmask = data["landmask"]
-        coords = data["coords"]
-        dt = data["dt"]
-        # Embed the values
-        values = torch.cat([values, avail_mask.unsqueeze(1), landmask.unsqueeze(1)], dim=1)
-        embedded_values = self.values_embedding(values)
-        # Embed the metadata
-        # - Repeat dt to match the spatial dimensions
-        dt = dt.view(-1, 1, 1, 1).repeat(1, 1, *coords.shape[2:])  # (B, 1, H, W)
-        # - Concatenate the spatial and temporal coordinates
-        meta = torch.cat([coords, dt], dim=1)
-        embedded_meta = self.meta_embedding(meta)
+        # Disable cudNN here if the patch size is superior to 4,
+        # as it raises an error for large patch sizes.
+        with torch.backends.cudnn.flags(enabled=self.patch_size <= 4):
+            values = data["values"]
+            avail_mask = data["avail_mask"]
+            landmask = data["landmask"]
+            coords = data["coords"]
+            dt = data["dt"]
+            # Embed the values
+            values = torch.cat([values, avail_mask.unsqueeze(1), landmask.unsqueeze(1)], dim=1)
+            embedded_values = self.values_embedding(values)
+            # Embed the metadata
+            # - Repeat dt to match the spatial dimensions
+            dt = dt.view(-1, 1, 1, 1).repeat(1, 1, *coords.shape[2:])  # (B, 1, H, W)
+            # - Concatenate the spatial and temporal coordinates
+            meta = torch.cat([coords, dt], dim=1)
+            embedded_meta = self.meta_embedding(meta)
 
         return embedded_values, embedded_meta

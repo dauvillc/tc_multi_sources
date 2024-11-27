@@ -1,6 +1,7 @@
 """Implements layers to project the output of a ViT in latent space to the output space."""
-import torch
+
 import torch.nn as nn
+from multi_sources.models.icnr import ICNR
 
 
 class SourceSpecificProjection2d(nn.Module):
@@ -10,6 +11,7 @@ class SourceSpecificProjection2d(nn.Module):
     The module applies a deconvolution to project the tokens to the output space as
     a tensor (B, C, H, W).
     """
+
     def __init__(self, channels, spatial_shape, patch_size, latent_dim):
         """
         Args:
@@ -25,14 +27,19 @@ class SourceSpecificProjection2d(nn.Module):
         # We'll deconvolve the latent space using subpixel convolutions
         self.conv = nn.Conv2d(
             in_channels=latent_dim,
-            out_channels=channels * patch_size ** 2,
+            out_channels=channels * patch_size**2,
             kernel_size=3,
             stride=1,
             padding=1,
-            bias=False
+            bias=False,
         )
         self.pixel_shuffle = nn.PixelShuffle(patch_size)
-    
+        # Apply the ICNR initialization to the deconvolution
+        weight = ICNR(
+            self.conv.weight, initializer=nn.init.kaiming_normal_, upscale_factor=patch_size
+        )
+        self.conv.weight.data.copy_(weight)
+
     def forward(self, x, tokens_shape):
         """
         Args:
@@ -49,5 +56,5 @@ class SourceSpecificProjection2d(nn.Module):
         x = self.conv(x)  # (B, C * patch_size ** 2, w, h)
         x = self.pixel_shuffle(x)  # (B, C, H, W)
         # Remove the potential padding that was added to the image
-        x = x[:, :, :self.spatial_shape[0], :self.spatial_shape[1]]
+        x = x[:, :, : self.spatial_shape[0], : self.spatial_shape[1]]
         return x
