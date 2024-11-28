@@ -13,7 +13,7 @@ from multi_sources.models.utils import (
     embed_coords_to_sincos,
     remove_dots,
 )
-from multi_sources.models.embedding_layers import SourceSpecificEmbedding2d
+from multi_sources.models.embedding_layers import SourceSpecificEmbedding2d, MasksEmbedding2d
 from multi_sources.models.output_layers import SourceSpecificProjection2d
 
 
@@ -104,6 +104,12 @@ class MultisourceMAE(pl.LightningModule):
                 source.n_data_variables(), source.shape, self.patch_size, values_dim
             )
 
+        # Check if any source is 2D and create mask embedding layer if needed
+        has_2d_source = any(len(source.shape) == 2 for source in sources)
+        self.masks_embedding = None
+        if has_2d_source:
+            self.masks_embedding = MasksEmbedding2d(patch_size, values_dim)
+
         # learnable [MASK] token
         self.mask_token = nn.Parameter(torch.randn(1, 1, self.values_dim))
 
@@ -133,15 +139,25 @@ class MultisourceMAE(pl.LightningModule):
             c = torch.nan_to_num(c, nan=-1)
             # For the distance tensor, fill the nan values with +inf
             d = torch.nan_to_num(d, nan=float("inf"))
-            input_[source] = {
+
+            # Create two separate dictionaries: one for embedding input, one for loss computation
+            embed_input = {
                 "source_type": data["source_type"],
                 "avail": data["avail"],
                 "dt": dt,
                 "coords": c,
+                "values": v,
+            }
+
+            loss_info = {
+                "avail_mask": am,
                 "landmask": lm,
                 "dist_to_center": d,
-                "values": v,
-                "avail_mask": am,
+            }
+
+            input_[source] = {
+                **embed_input,  # Data needed for embedding
+                **loss_info,  # Additional data needed for loss computation
             }
             # Check for NaN values in the tensors
             for k, v in input_[source].items():
@@ -154,10 +170,9 @@ class MultisourceMAE(pl.LightningModule):
         """Embeds the input sources."""
         output = {}
         for source, data in x.items():
+            # Get value and metadata embeddings
             v, m = self.source_embeddings[source](data)
-            # The model will need an entry 'tokens_shape' which gives the shape
-            # of the sources in terms of tokens (how many tokens along each dimension).
-            # This is needed for windowed attention, for instance.
+
             tokens_shape = tuple(
                 int(np.ceil(s / self.patch_size)) for s in data["values"].shape[-2:]
             )
@@ -222,20 +237,46 @@ class MultisourceMAE(pl.LightningModule):
             masked_x[source]["embedded_values"] = masked_values
         return masked_x
 
+    def embed_after_mask(self, x, orig_data):
+        """Computes the masks embeddings after masking has been applied.
+        Args:
+            x (dict): The masked and embedded data
+            orig_data (dict): The original preprocessed data containing landmask and avail_mask
+        Returns:
+            y (dict): The masked and embedded data with the masks embeddings
+        """
+        if self.masks_embedding is None:
+            return x
+
+        for source, data in x.items():
+            if len(orig_data[source]["values"].shape) == 4:  # Only for 2D sources
+                # Create mask_data with only required fields from original data
+                mask_data = {
+                    "landmask": orig_data[source]["landmask"],
+                    "avail_mask": orig_data[source]["avail_mask"].clone(),
+                }
+                # Only zero out availability mask for samples where avail <= 0
+                mask_data["avail_mask"].masked_fill_(
+                    data["avail"].view(-1, *([1] * (mask_data["avail_mask"].dim() - 1))) <= 0, 0
+                )
+
+                data["embedded_masks"] = self.masks_embedding(mask_data)
+
+        return x
+
     def forward(self, x):
         """Computes the forward pass of the model.
         Returns:
             pred (dict of str to tensor): The predicted values, as a dict
                 {source_name: tensor} where the tensor has shape (B, C, ...).
             avail_tensors (dict of str to tensor): The availability tensors for each source,
-                of shape (B,), such that avail_tensors[source][b] is 1 if the source is available,
-                0 if it was masked, and -1 if it was missing.
+                of shape (B,).
         """
+        preprocessed = x  # Store reference to preprocessed data
         x = self.embed(x)
-        # Mask a portion of the sources (replace the tokens by the [MASK] token)
         x = self.mask(x)
-        avail_tensors = {source: data["avail"] for source, data in x.items()}
-        # If required, create an attention mask for each source that is either missing or masked.
+        x = self.embed_after_mask(x, preprocessed)
+
         attn_masks = None
         if self.use_attention_masks:
             attn_masks = {}
@@ -244,13 +285,14 @@ class MultisourceMAE(pl.LightningModule):
                 attn_mask = data["avail"] <= 0  # (B,)
                 attn_mask = attn_mask.view(B, 1).expand(B, L)
                 attn_masks[source] = attn_mask
-        # Forward x through the backbone
+
         pred = self.backbone(x, attn_masks)
-        # Project the predicted values to the original space
         pred = {
             source: self.output_projs[source](v, x[source]["tokens_shape"])
             for source, v in pred.items()
         }
+        # Compute availability tensors just before returning
+        avail_tensors = {source: data["avail"] for source, data in x.items()}
         return pred, avail_tensors
 
     def step(self, batch, batch_idx, train_or_val):
@@ -259,7 +301,7 @@ class MultisourceMAE(pl.LightningModule):
         batch_size = batch[list(batch.keys())[0]]["values"].shape[0]
         pred, avail_tensors = self.forward(batch)
 
-        # Compute the loss for each source
+        # Pass preprocessed batch to loss calculation
         losses = self.loss_fn(pred, batch, avail_tensors)
         # If len(losses) == 0, i.e. for all masked sources the tokens were missing,
         # raise an error.

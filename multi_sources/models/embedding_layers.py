@@ -118,13 +118,61 @@ class ConvPatchEmbedding2d(nn.Module):
         return embedded_image
 
 
+class MasksEmbedding2d(nn.Module):
+    """A module that embeds masks into a sequence of patches using
+    a 2D convolutional layer. Takes as input a land-sea mask and an
+    availability mask, concatenates them along the channel dimension,
+    and processes them through a strided convolution.
+    """
+
+    def __init__(self, patch_size, emb_dim):
+        """
+        Args:
+            patch_size (int): The size of the patches.
+            emb_dim (int): The dimension of the embedding space.
+        """
+        super().__init__()
+        self.patch_size = patch_size
+        self.embedding = nn.Conv2d(
+            2, emb_dim, kernel_size=self.patch_size, stride=self.patch_size
+        )
+        self.norm = nn.LayerNorm(emb_dim)
+
+    def forward(self, data):
+        """
+        Args:
+            data (dict of str to torch.Tensor): A dictionary containing:
+                * 'landmask': torch.Tensor of shape (B, H, W) containing the land-sea mask
+                * 'avail_mask': torch.Tensor of shape (B, H, W) containing the availability mask
+        Returns:
+            embedded_masks: torch.Tensor of shape (B, num_patches, emb_dim).
+        """
+        # Add channel dimension and concatenate the masks
+        landmask = data["landmask"].unsqueeze(1)  # (B, 1, H, W)
+        avail_mask = data["avail_mask"].unsqueeze(1)  # (B, 1, H, W)
+        masks = torch.cat([landmask, avail_mask], dim=1)
+        
+        # Compute padding dynamically
+        H, W = masks.shape[2:]
+        pad_h = (self.patch_size - H % self.patch_size) % self.patch_size
+        pad_w = (self.patch_size - W % self.patch_size) % self.patch_size
+        pad = nn.ZeroPad2d((0, pad_w, 0, pad_h))
+        
+        # Apply padding and embedding
+        masks = pad(masks)
+        embedded_masks = self.embedding(masks)
+        embedded_masks = embedded_masks.flatten(2).transpose(1, 2)
+        embedded_masks = self.norm(embedded_masks)
+        return embedded_masks
+
+
 class SourceSpecificEmbedding2d(nn.Module):
-    """A module that embeds a single source's pixels, land-sea mask and
-    spatiotemporal coordinates into a latent space of fixed dimension.
+    """A module that embeds a single source into a sequence of patches.
+    Two sequences are produced:
+    * The values sequence, which embeds the pixels;
+    * The metadata sequence, which embeds the spatial and temporal coordinates.
     Made for 2D sources, which means that
     * the pixels tensor has shape (B, C, H, W)
-    * the availability mask is (B, H, W)
-    * the land-sea mask is (B, H, W)
     * the spatial coordinates are (B, 3, H, W) (for lat sin, lon sin and lon cos)
     * the temporal coordinate is a scalar (B,).
     Patches of the input are separately embedded into tokens of shape (B, emb_dim)
@@ -142,10 +190,9 @@ class SourceSpecificEmbedding2d(nn.Module):
         """
         super().__init__()
         self.patch_size = patch_size
-        # Values embedding: embeds the pixels, the land-sea mask and the availability mask using
-        # a strided convolution.
+        # Values embedding: embeds the pixels using a strided convolution
         self.values_embedding = ConvPatchEmbedding2d(
-            channels + 2, spatial_shape, patch_size, values_dim
+            channels, spatial_shape, patch_size, values_dim
         )
         # Metadata embedding: same strategy as for the values embedding, but with
         # 4 channels: lat sin, lon sin, lon cos and time.
@@ -156,8 +203,6 @@ class SourceSpecificEmbedding2d(nn.Module):
         Args:
             data (dict of str to torch.Tensor): A dictionary containing the following keys:
                 * 'values': torch.Tensor of shape (B, C, H, W) containing the pixels of the source.
-                * 'avail_mask': torch.Tensor of shape (B, H, W) containing the availability mask.
-                * 'landmask': torch.Tensor of shape (B, H, W) containing the land-sea mask.
                 * 'coords': torch.Tensor of shape (B, 3, H, W) containing the spatial coordinates.
                 * 'dt': torch.Tensor of shape (B,) containing the temporal coordinate.
         Returns:
@@ -168,12 +213,9 @@ class SourceSpecificEmbedding2d(nn.Module):
         # as it raises an error for large patch sizes.
         with torch.backends.cudnn.flags(enabled=self.patch_size <= 4):
             values = data["values"]
-            avail_mask = data["avail_mask"]
-            landmask = data["landmask"]
             coords = data["coords"]
             dt = data["dt"]
             # Embed the values
-            values = torch.cat([values, avail_mask.unsqueeze(1), landmask.unsqueeze(1)], dim=1)
             embedded_values = self.values_embedding(values)
             # Embed the metadata
             # - Repeat dt to match the spatial dimensions

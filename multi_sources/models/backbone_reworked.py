@@ -72,30 +72,39 @@ class MultisourceGeneralBackbone(nn.Module):
         """
         # Apply the blocks with skip connections
         for block in self.blocks:
+            # Add masks embeddings at the start of each block if they exist
+            block_input = {}
+            for source_name, data in x.items():
+                block_input[source_name] = {k: v for k, v in data.items()}
+                if data.get("embedded_masks") is not None:
+                    block_input[source_name]["embedded_values"] = (
+                        data["embedded_values"] + data["embedded_masks"]
+                    )
+                else:
+                    block_input[source_name]["embedded_values"] = data["embedded_values"]
+
             for norm, layer in block:
-                # The layer receives its input in the same format as x. However, the values
-                # need to be normalized before being passed to the layer.
-                # In order not to modify the original x, we create a new dictionary, which
-                # we pass to the layer.
+                # Create new dict for normalized values
                 new_x = {}
-                for source_name, data in x.items():
-                    # Copy the entries that don't change to propagate them
-                    # to the next layer.
+                for source_name, data in block_input.items():
+                    # Copy metadata and shape
                     new_x[source_name] = {
                         "embedded_metadata": data["embedded_metadata"],
                         "tokens_shape": data["tokens_shape"],
+                        "embedded_masks": data.get("embedded_masks"),  # Preserve masks
                     }
-                    # Normalize the values in each source
+                    # Normalize the values
                     new_x[source_name]["embedded_values"] = norm(data["embedded_values"])
-                # Apply the layer and add the skip connection
-                new_values = layer(
-                    new_x, attention_mask=attention_mask
-                )  # dict {source_name: tensor}
-                # Update the values with the sum of the new values and the previous values.
+                
+                # Apply layer and add skip connection
+                new_values = layer(new_x, attention_mask=attention_mask)
                 for source_name, data in new_x.items():
                     new_x[source_name]["embedded_values"] = (
-                        new_values[source_name] + x[source_name]["embedded_values"]
+                        new_values[source_name] + block_input[source_name]["embedded_values"]
                     )
-                x = new_x
-        # The output of the backbone is only the predicted values in latent space.
+                block_input = new_x
+
+            x = block_input
+
+        # Return only the predicted values
         return {source_name: x[source_name]["embedded_values"] for source_name in x.keys()}
