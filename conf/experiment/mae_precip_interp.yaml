@@ -3,7 +3,6 @@ defaults:
   - override /paths: jz
   - override /sources: precip_interp
   - override /lightning_module: mae
-  - override /trainer: 4gpus
   - override /lr_scheduler: cosine_warmup_300epochs.yaml
 
 wandb:
@@ -13,6 +12,3 @@ dataset:
   train:
     dt_max: 24
     min_available_sources: 3
-
-dataloader:
-  batch_size: 16

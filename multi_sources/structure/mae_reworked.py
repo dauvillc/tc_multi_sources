@@ -275,6 +275,8 @@ class MultisourceMAE(pl.LightningModule):
         preprocessed = x  # Store reference to preprocessed data
         x = self.embed(x)
         x = self.mask(x)
+        # If a source is masked, its avail mask is zeroed out, so we can only
+        # embed the availability mask after masking.
         x = self.embed_after_mask(x, preprocessed)
 
         attn_masks = None

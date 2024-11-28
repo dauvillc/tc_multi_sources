@@ -3,7 +3,6 @@ defaults:
   - override /paths: jz
   - override /sources: sat_interp_90GHz
   - override /lightning_module: mae
-  - override /trainer: 4gpus
   - override /lr_scheduler: cosine_warmup_300epochs.yaml
 
 wandb:

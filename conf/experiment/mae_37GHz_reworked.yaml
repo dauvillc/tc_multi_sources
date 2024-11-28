@@ -3,7 +3,6 @@ defaults:
   - override /paths: jz
   - override /sources: sat_interp_37GHz
   - override /lightning_module: mae_reworked
-  - override /trainer: 8gpus
   - override /lr_scheduler: cosine_warmup_150epochs.yaml
 
 wandb:
@@ -17,9 +16,6 @@ dataset:
     single_channel_sources: false
   val:
     single_channel_sources: false
-
-dataloader:
-  batch_size: 32
 
 trainer:
   strategy: ddp_find_unused_parameters_true
