@@ -1,6 +1,7 @@
 """Implements small utility functions for data processing."""
 
 import pandas as pd
+import numpy as np
 from concurrent.futures import ProcessPoolExecutor
 
 
@@ -131,3 +132,13 @@ def compute_sources_availability(df, dt_max, num_workers=0):
                 df, sid_mask, source_mask[source], time_arr, source, dt_max
             )
     return pd.DataFrame(result)
+
+
+def load_nc_with_nan(netcdf_var):
+    """Loads a netCDF variable into a numpy array, filling the masked values with NaN.
+    Args:
+        netcdf_var (netCDF4.Variable): Variable to load.
+    Returns:
+        np.ndarray: Numpy array with the variable values.
+    """
+    return netcdf_var[:].filled(np.nan)
