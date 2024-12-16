@@ -96,10 +96,7 @@ def main(cfg):
     # We know need to compute the normalization constants for the context variables.
     # However, the context variables can be shared across sources (e.g. the observing frequency
     # or the IFOV). Thus, we'll load all of the context variables across all samples and compute
-    # the normalization constants at once.
-    # Load the sources metadata.
-    with open(preprocessed_dir / "sources_metadata.json", "r") as f:
-        source_metadata = json.load(f)
+    # the normalization constants at once. 
     # sources_metadata[source_name]["context_vars"] contains the context variables for the source.
     # Retrieve the list of context variables that can be found in at least one source.
     context_vars = set()
