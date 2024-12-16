@@ -6,10 +6,16 @@ import numpy as np
 from haversine import haversine_vector
 from numpy import nan as NA
 from math import ceil
-from pyresample.kd_tree import resample_nearest
+from pyresample.bilinear import NumpyBilinearResampler
 from pyresample import SwathDefinition
 from pyresample.area_config import create_area_def
 from pyresample.utils import check_and_wrap
+
+
+class ResamplingError(ValueError):
+    """Exception raised when resampling operations fail."""
+
+    pass
 
 
 # Disable some warnings that pyresample and CRS are raising
@@ -69,32 +75,34 @@ def reverse_spatially(ds):
     return ds
 
 
-def regrid(ds, target_resolution_km, target_area):
+def regrid(ds, target_resolution, target_area):
     """Regrids the dataset ds to a regular grid with a given target resolution.
     The resulting area is centered on the original area's central coordinates.
 
     Args:
         ds (xarray.Dataset): Dataset to regrid. Must include the variables 'latitude'
-            and 'longitude', along the dimensions 'scan' and 'pixel'.
-            All variables in the dataset will be regridded.
-        target_resolution_km (tuple of float): The target resolution in kilometers,
-            as a tuple (res_lon, res_lat).
-        target_area (tuple of float): Tuple (d_lon, d_lat) representing the size of the
+            and 'longitude' and have exactly two dimensions.
+        target_resolution (tuple of float): The target resolution in degrees,
+            as a tuple (res_lat, res_lon).
+        target_area (tuple of float): Tuple (d_lat, d_lon) representing the size of the
             target area in degrees.
     """
-    # Reformat the coordinates to suit pyresample
+    # Get the dimensions from the latitude variable
+    dims = list(ds.latitude.dims)
+    if len(dims) != 2:
+        raise ValueError("Dataset must have exactly two dimensions")
+    dim_y, dim_x = dims
+
+    # Rest of function remains the same but uses dim_y and dim_x
     lon, lat = check_and_wrap(ds.longitude.values, ds.latitude.values)
-    # Define the swath
     swath = SwathDefinition(lons=lon, lats=lat)
     radius_of_influence = 100000  # 100 km
-    # Retrieve the size of the dataset
     sizes = ds.sizes
-    size_scan, size_pixel = sizes["scan"], sizes["pixel"]
-    # Compute the target resolution in degrees
-    target_resolution = (target_resolution_km[0] / 111.32, target_resolution_km[1] / 111.32)
+    size_y, size_x = sizes[dim_y], sizes[dim_x]
+
     # Compute the target area's central coordinates
-    central_lat = lat[size_scan // 2, size_pixel // 2]
-    central_lon = lon[size_scan // 2, size_pixel // 2]
+    central_lat = lat[size_y // 2, size_x // 2]
+    central_lon = lon[size_y // 2, size_x // 2]
     # Define the Mercator projection
     proj_id = "mercator"
     proj_dict = {
@@ -118,22 +126,29 @@ def regrid(ds, target_resolution_km, target_area):
         units="degrees",
     )
     # Retrieve the variables to regrid
-    variables = [var for var in ds.variables if "scan" in ds[var].dims and "pixel" in ds[var].dims]
+    variables = [var for var in ds.variables if dim_y in ds[var].dims and dim_x in ds[var].dims]
     variables = [var for var in variables if var not in ["latitude", "longitude"]]
     ds = ds.reset_coords()[variables]
-    # Resample all variables at once, by stacking them along the last dimension
-    stacked = ds.to_dataarray().transpose("scan", "pixel", "variable").values
-    stacked = resample_nearest(
-        swath,
-        stacked,
-        target_area,
-        radius_of_influence=radius_of_influence,
-        fill_value=float("nan"),
-    )
-
-    result = {var: (("lat", "lon"), stacked[..., i]) for i, var in enumerate(variables)}
+    try:
+        # Create the resampler
+        resampler = NumpyBilinearResampler(swath, target_area, radius_of_influence=30e3)
+        # Individually resample each variable
+        resampled_vars = {}
+        for var in variables:
+            resampled_vars[var] = resampler.resample(
+                ds[var].values,
+                fill_value=float("nan"),
+            )
+    except Exception as e:
+        print(ds)
+        raise ResamplingError("Resampling failed") from e
+    # Rebuild the datase
+    result = {var: (("lat", "lon"), resampled_vars[var]) for var in variables}
     # Add the latitude and longitude variables as coordinates
     lons, lats = target_area.get_lonlats()
+    # Make sure the longitudes are in the [-180, 180] range
+    lons = np.where(lons > 180, lons - 360, lons)
+    lons = np.where(lons < -180, lons + 360, lons)
     coords = {
         "latitude": (["lat", "lon"], lats),
         "longitude": (["lat", "lon"], lons),

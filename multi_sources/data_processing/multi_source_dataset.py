@@ -87,17 +87,20 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         self.data_augmentation = data_augmentation
 
         print(f"{split}: Browsing requested sources and loading metadata...")
-        # Load the sources metadata
-        with open(self.dataset_dir / "sources_metadata.json", "r") as f:
-            sources_metadata = json.load(f)
+        # Load and merge individual source metadata files
+        sources_metadata = {}
+        for source_name in self.variables_dict:
+            source_metadata_path = self.dataset_dir / source_name / "source_metadata.json"
+            if not source_metadata_path.exists():
+                raise ValueError(f"Source metadata file not found for {source_name}")
+            with open(source_metadata_path, "r") as f:
+                sources_metadata[source_name] = json.load(f)
+
         self.sources = []
         for source_name in self.variables_dict:
-            if source_name not in sources_metadata:
-                raise ValueError(f"Source {source_name} not found in the sources metadata.")
-            else:
-                # Isolate the variables to include for the source
-                sources_metadata[source_name]["data_vars"] = self.variables_dict[source_name]
-                self.sources.append(Source(**sources_metadata[source_name]))
+            # Isolate the variables to include for the source
+            sources_metadata[source_name]["data_vars"] = self.variables_dict[source_name]
+            self.sources.append(Source(**sources_metadata[source_name]))
         # Load the samples metadata based on the split
         self.df = pd.read_json(
             self.dataset_dir / f"{split}.json",
@@ -219,52 +222,62 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                     if self.single_channel_sources:
                         for dvar in source.data_vars:
                             # Load the context variables for the given data variable
-                            context_df = df[source.context_vars].iloc[0]
-                            CT = np.array([context_df[cvar][dvar] for cvar in source.context_vars])
-                            CT = torch.tensor(CT, dtype=torch.float32)
+                            if len(source.context_vars) == 0:
+                                CT = None
+                            else:
+                                context_df = df[source.context_vars].iloc[0]
+                                CT = np.array([context_df[cvar][dvar] for cvar in source.context_vars])
+                                CT = torch.tensor(CT, dtype=torch.float32)
                             # Load the data variable, yield it with shape (1, H, W)
                             V = torch.tensor(
                                 load_nc_with_nan(ds[dvar]), dtype=torch.float32
                             ).unsqueeze(0)
                             # Normalize the context and values tensors
                             CT, V = self.normalize(CT, V, source, dvar)
-                            output[f"{source_name}_{dvar}"] = {
+                            output_entry = {
                                 "source_type": source_type,
                                 "dt": DT,
-                                "context": CT,
                                 "coords": C,
                                 "landmask": LM,
                                 "dist_to_center": D,
                                 "values": V,
                             }
+                            if CT is not None:  # Don't include the context if it's empty
+                                output_entry["context"] = CT
+                            output[f"{source_name}_{dvar}"] = output_entry
                     else:
-                        # The context variables can be loaded from the sample dataframe.
-                        context_df = df[source.context_vars].iloc[0]
-                        # context_vars[cvar] is a dict {dvar: value} for each data variable dvar
-                        # of the source. We want to obtain a tensor of shape
-                        # (n_context_vars * n_data_vars,)
-                        CT = np.stack(
-                            [
-                                np.array([context_df[cvar][dvar] for dvar in source.data_vars])
-                                for cvar in source.context_vars
-                            ],
-                            axis=1,
-                        )  # (n_data_vars, n_context_vars)
-                        CT = torch.tensor(CT.flatten(), dtype=torch.float32)
+                        if len(source.context_vars) == 0:
+                            CT = None
+                        else:
+                            # The context variables can be loaded from the sample dataframe.
+                            context_df = df[source.context_vars].iloc[0]
+                            # context_vars[cvar] is a dict {dvar: value} for each data variable dvar
+                            # of the source. We want to obtain a tensor of shape
+                            # (n_context_vars * n_data_vars,)
+                            CT = np.stack(
+                                [
+                                    np.array([context_df[cvar][dvar] for dvar in source.data_vars])
+                                    for cvar in source.context_vars
+                                ],
+                                axis=1,
+                            )  # (n_data_vars, n_context_vars)
+                            CT = torch.tensor(CT.flatten(), dtype=torch.float32)
                         # Load the variables in the order specified in the source
-                        V = np.stack([ds[var][:] for var in source.data_vars], axis=0)
+                        V = np.stack([load_nc_with_nan(ds[var]) for var in source.data_vars], axis=0)
                         V = torch.tensor(V, dtype=torch.float32)
                         # Normalize the context and values tensors
                         CT, V = self.normalize(CT, V, source)
-                        output[source_name] = {
+                        output_entry = {
                             "source_type": source_type,
                             "dt": DT,
-                            "context": CT,
                             "coords": C,
                             "landmask": LM,
                             "dist_to_center": D,
                             "values": V,
                         }
+                        if CT is not None:  # Don't include the context if it's empty
+                            output_entry["context"] = CT
+                        output[source_name] = output_entry
         # (Optional) Data augmentation
         if isinstance(self.data_augmentation, MultisourceDataAugmentation):
             output = self.data_augmentation(output)
@@ -286,28 +299,31 @@ class MultiSourceDataset(torch.utils.data.Dataset):
             normalized_values (torch.Tensor): normalized values.
         """
         source_name = source.name
-        # Context normalization
-        context_means = np.array([self.context_means[cvar] for cvar in source.context_vars])
-        context_stds = np.array([self.context_stds[cvar] for cvar in source.context_vars])
-        # If we're yielding multi-channel sources, then the context tensor is a concatenation
-        # of the context variables for each data variable. Thus we need to load
-        # the means and stds for each context variable and repeat them for each
-        # data variable.
-        if dvar is None:
-            context_means = np.repeat(context_means, self._get_n_data_variables(source_name))
-            context_stds = np.repeat(context_stds, self._get_n_data_variables(source_name))
-        context_means = torch.tensor(context_means, dtype=context.dtype)
-        context_stds = torch.tensor(context_stds, dtype=context.dtype)
-        normalized_context = (context - context_means) / context_stds
+        # Context normalization. There can be no context variables.
+        if context is not None:
+            context_means = np.array([self.context_means[cvar] for cvar in source.context_vars])
+            context_stds = np.array([self.context_stds[cvar] for cvar in source.context_vars])
+            # If we're yielding multi-channel sources, then the context tensor is a concatenation
+            # of the context variables for each data variable. Thus we need to load
+            # the means and stds for each context variable and repeat them for each
+            # data variable.
+            if dvar is None:
+                context_means = np.repeat(context_means, self._get_n_data_variables(source_name))
+                context_stds = np.repeat(context_stds, self._get_n_data_variables(source_name))
+            context_means = torch.tensor(context_means, dtype=context.dtype)
+            context_stds = torch.tensor(context_stds, dtype=context.dtype)
+            normalized_context = (context - context_means) / context_stds
+        else:
+            normalized_context = None
 
         # Values normalization
         if dvar is None:
             data_means = np.array(
                 [self.data_means[source_name][var] for var in source.data_vars]
-            )  # (C,)
+            ).reshape(-1, *(1 for _ in values.shape[1:]))  # (C, 1, ...) like values
             data_stds = np.array(
                 [self.data_stds[source_name][var] for var in source.data_vars]
-            )  # (C,)
+            ).reshape(-1, *(1 for _ in values.shape[1:]))
         else:
             data_means = self.data_means[source_name][dvar]  # scalar value
             data_stds = self.data_stds[source_name][dvar]  # scalar value

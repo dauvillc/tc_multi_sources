@@ -13,8 +13,8 @@ def main(cfg):
     cfg = OmegaConf.to_container(cfg, resolve=True)
     # Path to the preprocessed dataset
     preprocessed_dir = Path(cfg["paths"]["preprocessed_dataset"])
-    # Path to the regridded dataset
-    regridded_dir = preprocessed_dir / "regridded"
+    # Path to the preprocessed dataset
+    regridded_dir = preprocessed_dir / "processed"
 
     # Each subdirectory in the regridded directory corresponds to a source, and contains
     # a file "samples_metadata.json". We'll load all of these files and assemble them

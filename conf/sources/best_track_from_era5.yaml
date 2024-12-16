@@ -1,0 +1,6 @@
+tc_primed:
+  era5:
+    variables: ["sst", "pressure_msl", "u_wind_10m", "v_wind_10m"]
+  storm_metadata:
+    variables: ['intensity']
+

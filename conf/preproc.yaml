@@ -2,9 +2,11 @@ defaults:
   - _self_
   - paths: jz
 
-# Target resolution to which the images will be regridded, in km.
+# Target resolution to which the images will be regridded, in degrees.
 # Give a list [longitude_res, latitude_res]
-target_resolution_km: [15.0, 15.0]
+target_resolution: [0.15, 0.15]
+# List of sources that should not be regridded
+no_regrid: ["tc_primed_era5"]
 
 # Seed for the train-val-test splitting
 splitting_seed: 42

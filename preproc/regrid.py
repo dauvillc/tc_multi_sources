@@ -10,7 +10,11 @@ from omegaconf import OmegaConf
 from tqdm import tqdm
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
-from multi_sources.data_processing.grid_functions import regrid, grid_distance_to_point
+from multi_sources.data_processing.grid_functions import (
+    regrid,
+    grid_distance_to_point,
+    ResamplingError,
+)
 
 
 def sample_area(sample_path):
@@ -51,73 +55,187 @@ def source_average_area(samples_metadata, path):
     return average_delta_lat, average_delta_lon
 
 
-def process_sample(sample, average_area, target_resolution, dest_dir):
+def process_sample(
+    sample,
+    average_area=None,
+    target_resolution=None,
+    dest_dir=None,
+    dim=1,
+    source_name=None,
+    no_regrid=None,
+):
     """
     Processes a single sample.
+
+    If source is 2D and not in no_regrid list, performs regridding using average_area and target_resolution.
+    Otherwise, only applies additional processing (land mask, distance to center).
+    Converts 1D coordinate arrays to 2D meshgrids if necessary.
     """
     sample_path = sample["data_path"]
-    with xr.open_dataset(sample_path) as ds:
-        # The regridding function expects (lon, lat) instead of (lat, lon).
-        target_resolution = target_resolution[::-1]
-        average_area = average_area[::-1]
-        # First regrid the sample.
-        ds = regrid(ds, target_resolution, average_area)
-        for variable in ds.variables:
-            if ds[variable].isnull().all():
-                warnings.warn(f"Variable {variable} is null for sample {sample_path}.")
-        # Add the land-sea mask as a new variable.
-        land_mask = globe.is_land(
-            ds["latitude"].values,
-            ds["longitude"].values,
-        )
-        ds["land_mask"] = (("lat", "lon"), land_mask)
-        # Compute the distance between each grid point and the center of the storm.
-        storm_lat = sample["storm_latitude"]
-        storm_lon = sample["storm_longitude"]
-        dist_to_center = grid_distance_to_point(
-            ds["latitude"].values,
-            ds["longitude"].values,
-            storm_lat,
-            storm_lon,
-        )
-        ds["dist_to_center"] = (("lat", "lon"), dist_to_center)
-        # Save the regridded sample as netCDF file.
-        dest_file = dest_dir / f"{Path(sample_path).stem}.nc"
-        ds.to_netcdf(dest_file)
+    try:
+        with xr.open_dataset(sample_path) as ds:
+            # Check if coordinates need to be converted to meshgrid
+            lats = ds["latitude"].values
+            lons = ds["longitude"].values
+            if lats.ndim == 1 and lons.ndim == 1 and dim == 2:
+                # Convert 1D coordinate arrays to 2D meshgrids
+                lons_2d, lats_2d = np.meshgrid(lons, lats)
+                # Replace the 1D coordinates with 2D versions
+                ds = ds.assign_coords(
+                    latitude=(("lat", "lon"), lats_2d), longitude=(("lat", "lon"), lons_2d)
+                )
 
-        # Return the spatial shape (H, W) of the regridded sample.
-        return ds["latitude"].shape[-2:]
+            # Apply regridding for 2D sources not in no_regrid
+            if dim == 2 and (no_regrid is None or source_name not in no_regrid):
+                if average_area is not None and target_resolution is not None:
+                    try:
+                        ds = regrid(ds, target_resolution, average_area)
+                    except ResamplingError:
+                        warnings.warn(f"Resampling failed for sample {sample_path}. Skipping.")
+                        return None
+
+            # Rename dimensions if needed. The datasets returned by regrid have
+            # "lat" and "lon" as dimensions.
+            if "latitude" in ds.dims and "longitude" in ds.dims:
+                ds = ds.rename_dims({"latitude": "lat", "longitude": "lon"})
+
+            for variable in ds.variables:
+                if ds[variable].isnull().all():
+                    warnings.warn(f"Variable {variable} is null for sample {sample_path}.")
+
+            # Compute the land-sea mask
+            land_mask = globe.is_land(
+                ds["latitude"].values,
+                ds["longitude"].values,
+            )
+            # Compute the distance between each grid point and the center of the storm.
+            storm_lat = sample["storm_latitude"]
+            storm_lon = sample["storm_longitude"]
+            dist_to_center = grid_distance_to_point(
+                ds["latitude"].values,
+                ds["longitude"].values,
+                storm_lat,
+                storm_lon,
+            )
+            # Add the land mask and distance to center as new variables.
+            if dim == 2:
+                ds["land_mask"] = (("lat", "lon"), land_mask)
+                ds["dist_to_center"] = (("lat", "lon"), dist_to_center)
+            elif dim == 0:
+                ds["land_mask"] = land_mask
+                ds["dist_to_center"] = dist_to_center
+
+            if dest_dir is not None:
+                # Save the processed sample as netCDF file.
+                dest_file = dest_dir / f"{Path(sample_path).stem}.nc"
+                ds.to_netcdf(dest_file)
+
+            # Return the spatial shape
+            # --> (H, W) for 2D sources
+            if dim == 2:
+                return ds["latitude"].shape[-2:]
+            # (1,) for 0D sources
+            elif dim == 0:
+                return (1,)
+
+    except Exception as e:
+        warnings.warn(f"Error processing sample {sample_path}: {str(e)}")
+        return None
 
 
-def regrid_source(source_dir, regridded_dir, average_area, target_resolution):
+def process_source_chunk(
+    chunk_data, average_area, target_resolution, processed_source_dir, dim, source_name, no_regrid
+):
     """
-    Regrids all samples of a given source and saves the regridded samples in
-    regridded_dir.
+    Process a chunk of samples from a source.
     """
-    # Load the samples metadata.
+    img_shape = None
+    for _, row in chunk_data.iterrows():
+        img_shape = process_sample(
+            row, average_area, target_resolution, processed_source_dir, dim, source_name, no_regrid
+        )
+    return img_shape
+
+
+def process_source(
+    source_dir,
+    processed_dir,
+    average_area=None,
+    target_resolution=None,
+    num_workers=1,
+    dim=1,
+    no_regrid=None,
+    source_metadata=None,
+):
+    """
+    Processes all samples of a given source, optionally in parallel.
+    """
+    # Load the samples metadata
     samples_metadata = pd.read_json(
         source_dir / "samples_metadata.json", orient="records", lines=True
     )
-    # Create the regridded source directory.
-    regridded_source_dir = regridded_dir / source_dir.name
-    regridded_source_dir.mkdir(parents=True, exist_ok=True)
-    for _, row in samples_metadata.iterrows():
-        img_shape = process_sample(row, average_area, target_resolution, regridded_source_dir)
 
-    # We'll now create an updated samples_metadata.json file that contains the paths
-    # to the regridded samples, and store it in the regridded source directory.
+    # Create the processed source directory
+    processed_source_dir = processed_dir / source_dir.name
+    processed_source_dir.mkdir(parents=True, exist_ok=True)
+
+    img_shape = None
+    if num_workers <= 1:
+        # Process samples sequentially
+        for _, row in samples_metadata.iterrows():
+            img_shape = process_sample(
+                row,
+                average_area,
+                target_resolution,
+                processed_source_dir,
+                dim,
+                source_dir.name,
+                no_regrid,
+            )
+    else:
+        # Split samples into chunks for parallel processing
+        chunks = np.array_split(samples_metadata, num_workers)
+
+        # Process chunks in parallel
+        with ProcessPoolExecutor(num_workers) as executor:
+            futures = [
+                executor.submit(
+                    process_source_chunk,
+                    chunk,
+                    average_area,
+                    target_resolution,
+                    processed_source_dir,
+                    dim,
+                    source_dir.name,
+                    no_regrid,
+                )
+                for chunk in chunks
+            ]
+            # Get the image shape from any completed future
+            for future in tqdm(futures, desc=f"Processing chunks for {source_dir.name}"):
+                shape = future.result()
+                if shape is not None:
+                    img_shape = shape
+
+    # Update samples metadata
     print(f"Updating samples metadata for {source_dir.name}")
-    regridded_samples_metadata = samples_metadata.copy()
-    regridded_samples_metadata["data_path"] = regridded_samples_metadata["data_path"].apply(
-        lambda x: regridded_source_dir / f"{Path(x).stem}.nc"
+    processed_samples_metadata = samples_metadata.copy()
+    processed_samples_metadata["data_path"] = processed_samples_metadata["data_path"].apply(
+        lambda x: processed_source_dir / f"{Path(x).stem}.nc"
     )
-    regridded_samples_metadata.to_json(
-        regridded_source_dir / "samples_metadata.json",
+    processed_samples_metadata.to_json(
+        processed_source_dir / "samples_metadata.json",
         orient="records",
         lines=True,
         default_handler=str,
     )
-    # Finally, we'll return the shape of the regridded samples.
+
+    # Update and save source metadata
+    if source_metadata is not None:
+        source_metadata["shape"] = img_shape
+        with open(processed_source_dir / "source_metadata.json", "w") as f:
+            json.dump(source_metadata, f)
+
     return img_shape
 
 
@@ -126,20 +244,32 @@ def main(cfg):
     cfg = OmegaConf.to_container(cfg, resolve=True)
     num_workers = 0 if "num_workers" not in cfg else cfg["num_workers"]
     use_cache = False if "use_cache" not in cfg else cfg["use_cache"]
+    no_regrid = cfg.get("no_regrid", [])  # Get the no_regrid list from config
+    process_only = cfg.get("process_only", None)  # Get the process_only source name
+    ignore_source = cfg.get("ignore_source", [])  # Get the ignore_source list from config
+
     # Path to the preprocessed dataset directory.
     preprocessed_dir = Path(cfg["paths"]["preprocessed_dataset"])
-    # Path to the prepared dataset (output of the first step)
     prepared_dir = preprocessed_dir / "prepared"
-    # Path to the regridded dataset (output of this step)
-    regridded_dir = preprocessed_dir / "regridded"
-    # Path to the constants, where the average areas will be stored.
+    processed_dir = preprocessed_dir / "processed"
     constants_dir = preprocessed_dir / "constants"
 
-    # The prepared data directory contains one sub-directory per source.
-    # Each sub-directory contains samples_metadata.json, source_metadata.json,
-    # and the samples themselves as .nc files.
-    # - Retrieve the list of sources.
+    # Load all sources metadata at the beginning
+    sources_metadata = {}
     source_dirs = [d for d in prepared_dir.iterdir() if d.is_dir()]
+    if process_only:
+        source_dirs = [d for d in source_dirs if d.name == process_only]
+        if not source_dirs:
+            raise ValueError(f"Source {process_only} not found in {prepared_dir}")
+
+    # Filter out ignored sources
+    source_dirs = [d for d in source_dirs if d.name not in ignore_source]
+
+    for source_dir in source_dirs:
+        with open(source_dir / "source_metadata.json", "r") as f:
+            sources_metadata[source_dir.name] = json.load(f)
+
+    # ======================= AVERAGE AREA COMPUTATION =======================
     # - Compute the average area covered by the observations of each source.
     average_areas = {}
     # If num_workers > 0, do it in parallel.
@@ -147,8 +277,14 @@ def main(cfg):
         futures = {}
         executor = ProcessPoolExecutor(num_workers)
     for source_dir in source_dirs:
+        source_name = source_dir.name
+        dim = sources_metadata[source_name].get("dim", 1)
+        # Skip average area computation only for 0D sources or sources in no_regrid
+        if dim == 0 or source_name in no_regrid:
+            continue
+
         # - Save the average area to a constants_dir / source / average_area.json
-        average_area_path = constants_dir / source_dir.name / "average_area.json"
+        average_area_path = constants_dir / source_name / "average_area.json"
         average_area_path.parent.mkdir(parents=True, exist_ok=True)
         # Check if the average area is already computed and cached.
         if use_cache and average_area_path.exists():
@@ -174,43 +310,24 @@ def main(cfg):
             average_area = future.result()
             average_areas[source_name] = average_area
 
-    # - Regrid each source and get the shape of the regridded samples.
-    # After regridding a source, load its source_metadata.json file in the
-    # regridded dir and save it into a common sources_metadata dict.
-    sources_metadata = {}
+    # ======================= PROCESSING SOURCES =======================
+    # - Process each source and get the shape of the processed samples.
     shapes = {}
-    if num_workers > 0:
-        futures = {}
-        executor = ProcessPoolExecutor(num_workers)
     for source_dir in source_dirs:
         source_name = source_dir.name
-        print(f"Regridding source {source_name}")
-        average_area = average_areas[source_name]
-        if num_workers <= 1:
-            shapes[source_name] = regrid_source(
-                source_dir, regridded_dir, average_area, cfg["target_resolution_km"]
-            )
-        else:
-            futures[source_name] = executor.submit(
-                regrid_source,
-                source_dir,
-                regridded_dir,
-                average_area,
-                cfg["target_resolution_km"],
-            )
-    if num_workers > 0:
-        for source_name, future in tqdm(futures.items(), desc="Regridding sources", total=len(futures)):
-            shape = future.result()
-            shapes[source_name] = shape
-    for source_dir in source_dirs:
-        # Load the source metadata and store it in sources_metadata.
-        with open(source_dir / "source_metadata.json", "r") as f:
-            source_metadata = json.load(f)
-            sources_metadata[source_dir.name] = source_metadata
-            sources_metadata[source_dir.name]["shape"] = shapes[source_dir.name]
-    # - Save the sources_metadata dict as preprocessed_dir / sources_metadata.json
-    with open(preprocessed_dir / "sources_metadata.json", "w") as f:
-        json.dump(sources_metadata, f)
+        print(f"Processing source {source_name}")
+        dim = sources_metadata[source_name].get("dim", 1)
+        average_area = average_areas.get(source_name, None)
+        shapes[source_name] = process_source(
+            source_dir,
+            processed_dir,
+            average_area,
+            cfg["target_resolution"],
+            num_workers,
+            dim=dim,
+            no_regrid=no_regrid,
+            source_metadata=sources_metadata[source_name],
+        )
 
 
 if __name__ == "__main__":

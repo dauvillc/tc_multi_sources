@@ -11,7 +11,7 @@ def list_tc_primed_sources(tc_primed_path, exclude_years=None, source_type="all"
         exclude_years (list of int, optional): List of years to exclude from the search.
         source_type (str, optional): Type of sources to return. One of:
             - "all": Return all sources (default)
-            - "satellite": Return only satellite sources (radar and pmw)
+            - "satellite": Return only satellite sources (pmw, radar and infrared)
             - "environmental": Return only environmental sources (era5)
 
     Returns:
@@ -79,6 +79,11 @@ def list_tc_primed_sources(tc_primed_path, exclude_years=None, source_type="all"
                 ]
                 source_groups[source] = ["radar_radiometer", swath]
                 all_sources.append(source)
+
+        # Add the "infrared" source, which we'll suppose here is available in all files.
+        source_files["infrared"] = all_overpass_files
+        source_groups["infrared"] = ["infrared"]
+        all_sources.append("infrared")
 
     return all_sources, source_files, source_groups
 

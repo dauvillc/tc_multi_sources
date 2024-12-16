@@ -39,10 +39,23 @@ def process_source(train_metadata, source_name, constants_dir):
         means[var] /= n_samples
         stds[var] /= n_samples
     # Save the means and stds in a JSON file.
+    constants_dir.mkdir(parents=True, exist_ok=True)
     with open(constants_dir / "data_means.json", "w") as f:
         json.dump(means, f)
     with open(constants_dir / "data_stds.json", "w") as f:
         json.dump(stds, f)
+
+
+def load_merged_metadata(processed_dir):
+    """Load and merge metadata from all sources."""
+    sources_metadata = {}
+    for source_dir in processed_dir.iterdir():
+        if source_dir.is_dir():
+            metadata_file = source_dir / "source_metadata.json"
+            if metadata_file.exists():
+                with open(metadata_file, "r") as f:
+                    sources_metadata[source_dir.name] = json.load(f)
+    return sources_metadata
 
 
 @hydra.main(config_path="../conf/", config_name="preproc", version_base=None)
@@ -52,11 +65,14 @@ def main(cfg):
     # Path to the preprocessed dataset directory
     preprocessed_dir = Path(cfg["paths"]["preprocessed_dataset"])
     # Path to the regridded dataset
-    regridded_dir = preprocessed_dir / "regridded"
+    regridded_dir = preprocessed_dir / "processed"
     # Path to the constants, where the average areas will be stored.
     constants_dir = preprocessed_dir / "constants"
     # Load the metadata for the training samples.
     samples_metadata = pd.read_json(preprocessed_dir / "train.json", orient="records", lines=True)
+
+    # Load the metadata for all sources
+    source_metadata = load_merged_metadata(regridded_dir)
 
     # The prepared data directory contains one sub-directory per source.
     source_dirs = [d for d in regridded_dir.iterdir() if d.is_dir()]
@@ -99,7 +115,7 @@ def main(cfg):
         df = context_df[cvar]
         # Not all samples have a value for this context variable, which
         # creates NaN values.
-        df = df[~df.isna()]
+        df = df[~df.isna() & (df != '') & (df != {})]
         df = df.apply(lambda m: list(m.values())).explode()
         means[cvar] = df.mean()
         stds[cvar] = df.std()

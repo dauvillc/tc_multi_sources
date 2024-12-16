@@ -1,0 +1,27 @@
+tc_primed:
+  pmw:
+    AMSR2_GCOMW1:
+      S4:
+        variables: ['TB_36.5H']
+    ATMS_NPP:
+      S2:
+        variables: ['TB_31.4QV']
+    GMI_GPM:
+      S1:
+        variables: ['TB_36.64H']
+    SSMIS_F16:
+      S2:
+        variables: ['TB_37.0H']
+    SSMIS_F17:
+      S2:
+        variables: ['TB_37.0H']
+    SSMIS_F18:
+      S2:
+        variables: ['TB_37.0H']
+  era5:
+    variables: ["sst", "pressure_msl", "u_wind_10m", "v_wind_10m"]
+  radar:
+    GMI_GPM:
+      KuGMI:
+        variables: ['nearSurfPrecipTotRate', 'nearSurfPrecipTotRateSigma']
+

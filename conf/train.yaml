@@ -6,7 +6,7 @@ defaults:
   - data_augmentation: none
   - dataloader: local
   - lightning_module: mae
-  - model: general_backbone
+  - model: vit_69M
   - trainer: 1gpu
   - lr_scheduler: cosine_warmup_50epochs
   - optimizer: default_adamw

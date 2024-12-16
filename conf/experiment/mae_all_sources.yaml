@@ -1,0 +1,25 @@
+# @package _global_
+defaults:
+  - override /paths: jz
+  - override /sources: all_sources
+  - override /lightning_module: mae_reworked
+  - override /lr_scheduler: cosine_warmup_150epochs.yaml
+
+wandb:
+  name: all_sources
+  group: 37GHz
+
+dataset:
+  train:
+    dt_max: 6
+    min_available_sources: 2
+    single_channel_sources: false
+  val:
+    single_channel_sources: false
+
+trainer:
+  strategy: ddp_find_unused_parameters_true
+
+model:
+  backbone:
+    _target_: multi_sources.models.backbone_reworked.MultisourceGeneralBackbone
