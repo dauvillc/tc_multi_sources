@@ -95,6 +95,7 @@ def regrid(ds, target_resolution, target_area):
 
     # Rest of function remains the same but uses dim_y and dim_x
     lon, lat = check_and_wrap(ds.longitude.values, ds.latitude.values)
+
     swath = SwathDefinition(lons=lon, lats=lat)
     radius_of_influence = 100000  # 100 km
     sizes = ds.sizes
@@ -129,26 +130,19 @@ def regrid(ds, target_resolution, target_area):
     variables = [var for var in ds.variables if dim_y in ds[var].dims and dim_x in ds[var].dims]
     variables = [var for var in variables if var not in ["latitude", "longitude"]]
     ds = ds.reset_coords()[variables]
-    try:
-        # Create the resampler
-        resampler = NumpyBilinearResampler(swath, target_area, radius_of_influence=30e3)
-        # Individually resample each variable
-        resampled_vars = {}
-        for var in variables:
-            resampled_vars[var] = resampler.resample(
-                ds[var].values,
-                fill_value=float("nan"),
-            )
-    except Exception as e:
-        print(ds)
-        raise ResamplingError("Resampling failed") from e
+    # Create the resampler
+    resampler = NumpyBilinearResampler(swath, target_area, radius_of_influence)
+    # Individually resample each variable
+    resampled_vars = {}
+    for var in variables:
+        resampled_vars[var] = resampler.resample(
+            ds[var].values,
+            fill_value=float("nan"),
+        )
     # Rebuild the datase
     result = {var: (("lat", "lon"), resampled_vars[var]) for var in variables}
     # Add the latitude and longitude variables as coordinates
     lons, lats = target_area.get_lonlats()
-    # Make sure the longitudes are in the [-180, 180] range
-    lons = np.where(lons > 180, lons - 360, lons)
-    lons = np.where(lons < -180, lons + 360, lons)
     coords = {
         "latitude": (["lat", "lon"], lats),
         "longitude": (["lat", "lon"], lons),

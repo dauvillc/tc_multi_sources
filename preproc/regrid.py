@@ -10,11 +10,7 @@ from omegaconf import OmegaConf
 from tqdm import tqdm
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
-from multi_sources.data_processing.grid_functions import (
-    regrid,
-    grid_distance_to_point,
-    ResamplingError,
-)
+from multi_sources.data_processing.grid_functions import regrid, grid_distance_to_point
 
 
 def sample_area(sample_path):
@@ -88,11 +84,7 @@ def process_sample(
             # Apply regridding for 2D sources not in no_regrid
             if dim == 2 and (no_regrid is None or source_name not in no_regrid):
                 if average_area is not None and target_resolution is not None:
-                    try:
-                        ds = regrid(ds, target_resolution, average_area)
-                    except ResamplingError:
-                        warnings.warn(f"Resampling failed for sample {sample_path}. Skipping.")
-                        return None
+                    ds = regrid(ds, target_resolution, average_area)
 
             # Rename dimensions if needed. The datasets returned by regrid have
             # "lat" and "lon" as dimensions.
@@ -174,6 +166,12 @@ def process_source(
     samples_metadata = pd.read_json(
         source_dir / "samples_metadata.json", orient="records", lines=True
     )
+    # # Temp
+    # times = pd.to_datetime(samples_metadata["time"], unit="ms")
+    # samples_metadata = samples_metadata[
+    #     (times >= pd.Timestamp("1997-12-04")) & (times <= pd.Timestamp("1997-12-10"))
+    # ]
+    # samples_metadata = samples_metadata[samples_metadata["sid"] == "1997CP5"]
 
     # Create the processed source directory
     processed_source_dir = processed_dir / source_dir.name
