@@ -47,7 +47,7 @@ def main(cfg):
     train_val_frac = train_frac + val_frac
     train_vals_sids, test_sids = train_test_split(sids, test_size=test_frac, random_state=seed)
     train_sids, val_sids = train_test_split(
-        sids, test_size=val_frac / train_val_frac, random_state=seed
+        train_vals_sids, test_size=val_frac / train_val_frac, random_state=seed
     )
     # Place the samples into the appropriate split based on the storm ID
     train = metadata[metadata["sid"].isin(train_sids)]
