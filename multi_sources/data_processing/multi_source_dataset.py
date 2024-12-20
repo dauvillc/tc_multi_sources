@@ -53,7 +53,12 @@ class MultiSourceDataset(torch.utils.data.Dataset):
             dataset_dir (str): The directory containing the preprocessed dataset.
                 The directory should contain the following:
                 - train/val/test.json: pandas DataFrame containing the samples metadata.
-                - sources_metadata.json: a dictionary containing the metadata for each source.
+                - processed/
+                    - source_name/
+                        - source_metadata.json: dictionary containing the metadata for the source.
+                        - samples_metadata.json: dictionary containing the metadata for
+                            the samples.
+                        - *.nc: netCDF files containing the data for the source.
                 - constants/
                     - context_means/stds.json: dictionaries containing the means and stds
                         for the context variables.
@@ -80,6 +85,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         """
         self.dataset_dir = Path(dataset_dir)
         self.constants_dir = self.dataset_dir / "constants"
+        self.processed_dir = self.dataset_dir / "processed"
         self.split = split
         self.variables_dict = included_variables_dict
         self.dt_max = pd.Timedelta(dt_max, unit="h")
@@ -90,7 +96,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         # Load and merge individual source metadata files
         sources_metadata = {}
         for source_name in self.variables_dict:
-            source_metadata_path = self.dataset_dir / source_name / "source_metadata.json"
+            source_metadata_path = self.processed_dir / source_name / "source_metadata.json"
             if not source_metadata_path.exists():
                 raise ValueError(f"Source metadata file not found for {source_name}")
             with open(source_metadata_path, "r") as f:

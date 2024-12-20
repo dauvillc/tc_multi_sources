@@ -55,44 +55,42 @@ class AttentionMap(nn.Module):
         return F.softmax(dots, dim=-1)
 
 
-class ValuesMetadataAttentionInternal(nn.Module):
-    """Self-attention block that uses the values values as well as the
-    metadata to compute the attention weights,
-    as Softmax(QpKp^T + QmKm^T).
-    This is an internal module used to factorize the attention code."""
+class ValuesCoordinatesAttentionInternal(nn.Module):
+    """Self-attention block that uses both the values and coordinates 
+    to compute the attention weights, as Softmax(QpKp^T + QcKc^T)."""
 
-    def __init__(self, values_dim, metadata_dim, inner_dim, num_heads=8, dropout=0.0):
+    def __init__(self, values_dim, coords_dim, inner_dim, num_heads=8, dropout=0.0):
         super().__init__()
         assert inner_dim % num_heads == 0
         self.num_heads = num_heads
 
         self.values_to_qkv = nn.Linear(values_dim, inner_dim * 3, bias=False)
-        self.meta_to_qk = nn.Linear(metadata_dim, inner_dim * 2, bias=False)
+        self.coords_to_qk = nn.Linear(coords_dim, inner_dim * 2, bias=False)
 
         dim_head = inner_dim // num_heads
         self.attention_map = AttentionMap(dim_head, relative_pos=True, rel_pos_dim_head=dim_head)
         self.output_proj = nn.Sequential(nn.Linear(inner_dim, values_dim), nn.Dropout(dropout))
 
-    def forward(self, values, metadata, attention_mask=None):
+    def forward(self, values, coords, attention_mask=None):
         """
         Args:
             values (tensor): Tensor of shape (batch_size, seq_len, values_dim).
-            metadata (tensor): Tensor of shape (batch_size, seq_len, metadata_dim).
+            coords (tensor): Tensor of shape (batch_size, seq_len, coords_dim).
             attention_mask (tensor): Tensor of shape (batch_size, seq_len), or None.
         Returns:
             Tensor of shape (batch_size, seq_len, values_dim), the updated values.
         """
-        # Project the values and metadata to the query, key and value spaces.
+        # Project the values and coordinates to the query, key and value spaces.
         qkv_values = self.values_to_qkv(values).chunk(3, dim=-1)
-        qk_meta = self.meta_to_qk(metadata).chunk(2, dim=-1)
+        qk_coords = self.coords_to_qk(coords).chunk(2, dim=-1)
         qp, kp, v = map(
             lambda x: rearrange(x, "b n (h d) -> b h n d", h=self.num_heads), qkv_values
         )
-        qm, km = map(lambda x: rearrange(x, "b n (h d) -> b h n d", h=self.num_heads), qk_meta)
+        qc, kc = map(lambda x: rearrange(x, "b n (h d) -> b h n d", h=self.num_heads), qk_coords)
 
         # Compute the attention map using two sets of keys and queries, one from the values
-        # and one from the metadata.
-        attn = self.attention_map(kp, qp, km, qm, mask=attention_mask)
+        # and one from the coordinates.
+        attn = self.attention_map(kp, qp, kc, qc, mask=attention_mask)
         out = torch.matmul(attn, v)
         out = rearrange(out, "b h n d -> b n (h d)")
         out = self.output_proj(out)
@@ -106,7 +104,7 @@ class ValuesMetadataAttention(nn.Module):
 
     def __init__(self, values_dim, metadata_dim, inner_dim, num_heads=8, dropout=0.0):
         super().__init__()
-        self.module = ValuesMetadataAttentionInternal(
+        self.module = ValuesCoordinatesAttentionInternal(
             values_dim, metadata_dim, inner_dim, num_heads, dropout
         )
 
@@ -175,7 +173,7 @@ class WindowedValuesMetadataAttention(nn.Module):
         self.window_size = window_size
         self.shifted_windows = shifted_windows
 
-        self.attention_block = ValuesMetadataAttentionInternal(
+        self.attention_block = ValuesCoordinatesAttentionInternal(
             values_dim, metadata_dim, inner_dim, num_heads, dropout
         )
 
@@ -303,7 +301,7 @@ class AdaptiveValuesMetadataAttention(nn.Module):
         self.meta_to_qk = nn.Linear(metadata_dim, inner_dim * 2, bias=False)
         self.attention_map = AttentionMap(inner_dim)
 
-        self.attention_block = ValuesMetadataAttentionInternal(
+        self.attention_block = ValuesCoordinatesAttentionInternal(
             values_dim, metadata_dim, inner_dim, num_heads, dropout
         )
 

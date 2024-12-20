@@ -10,7 +10,11 @@ from omegaconf import OmegaConf
 from tqdm import tqdm
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
-from multi_sources.data_processing.grid_functions import regrid, grid_distance_to_point
+from multi_sources.data_processing.grid_functions import (
+    regrid,
+    grid_distance_to_point,
+    ResamplingError,
+)
 
 
 def sample_area(sample_path):
@@ -68,8 +72,8 @@ def process_sample(
     Converts 1D coordinate arrays to 2D meshgrids if necessary.
     """
     sample_path = sample["data_path"]
-    try:
-        with xr.open_dataset(sample_path) as ds:
+    with xr.open_dataset(sample_path) as ds:
+        try:
             # Check if coordinates need to be converted to meshgrid
             lats = ds["latitude"].values
             lons = ds["longitude"].values
@@ -117,22 +121,34 @@ def process_sample(
                 ds["land_mask"] = land_mask
                 ds["dist_to_center"] = dist_to_center
 
-            if dest_dir is not None:
-                # Save the processed sample as netCDF file.
-                dest_file = dest_dir / f"{Path(sample_path).stem}.nc"
-                ds.to_netcdf(dest_file)
+        except ResamplingError as e:
+            print(f"Resampling error for sample {sample_path}: {e}")
+            print(f"Row: {sample}")
+            return None
 
-            # Return the spatial shape
-            # --> (H, W) for 2D sources
-            if dim == 2:
-                return ds["latitude"].shape[-2:]
-            # (1,) for 0D sources
-            elif dim == 0:
-                return (1,)
+        if dest_dir is not None:
+            # Save the processed sample as netCDF file.
+            dest_file = dest_dir / f"{Path(sample_path).stem}.nc"
+            ds.to_netcdf(dest_file)
 
-    except Exception as e:
-        warnings.warn(f"Error processing sample {sample_path}: {str(e)}")
-        return None
+        # Write the metadata for the sample
+        sample["data_path"] = str(dest_file)
+        sample = pd.DataFrame([sample])
+        sample.to_json(
+            dest_dir / "samples_metadata.json",
+            orient="records",
+            lines=True,
+            mode="a",
+            default_handler=str,
+        )
+
+        # Return the spatial shape
+        # --> (H, W) for 2D sources
+        if dim == 2:
+            return ds["latitude"].shape[-2:]
+        # (1,) for 0D sources
+        elif dim == 0:
+            return (1,)
 
 
 def process_source_chunk(
@@ -166,16 +182,15 @@ def process_source(
     samples_metadata = pd.read_json(
         source_dir / "samples_metadata.json", orient="records", lines=True
     )
-    # # Temp
-    # times = pd.to_datetime(samples_metadata["time"], unit="ms")
-    # samples_metadata = samples_metadata[
-    #     (times >= pd.Timestamp("1997-12-04")) & (times <= pd.Timestamp("1997-12-10"))
-    # ]
-    # samples_metadata = samples_metadata[samples_metadata["sid"] == "1997CP5"]
 
     # Create the processed source directory
     processed_source_dir = processed_dir / source_dir.name
     processed_source_dir.mkdir(parents=True, exist_ok=True)
+
+    # Reset the samples metadata file for the processed source
+    samples_metadata_path = processed_source_dir / "samples_metadata.json"
+    if samples_metadata_path.exists():
+        samples_metadata_path.unlink()
 
     img_shape = None
     if num_workers <= 1:
@@ -214,19 +229,6 @@ def process_source(
                 shape = future.result()
                 if shape is not None:
                     img_shape = shape
-
-    # Update samples metadata
-    print(f"Updating samples metadata for {source_dir.name}")
-    processed_samples_metadata = samples_metadata.copy()
-    processed_samples_metadata["data_path"] = processed_samples_metadata["data_path"].apply(
-        lambda x: processed_source_dir / f"{Path(x).stem}.nc"
-    )
-    processed_samples_metadata.to_json(
-        processed_source_dir / "samples_metadata.json",
-        orient="records",
-        lines=True,
-        default_handler=str,
-    )
 
     # Update and save source metadata
     if source_metadata is not None:

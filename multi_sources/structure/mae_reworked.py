@@ -13,7 +13,11 @@ from multi_sources.models.utils import (
     embed_coords_to_sincos,
     remove_dots,
 )
-from multi_sources.models.embedding_layers import SourceSpecificEmbedding2d, MasksEmbedding2d
+from multi_sources.models.embedding_layers import (
+    CoordinatesEmbedding2d,
+    SourceSpecificEmbedding2d,
+    SupplementaryValuesEmbedding2d,
+)
 from multi_sources.models.output_layers import SourceSpecificProjection2d
 
 
@@ -44,7 +48,7 @@ class MultisourceMAE(pl.LightningModule):
         masking_ratio,
         patch_size,
         values_dim,
-        metadata_dim,
+        coords_dim,  # Changed from coordinates_dim
         adamw_kwargs,
         lr_scheduler_kwargs,
         loss_max_distance_from_center,
@@ -62,7 +66,7 @@ class MultisourceMAE(pl.LightningModule):
                 ratio of sources to mask instead.
             patch_size (int): The size of the patches to split the images into.
             values_dim (int): The dimension of the values embeddings.
-            metadata_dim (int): The dimension of the metadata embeddings.
+            coords_dim (int): The dimension of the coordinates embeddings.
             adamw_kwargs (dict): The arguments to pass to torch.optim.AdamW (other than params).
             lr_scheduler_kwargs (dict): The arguments to pass to the learning rate scheduler.
             loss_max_distance_from_center (int or None): If specified, only pixels within this
@@ -84,7 +88,7 @@ class MultisourceMAE(pl.LightningModule):
         self.masking_ratio = masking_ratio
         self.patch_size = patch_size
         self.values_dim = values_dim
-        self.metadata_dim = metadata_dim
+        self.coords_dim = coords_dim  # Changed from self.coordinates_dim
         self.lr_scheduler_kwargs = lr_scheduler_kwargs
         self.adamw_kwargs = adamw_kwargs
         self.metrics = metrics
@@ -98,17 +102,21 @@ class MultisourceMAE(pl.LightningModule):
         for source in sources:
             # note: torch doesn't allow dots in keys of nn.ModuleDict, so we remove them
             self.source_embeddings[remove_dots(source.name)] = SourceSpecificEmbedding2d(
-                source.n_data_variables(), source.shape, self.patch_size, values_dim, metadata_dim
+                source.n_data_variables(),
+                self.patch_size,
+                values_dim,
             )
             self.output_projs[remove_dots(source.name)] = SourceSpecificProjection2d(
                 source.n_data_variables(), source.shape, self.patch_size, values_dim
             )
 
-        # Check if any source is 2D and create mask embedding layer if needed
+        # Check if any source is 2D and create the 2D embedding layers if required. 
         has_2d_source = any(len(source.shape) == 2 for source in sources)
-        self.masks_embedding = None
         if has_2d_source:
-            self.masks_embedding = MasksEmbedding2d(patch_size, values_dim)
+            # Coordinates embedding, shared across sources
+            self.coords_embedding = CoordinatesEmbedding2d(self.patch_size, coords_dim)
+            # Supplementary values embedding, also shared across sources
+            self.supp_embedding = SupplementaryValuesEmbedding2d(self.patch_size, values_dim)
 
         # learnable [MASK] token
         self.mask_token = nn.Parameter(torch.randn(1, 1, self.values_dim))
@@ -170,9 +178,16 @@ class MultisourceMAE(pl.LightningModule):
         """Embeds the input sources."""
         output = {}
         for source, data in x.items():
-            # Get value and metadata embeddings
-            v, m = self.source_embeddings[source](data)
-
+            # Embed the source's values
+            v = self.source_embeddings[source](data)
+            # Embed the source's coordinates using the shared coordinates embedding layer
+            c = self.coords_embedding(data)
+            # Compute the supplementary values embedding. This embedding will be used
+            # at every block of the backbone, and can be used to store information.
+            supp = self.supp_embedding(data)
+            # Save the layout of the tokens for the output projection. For example
+            # a tokens_shape of (3, 2) means 3 tokens in the first dimension and 2 in the second.
+            # That info is lost in the embedded sequences as they are flattened.
             tokens_shape = tuple(
                 int(np.ceil(s / self.patch_size)) for s in data["values"].shape[-2:]
             )
@@ -181,7 +196,8 @@ class MultisourceMAE(pl.LightningModule):
                 "tokens_shape": tokens_shape,
                 "avail": data["avail"],
                 "embedded_values": v,
-                "embedded_metadata": m,
+                "embedded_coords": c,
+                "embedded_supp": supp,
             }
         return output
 
@@ -207,6 +223,7 @@ class MultisourceMAE(pl.LightningModule):
         any_elem = next(iter(x.values()))["embedded_values"]
         batch_size = any_elem.shape[0]
         device = any_elem.device
+
         # Select the sources to mask, which can differ between samples in the batch.
         # Missing sources cannot be masked.
         noise = torch.rand((batch_size, n_sources), device=device)
@@ -218,10 +235,11 @@ class MultisourceMAE(pl.LightningModule):
             (batch_size, n_sources), dtype=torch.bool, device=device
         )  # (B, n_sources)
         masked_sources_matrix.scatter_(1, sources_to_mask, True)
-        # Create the mask for the sources
+
+        # Create the availability masks for the sources
         masked_x = {}
         for i, (source, data) in enumerate(x.items()):
-            # First, retrieve each entry before masking
+            # Keep every entry in the source's dict in the output dict
             masked_x[source] = {k: v for k, v in data.items()}
             B, L, D = data["embedded_values"].shape
             whether_masked = masked_sources_matrix[:, i]  # (B,)
@@ -237,33 +255,6 @@ class MultisourceMAE(pl.LightningModule):
             masked_x[source]["embedded_values"] = masked_values
         return masked_x
 
-    def embed_after_mask(self, x, orig_data):
-        """Computes the masks embeddings after masking has been applied.
-        Args:
-            x (dict): The masked and embedded data
-            orig_data (dict): The original preprocessed data containing landmask and avail_mask
-        Returns:
-            y (dict): The masked and embedded data with the masks embeddings
-        """
-        if self.masks_embedding is None:
-            return x
-
-        for source, data in x.items():
-            if len(orig_data[source]["values"].shape) == 4:  # Only for 2D sources
-                # Create mask_data with only required fields from original data
-                mask_data = {
-                    "landmask": orig_data[source]["landmask"],
-                    "avail_mask": orig_data[source]["avail_mask"].clone(),
-                }
-                # Only zero out availability mask for samples where avail <= 0
-                mask_data["avail_mask"].masked_fill_(
-                    data["avail"].view(-1, *([1] * (mask_data["avail_mask"].dim() - 1))) <= 0, 0
-                )
-
-                data["embedded_masks"] = self.masks_embedding(mask_data)
-
-        return x
-
     def forward(self, x):
         """Computes the forward pass of the model.
         Returns:
@@ -275,9 +266,6 @@ class MultisourceMAE(pl.LightningModule):
         preprocessed = x  # Store reference to preprocessed data
         x = self.embed(x)
         x = self.mask(x)
-        # If a source is masked, its avail mask is zeroed out, so we can only
-        # embed the availability mask after masking.
-        x = self.embed_after_mask(x, preprocessed)
 
         attn_masks = None
         if self.use_attention_masks:

@@ -135,10 +135,15 @@ def regrid(ds, target_resolution, target_area):
     # Individually resample each variable
     resampled_vars = {}
     for var in variables:
-        resampled_vars[var] = resampler.resample(
-            ds[var].values,
-            fill_value=float("nan"),
-        )
+        try:
+            resampled_vars[var] = resampler.resample(
+                ds[var].values,
+                fill_value=float("nan"),
+            )
+        except Exception as e:
+            print("Longitude:", lon)
+            print("Latitude:", lat)
+            raise ResamplingError(f"Error resampling variable {var}") from e
     # Rebuild the datase
     result = {var: (("lat", "lon"), resampled_vars[var]) for var in variables}
     # Add the latitude and longitude variables as coordinates

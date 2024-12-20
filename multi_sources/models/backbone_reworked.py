@@ -12,33 +12,33 @@ class MultisourceGeneralBackbone(nn.Module):
     def __init__(
         self,
         n_blocks,
-        metadata_dim,
+        coords_dim,
         values_dim,
         layers={},
-        sum_meta_to_values=False,
+        sum_coords_to_values=False,
     ):
         """
         Args:
             n_blocks (int): number of blocks in the backbone.
-            metadata_dim (int): Embedding dimension for the metadata of each source.
+            coords_dim (int): Embedding dimension for the coordinates of each source.
             values_dim (int): Embedding dimension for the values of each source. 
-            layers (dict) Dict defining the successive layers that compose the backbone,
+            layers (dict): Dict defining the successive layers that compose the backbone,
                 as {layer_name: layer_kwargs}.
                 For each layer, the kwargs must include the key 'layer_class',
                 which should be a nn.Module class. The other keys are the arguments
                 to this class's constructor.
                 The class's constructor must be of the form
-                `layer_class(values_dim, metadata_dim, **kwargs)`.
+                `layer_class(values_dim, coords_dim, **kwargs)`.
                 The class's forward method must be of the form
-                `forward(values_seq, metadata_seq) -> values_seq`.
+                `forward(values_seq, coords_seq) -> values_seq`.
                 Each block in the backbone will be composed of these layers, in the order
                 they appear in the dict.
-            sum_meta_to_values (bool): Whether to sum the metadata embeddings to the
+            sum_coords_to_values (bool): Whether to sum the coordinates embeddings to the
                 values embeddings at the beginning of the backbone.
         """
         super().__init__()
-        self.values_dim, self.meta_dim = values_dim, metadata_dim
-        self.sum_meta_to_values = sum_meta_to_values
+        self.values_dim, self.coords_dim = values_dim, coords_dim
+        self.sum_coords_to_values = sum_coords_to_values
         # Build the successive blocks
         self.blocks = nn.ModuleList()
         for _ in range(n_blocks):
@@ -47,12 +47,12 @@ class MultisourceGeneralBackbone(nn.Module):
                 layer_class = layer_kwargs["layer_class"]
                 kwargs = {k: v for k, v in layer_kwargs.items() if k != "layer_class"}
                 # Before each block, add a layer normalization for the values
-                # (the metadata don't change between blocks, so no need to re-normalize them).
+                # (the coordinates don't change between blocks, so no need to re-normalize them).
                 block.append(
                     nn.ModuleList(
                         [
                             nn.LayerNorm(values_dim),
-                            layer_class(self.values_dim, self.meta_dim, **kwargs),
+                            layer_class(self.values_dim, self.coords_dim, **kwargs),
                         ]
                     )
                 )
@@ -62,7 +62,7 @@ class MultisourceGeneralBackbone(nn.Module):
         """
         Args:
             x (dict of str: dict of str: tensor): Dictionary of inputs, such that
-                inputs[source_name] contains the keys "embedded_metadata",
+                inputs[source_name] contains the keys "embedded_coordinates",
                 "embedded_values" and "tokens_shape".
             attention_mask (list): List of attention masks for each source,
                 of shape (b, n).
@@ -87,9 +87,9 @@ class MultisourceGeneralBackbone(nn.Module):
                 # Create new dict for normalized values
                 new_x = {}
                 for source_name, data in block_input.items():
-                    # Copy metadata and shape
+                    # Copy coordinates and shape
                     new_x[source_name] = {
-                        "embedded_metadata": data["embedded_metadata"],
+                        "embedded_coords": data["embedded_coords"],
                         "tokens_shape": data["tokens_shape"],
                         "embedded_masks": data.get("embedded_masks"),  # Preserve masks
                     }

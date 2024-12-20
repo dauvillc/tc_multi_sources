@@ -97,7 +97,7 @@ def process_era5(source_files, dest_dir, verbose=False, num_workers=0):
         samples_metadata_path.unlink()
 
     source_name = "tc_primed_era5"
-    data_vars = ["sst", "pressure_msl", "u_wind_10m", "v_wind_10m"]
+    data_vars = ["pressure_msl", "u_wind_10m", "v_wind_10m", "sst"]
     storm_vars = ["storm_latitude", "storm_longitude", "intensity"]
     context_vars = []
 
