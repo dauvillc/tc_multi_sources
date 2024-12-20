@@ -1,9 +1,0 @@
-_target_: multi_sources.structure.mae.MultisourceMAE
-patch_size: 16
-values_dim: ${model.values_dim}
-metadata_dim: ${model.metadata_dim}
-masking_ratio: 0.25
-loss_max_distance_from_center: 1000
-share_source_embeddings: True
-lr_scheduler_kwargs: ${lr_scheduler}
-adamw_kwargs: ${optimizer}

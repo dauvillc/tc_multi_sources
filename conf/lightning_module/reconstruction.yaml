@@ -1,3 +1,0 @@
-_target_: multi_sources.structure.reconstruction.SourcesReconstruction
-lr_scheduler_kwargs: ${lr_scheduler}
-masked_sources: ['tc_primed.microwave.AMSR2_GCOMW1.S2']
