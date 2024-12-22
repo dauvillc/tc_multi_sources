@@ -63,7 +63,7 @@ class MultisourceGeneralBackbone(nn.Module):
         Args:
             x (dict of str: dict of str: tensor): Dictionary of inputs, such that
                 inputs[source_name] contains the keys "embedded_coordinates",
-                "embedded_values" and "tokens_shape".
+                "embedded_values", "embedded_supp" and "tokens_shape".
             attention_mask (list): List of attention masks for each source,
                 of shape (b, n).
         Returns:
@@ -72,13 +72,13 @@ class MultisourceGeneralBackbone(nn.Module):
         """
         # Apply the blocks with skip connections
         for block in self.blocks:
-            # Add masks embeddings at the start of each block if they exist
+            # Add supplementary embeddings at the start of each block if they exist
             block_input = {}
             for source_name, data in x.items():
                 block_input[source_name] = {k: v for k, v in data.items()}
-                if data.get("embedded_masks") is not None:
+                if data.get("embedded_supp") is not None:
                     block_input[source_name]["embedded_values"] = (
-                        data["embedded_values"] + data["embedded_masks"]
+                        data["embedded_values"] + data["embedded_supp"]
                     )
                 else:
                     block_input[source_name]["embedded_values"] = data["embedded_values"]
@@ -91,7 +91,7 @@ class MultisourceGeneralBackbone(nn.Module):
                     new_x[source_name] = {
                         "embedded_coords": data["embedded_coords"],
                         "tokens_shape": data["tokens_shape"],
-                        "embedded_masks": data.get("embedded_masks"),  # Preserve masks
+                        "embedded_supp": data.get("embedded_supp"),
                     }
                     # Normalize the values
                     new_x[source_name]["embedded_values"] = norm(data["embedded_values"])
