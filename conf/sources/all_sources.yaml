@@ -1,5 +1,6 @@
 tc_primed:
   pmw:
+    AMSR2_GCOMW1:
       S4:
         variables: ['TB_36.5H']
     GMI_GPM:
