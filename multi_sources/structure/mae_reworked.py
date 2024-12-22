@@ -17,6 +17,7 @@ from multi_sources.models.embedding_layers import (
     CoordinatesEmbedding2d,
     SourceSpecificEmbedding2d,
     SupplementaryValuesEmbedding2d,
+    SourcetypeEmbedding2d,
 )
 from multi_sources.models.output_layers import SourceSpecificProjection2d
 
@@ -98,19 +99,37 @@ class MultisourceMAE(pl.LightningModule):
         self.save_hyperparameters(ignore=["backbone", "metrics"])
 
         # Embedding and output projection layers
-        self.source_embeddings, self.output_projs = nn.ModuleDict(), nn.ModuleDict()
+        # Type embedding layers: one for each source type
+        # - We need to retrieve the list of each source type from the sources,
+        #   as well as the number of context variables for each source type.
+        self.sourcetypes_context_vars = {}
+        self.sourcetype_embeddings = nn.ModuleDict()
+        self.source_to_type = {source.name: source.type for source in sources}
+        for source in sources:
+            if source.type not in self.sourcetypes_context_vars:
+                self.sourcetypes_context_vars[source.type] = source.n_context_variables()
+                self.sourcetype_embeddings[source.type] = SourcetypeEmbedding2d(
+                    source.n_data_variables(),
+                    source.n_context_variables(),
+                    self.patch_size,
+                    values_dim,
+                )
+            else:
+                # Check that the number of context variables is the same for all sources
+                # of the same type
+                if self.sourcetypes_context_vars[source.type] != source.n_context_variables():
+                    raise ValueError(
+                        f"Number of context variables is not the same for all sources of type {source.type}"
+                    )
+        # Output projection layers: one for each source
+        self.output_projs = nn.ModuleDict()
         for source in sources:
             # note: torch doesn't allow dots in keys of nn.ModuleDict, so we remove them
-            self.source_embeddings[remove_dots(source.name)] = SourceSpecificEmbedding2d(
-                source.n_data_variables(),
-                self.patch_size,
-                values_dim,
-            )
             self.output_projs[remove_dots(source.name)] = SourceSpecificProjection2d(
                 source.n_data_variables(), source.shape, self.patch_size, values_dim
             )
 
-        # Check if any source is 2D and create the 2D embedding layers if required. 
+        # Check if any source is 2D and create the 2D embedding layers if required.
         has_2d_source = any(len(source.shape) == 2 for source in sources)
         if has_2d_source:
             # Coordinates embedding, shared across sources
@@ -147,6 +166,10 @@ class MultisourceMAE(pl.LightningModule):
             c = torch.nan_to_num(c, nan=-1)
             # For the distance tensor, fill the nan values with +inf
             d = torch.nan_to_num(d, nan=float("inf"))
+            # Potential context variables
+            if "context" in data:
+                ct = data['context'].float()
+                ct = torch.nan_to_num(ct, nan=0)
 
             # Create two separate dictionaries: one for embedding input, one for loss computation
             embed_input = {
@@ -155,6 +178,7 @@ class MultisourceMAE(pl.LightningModule):
                 "dt": dt,
                 "coords": c,
                 "values": v,
+                "context": ct if "context" in data else None,
             }
 
             loss_info = {
@@ -167,11 +191,6 @@ class MultisourceMAE(pl.LightningModule):
                 **embed_input,  # Data needed for embedding
                 **loss_info,  # Additional data needed for loss computation
             }
-            # Check for NaN values in the tensors
-            for k, v in input_[source].items():
-                if isinstance(v, torch.Tensor) and v.dtype == torch.float32:
-                    if torch.isnan(v).any():
-                        raise ValueError(f"NaN values found in source {source} tensor {k}")
         return input_
 
     def embed(self, x):
@@ -179,7 +198,8 @@ class MultisourceMAE(pl.LightningModule):
         output = {}
         for source, data in x.items():
             # Embed the source's values
-            v = self.source_embeddings[source](data)
+            source_type = self.source_to_type[source]
+            v = self.sourcetype_embeddings[source_type](data)
             # Embed the source's coordinates using the shared coordinates embedding layer
             c = self.coords_embedding(data)
             # Compute the supplementary values embedding. This embedding will be used

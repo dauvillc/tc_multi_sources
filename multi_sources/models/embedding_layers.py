@@ -190,6 +190,8 @@ class SourcetypeEmbedding2d(nn.Module):
     associated with a set of context variables, the same for all sources of the type.
     Those describe more precisely the characteristics of the sources within the type,
     for example the frequency of the microwave sensor or its ground resolution.
+    A source may include no context variables, if it only contains a single source (
+    e.g. "era5").
 
     All sources in a given type must have the same channels, in the same order.
     """
@@ -208,7 +210,9 @@ class SourcetypeEmbedding2d(nn.Module):
         self.values_embedding = ConvPatchEmbedding2d(
             channels + 1, patch_size, values_dim, norm=False
         )
-        self.context_embedding = LinearEmbedding(n_context_vars, values_dim)
+        if n_context_vars > 0:
+            # Context embedding: embeds the context variables
+            self.context_embedding = LinearEmbedding(n_context_vars, values_dim, norm=False)
         self.norm = nn.LayerNorm(values_dim)
     
     def forward(self, data):
@@ -218,7 +222,8 @@ class SourcetypeEmbedding2d(nn.Module):
                 * 'values': torch.Tensor of shape (B, C, H, W) containing the pixels of the source.
                 * 'avail_mask': torch.Tensor of shape (B, H, W) containing the availability mask.
                 * 'context_vars': torch.Tensor of shape (B, n_context_vars) containing the context
-                    variables for the source type.
+                    variables for the source type. Not included, or None if the source type has no
+                    context variables.
         Returns:
             embedded_values: torch.Tensor of shape (B, num_patches, values_dim).
         """
@@ -230,8 +235,10 @@ class SourcetypeEmbedding2d(nn.Module):
             avail_mask = data["avail_mask"].unsqueeze(1)
             values = torch.cat([values, avail_mask], dim=1)
             embedded_values = self.values_embedding(values)
-            context_vars = data["context_vars"]
-            embedded_context = self.context_embedding(context_vars)
-            embedded_values += embedded_context
+            # Embed the context variables if they exist
+            if "context_vars" in data and data["context_vars"] is not None:
+                context_vars = data["context_vars"]
+                embedded_context = self.context_embedding(context_vars)
+                embedded_values += embedded_context
             embedded_values = self.norm(embedded_values)
         return embedded_values
