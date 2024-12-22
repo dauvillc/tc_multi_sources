@@ -7,7 +7,7 @@ defaults:
 
 wandb:
   name: all_sources
-  group: 37GHz
+  group: all_sources
 
 dataset:
   train:
