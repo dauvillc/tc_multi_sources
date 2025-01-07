@@ -58,3 +58,35 @@ class SourceSpecificProjection2d(nn.Module):
         # Remove the potential padding that was added to the image
         x = x[:, :, : self.spatial_shape[0], : self.spatial_shape[1]]
         return x
+
+
+class SourceSpecificProjection0d(nn.Module):
+    """For a single 0d source, receives the output of the ViT in latent space as
+    a tensor of shape (B, 1, D) where B is the batch size,
+    and D is the dimension of the latent space.
+    The module applies a linear layer to project the tokens to the output space as
+    a tensor (B, C).
+    """
+
+    def __init__(self, channels, latent_dim):
+        """
+        Args:
+            channels (int): The number of channels in the source.
+            latent_dim (int): The dimension of the latent space.
+        """
+        super().__init__()
+        self.norm = nn.LayerNorm(latent_dim)
+        self.linear = nn.Linear(latent_dim, channels)
+
+    def forward(self, x, **kwargs):
+        """
+        Args:
+            x (torch.Tensor): The tensor of shape (B, 1, D) containing the latent space tokens.
+            kwargs: Additional arguments for compatibility with other forms of projection.
+        Returns:
+            torch.Tensor: The tensor of shape (B, C) containing the projected tokens.
+        """
+        x = self.norm(x[:, 0])  # (B, D)
+        # Apply the linear layer
+        x = self.linear(x)  # (B, C)
+        return x

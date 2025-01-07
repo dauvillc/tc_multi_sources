@@ -21,7 +21,7 @@ class Source:
     """
 
     def __init__(self, source_name, source_type, dim, shape, data_vars, context_vars, **kwargs):
-        if len(shape) != dim:
+        if (dim == 0 and shape != [1]) or (dim > 0 and len(shape) != dim):
             raise ValueError("The number of dimensions must match the length of shape.")
         self.name = source_name
         self.dim = dim

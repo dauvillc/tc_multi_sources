@@ -25,7 +25,8 @@ def img_to_patches(img, patch_size):
 def pad_to_next_multiple_of(tensor, multiple_of, **kwargs):
     """Pad an image or a batch of images to the next multiple of a number.
     Args:
-        tensor (torch.Tensor): tensor of shape (..., H, W).
+        tensor (torch.Tensor): If of shape (..., H, W), will be padded to
+            (..., H_padded, W_padded). Otherwise, skips the padding.
         multiple_of (int or tuple of int): if int, the number to which the
             height and width should be padded. If tuple, the first element
             determines the height padding and the second element the width
@@ -34,6 +35,9 @@ def pad_to_next_multiple_of(tensor, multiple_of, **kwargs):
     Returns:
         torch.Tensor: padded tensor of shape (..., H_padded, W_padded).
     """
+    # Skip padding if the tensor is not an image.
+    if tensor.ndim < 4:
+        return tensor
     H, W = tensor.shape[-2:]
     mo_h, mo_w = pair(multiple_of)
     H_padded = H + (-H) % mo_h

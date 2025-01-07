@@ -198,11 +198,11 @@ class SourcetypeEmbedding2d(nn.Module):
 
     def __init__(self, channels, n_context_vars, patch_size, values_dim):
         """Args:
-            channels (int): The number of channels in the source, not counting
-                the availability mask.
-            n_context_vars (int): The number of context variables for the source type.
-            patch_size (int): The size of the patches to be embedded.
-            values_dim (int): The dimension of the embedding space for the values.
+        channels (int): The number of channels in the source, not counting
+            the availability mask.
+        n_context_vars (int): The number of context variables for the source type.
+        patch_size (int): The size of the patches to be embedded.
+        values_dim (int): The dimension of the embedding space for the values.
         """
         super().__init__()
         self.patch_size = patch_size
@@ -214,7 +214,7 @@ class SourcetypeEmbedding2d(nn.Module):
             # Context embedding: embeds the context variables
             self.context_embedding = LinearEmbedding(n_context_vars, values_dim, norm=False)
         self.norm = nn.LayerNorm(values_dim)
-    
+
     def forward(self, data):
         """Args:
             data (dict of str to torch.Tensor): A dictionary containing at least the following
@@ -242,3 +242,103 @@ class SourcetypeEmbedding2d(nn.Module):
                 embedded_values += embedded_context
             embedded_values = self.norm(embedded_values)
         return embedded_values
+
+
+class CoordinatesEmbedding0d(nn.Module):
+    """A module that embeds the coordinates of a sequence of patches.
+    Made for 0D coordinates, which means that:
+    * the coordinates tensor has shape (B, 3),
+        for latitude, longitude sin and longitude cos.
+    * the time delta tensor has shape (B,)
+    The coordinates are embedded using a linear layer and summed to the
+    embedded time delta.
+    """
+
+    def __init__(self, emb_dim):
+        """
+        Args:
+            emb_dim (int): The dimension of the embedding space.
+        """
+        super().__init__()
+        self.emb_dim = emb_dim
+        self.coords_embedding = LinearEmbedding(3, emb_dim)
+        self.time_embedding = nn.Linear(1, emb_dim)
+        self.norm = nn.LayerNorm(emb_dim)
+
+    def forward(self, data):
+        """
+        Args:
+            data (dict of str to torch.Tensor): A dictionary containing at least the following keys:
+            * coords : A tensor of shape (B, 3) containing the coordinates.
+            * dt : A tensor of shape (B,) containing the time delta.
+        Returns:
+            embedded_coords: torch.Tensor of shape (B, 1, emb_dim).
+        """
+        coords, dt = data["coords"], data["dt"]
+        B = coords.size(0)
+        dt = dt.view(B, 1)
+        embedded_dt = self.time_embedding(dt)  # (B, emb_dim)
+        embedded_coords = self.coords_embedding(coords)  # (B, emb_dim)
+        embedded_coords += embedded_dt
+        embedded_coords = self.norm(embedded_coords)  # (B, emb_dim)
+        return embedded_coords.unsqueeze(1)  # (B, 1, emb_dim)
+
+
+class SupplementaryValuesEmbedding0d(nn.Module):
+    """Takes as input the land-sea mask at one point
+    and embeds it into a single token.
+    """
+
+    def __init__(self, emb_dim):
+        """
+        Args:
+            emb_dim (int): The dimension of the embedding space.
+        """
+        super().__init__()
+        self.embedding = LinearEmbedding(1, emb_dim)
+
+    def forward(self, data):
+        """
+        Args:
+            data (dict of str to torch.Tensor): A dictionary containing at least:
+                * 'landmask': torch.Tensor of shape (B,) containing the land-sea mask
+        Returns:
+            embedded_masks: torch.Tensor of shape (B, 1, emb_dim).
+        """
+        masks = data["landmask"].unsqueeze(1)  # (B, 1)
+        return self.embedding(masks).unsqueeze(1)  # (B, 1, emb_dim)
+
+
+class SourceSpecificEmbedding0d(nn.Module):
+    """A module that embeds a single source into a sequence of patches.
+    Made for 0D sources, which means that the pixels tensor has shape (B, C).
+    An additional channel containing the availability mask is added to the source.
+    The input is embedded into a single token of shape (B, 1, emb_dim).
+    """
+
+    def __init__(self, channels, values_dim):
+        """
+        Args:
+            channels (int): The number of channels in the source, not counting
+                the availability mask.
+            values_dim (int): The dimension of the embedding space for the values.
+        """
+        super().__init__()
+        # Values embedding: embeds the pixels using a linear layer
+        self.values_embedding = LinearEmbedding(channels + 1, values_dim)
+
+    def forward(self, data):
+        """
+        Args:
+            data (dict of str to torch.Tensor): A dictionary containing at least the following keys:
+                * 'values': torch.Tensor of shape (B, C) containing the pixels of the source.
+                * 'avail_mask': torch.Tensor of shape (B,) containing the availability mask.
+        Returns:
+            embedded_values: torch.Tensor of shape (B, num_patches, values_dim).
+        """
+        # Add the availability mask as an additional channel
+        values = data["values"]
+        avail_mask = data["avail_mask"].unsqueeze(1)
+        values = torch.cat([values, avail_mask], dim=1)
+        embedded_values = self.values_embedding(values)  # (B, values_dim)
+        return embedded_values.unsqueeze(1)  # (B, 1, values_dim)

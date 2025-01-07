@@ -1,7 +1,8 @@
 defaults:
   - paths: local
   - dataset: default
-  - sources: sat_interp_37GHz
+  - sources: sat_to_ibtracs
+  - data_augmentation: none
   - _self_
 
 
@@ -12,5 +13,7 @@ dataset:
     num_workers: 0
   val:
     num_workers: 0
+  
+num_workers: 0
 
-num_workers: 9
+seed: 42

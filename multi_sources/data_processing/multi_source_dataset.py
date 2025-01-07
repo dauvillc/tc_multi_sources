@@ -87,7 +87,6 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         self.constants_dir = self.dataset_dir / "constants"
         self.processed_dir = self.dataset_dir / "processed"
         self.split = split
-        self.variables_dict = included_variables_dict
         self.dt_max = pd.Timedelta(dt_max, unit="h")
         self.single_channel_sources = single_channel_sources
         self.data_augmentation = data_augmentation
@@ -95,12 +94,22 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         print(f"{split}: Browsing requested sources and loading metadata...")
         # Load and merge individual source metadata files
         sources_metadata = {}
-        for source_name in self.variables_dict:
+        for source_name in included_variables_dict:
             source_metadata_path = self.processed_dir / source_name / "source_metadata.json"
+            # If the source metadata file is not found, print a warning
+            # and skip the source
             if not source_metadata_path.exists():
-                raise ValueError(f"Source metadata file not found for {source_name}")
+                print(f"Warning: {source_metadata_path} not found. Skipping source {source_name}.")
+                continue
             with open(source_metadata_path, "r") as f:
                 sources_metadata[source_name] = json.load(f)
+        # If no source has been found, raise an error
+        if len(sources_metadata) == 0:
+            raise ValueError("Did not find any source metadata files.")
+        # Filter the included variables for each source
+        self.variables_dict = {
+            source: included_variables_dict[source] for source in sources_metadata
+        }
 
         self.sources = []
         for source_name in self.variables_dict:
@@ -114,13 +123,6 @@ class MultiSourceDataset(torch.utils.data.Dataset):
             lines=True,
             convert_dates=["time"],
         )
-        # Make sure that every source indicated in the config appears
-        # in at least one row of the dataset
-        unique_sources = self.df["source_name"].unique()
-        for source in self.sources:
-            if source.name not in unique_sources:
-                raise ValueError(f"Source {source.name} is not present in the dataset.")
-        print(f"{split}: Found {len(self.sources)} sources in the dataset.")
 
         # Filter the dataframe to only keep the rows where source_name is the name of a source
         # in self.sources
@@ -186,7 +188,6 @@ class MultiSourceDataset(torch.utils.data.Dataset):
             sample (multi_sources.data_processing.multi_source_batch.MultiSourceBatch): The element
                 at the given index.
         """
-        source_shapes = self._get_source_shapes()
         sample = self.reference_df.iloc[idx]
         sid, t0 = sample["sid"], sample["time"]
         # Isolate the rows of self.df corresponding to the sample sid
@@ -232,7 +233,9 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                                 CT = None
                             else:
                                 context_df = df[source.context_vars].iloc[0]
-                                CT = np.array([context_df[cvar][dvar] for cvar in source.context_vars])
+                                CT = np.array(
+                                    [context_df[cvar][dvar] for cvar in source.context_vars]
+                                )
                                 CT = torch.tensor(CT, dtype=torch.float32)
                             # Load the data variable, yield it with shape (1, H, W)
                             V = torch.tensor(
@@ -269,7 +272,9 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                             )  # (n_data_vars, n_context_vars)
                             CT = torch.tensor(CT.flatten(), dtype=torch.float32)
                         # Load the variables in the order specified in the source
-                        V = np.stack([load_nc_with_nan(ds[var]) for var in source.data_vars], axis=0)
+                        V = np.stack(
+                            [load_nc_with_nan(ds[var]) for var in source.data_vars], axis=0
+                        )
                         V = torch.tensor(V, dtype=torch.float32)
                         # Normalize the context and values tensors
                         CT, V = self.normalize(CT, V, source)
@@ -297,7 +302,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
             context (torch.Tensor): tensor of shape (n_context_vars,)
             values (torch.Tensor): tensor of shape (C, H, W) if dvar is None,
                 or (1, H, W) if dvar is specified.
-            source (str): Source object representing the source.
+            source (Source): Source object representing the source.
             dvar (str, optional): Name of a specific variable (ie channel) within
                 the source to normalize.
         Returns:
@@ -326,7 +331,9 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         if dvar is None:
             data_means = np.array(
                 [self.data_means[source_name][var] for var in source.data_vars]
-            ).reshape(-1, *(1 for _ in values.shape[1:]))  # (C, 1, ...) like values
+            ).reshape(
+                -1, *(1 for _ in values.shape[1:])
+            )  # (C, 1, ...) like values
             data_stds = np.array(
                 [self.data_stds[source_name][var] for var in source.data_vars]
             ).reshape(-1, *(1 for _ in values.shape[1:]))

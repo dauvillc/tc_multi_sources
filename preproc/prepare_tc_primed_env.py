@@ -51,13 +51,12 @@ def process_file(file, dest_dir, data_vars, source_name):
             new_ds = timestep_ds[data_vars + ["latitude", "longitude"]]
 
             # Select only the central 81 pixels along each axis
-            lat_size = new_ds.sizes['ny']
-            lon_size = new_ds.sizes['nx']
+            lat_size = new_ds.sizes["ny"]
+            lon_size = new_ds.sizes["nx"]
             lat_mid = lat_size // 2
             lon_mid = lon_size // 2
             new_ds = new_ds.isel(
-                ny=slice(lat_mid - 40, lat_mid + 41),
-                nx=slice(lon_mid - 40, lon_mid + 41)
+                ny=slice(lat_mid - 40, lat_mid + 41), nx=slice(lon_mid - 40, lon_mid + 41)
             )
 
             dest_data_file = (
@@ -122,11 +121,18 @@ def process_era5(source_files, dest_dir, verbose=False, num_workers=0):
             results.append(result)
     else:
         # Process files in parallel using ProcessPoolExecutor
-        process_file_partial = partial(process_file, dest_dir=dest_dir, data_vars=data_vars, source_name=source_name)
+        process_file_partial = partial(
+            process_file, dest_dir=dest_dir, data_vars=data_vars, source_name=source_name
+        )
         with ProcessPoolExecutor(max_workers=num_workers) as executor:
             results = list(
-                tqdm(executor.map(process_file_partial, source_files), total=len(source_files), desc="Processing ERA5")
-                if verbose else executor.map(process_file_partial, source_files)
+                tqdm(
+                    executor.map(process_file_partial, source_files),
+                    total=len(source_files),
+                    desc="Processing ERA5",
+                )
+                if verbose
+                else executor.map(process_file_partial, source_files)
             )
 
     # Collect DataFrames and total discarded count
@@ -180,13 +186,15 @@ def process_storm_metadata(source_files, dest_dir, verbose=False):
 
     for file in iterator:
         with Dataset(file) as raw_sample:
-            storm_meta = raw_sample["storm_metadata"]
-            times = raw_sample["rectilinear"]["time"][:]
+            storm_meta = xr.open_dataset(
+                xr.backends.NetCDF4DataStore(raw_sample["storm_metadata"])
+            )
+            times = storm_meta["time"].values
 
             # Get storm identification info
-            season = storm_meta["season"][0].item()
-            basin = storm_meta["basin"][0]
-            storm_number = storm_meta["cyclone_number"][-1].item()
+            season = storm_meta["season"].item()
+            basin = storm_meta["basin"].item()
+            storm_number = storm_meta["cyclone_number"].item()
             sid = f"{season}{basin}{storm_number}"
 
             # Process each timestep
@@ -200,18 +208,18 @@ def process_storm_metadata(source_files, dest_dir, verbose=False):
                 new_ds = xr.Dataset(
                     data_vars={
                         "intensity": storm_meta["intensity"][time_idx].item(),
-                        "central_min_pressure": storm_meta["central_min_pressure"][time_idx].item(),
+                        "central_min_pressure": storm_meta["central_min_pressure"][
+                            time_idx
+                        ].item(),
                         "storm_heading": storm_meta["storm_heading"][time_idx].item(),
                         "storm_speed": storm_meta["storm_speed"][time_idx].item(),
-                        "time": pd.to_datetime(time),
+                        "time": time,
                         "latitude": storm_lat,
                         "longitude": storm_lon,
                     }
                 )
 
-                dest_data_file = (
-                    dest_dir / f"{sid}_{pd.to_datetime(time).strftime('%Y%m%dT%H%M%S')}.nc"
-                )
+                dest_data_file = dest_dir / f"{sid}_{pd.to_datetime(time).strftime('%Y%m%dT%H%M%S')}.nc"
                 new_ds.to_netcdf(dest_data_file)
 
                 # Add metadata for this timestep

@@ -59,34 +59,35 @@ def main(cfg: DictConfig):
                 if np.isnan(v).all():
                     continue
                 data_means[source_name] = data_means[source_name] + np.nanmean(v)
-                mean_std = np.nanmean(np.nanstd(v, axis=(2, 3)))
-                data_stds[source_name] = data_stds[source_name] + mean_std
+                data_stds[source_name] = data_stds[source_name] + np.nanstd(v)
                 # context
-                ct = data["context"]
-                ct_nonan = ct[~ct.isnan()]
-                context_means[source_name] = (
-                    context_means[source_name] + ct_nonan.mean().item()
-                )
-                context_stds[source_name] = (
-                    context_stds[source_name] + ct_nonan.std().item()
-                )
+                if "context" in data:
+                    ct = data["context"]
+                    ct_nonan = ct[~ct.isnan()]
+                    context_means[source_name] = (
+                        context_means[source_name] + ct_nonan.mean().item()
+                    )
+                    context_stds[source_name] = (
+                        context_stds[source_name] + ct_nonan.std().item()
+                    )
 
     profiler.stop()
     profiler.write_html("tests/outputs/profile_multi_source_dataset.html")
     profiler.print()
 
     for source_name in data_means.keys():
+        print(f"Source {source_name}:")
         data_means[source_name] = data_means[source_name] / len(dataloader)
         data_stds[source_name] = data_stds[source_name] / len(dataloader)
-        context_means[source_name] = context_means[source_name] / len(dataloader)
-        context_stds[source_name] = context_stds[source_name] / len(dataloader)
-        print(f"Source {source_name}:")
         print(
             f"Data mean: {data_means[source_name]}, Data std: {data_stds[source_name]}"
         )
-        print(
-            f"Context mean: {context_means[source_name]}, Context std: {context_stds[source_name]}"
-        )
+        if context_means[source_name] != 0:
+            context_means[source_name] = context_means[source_name] / len(dataloader)
+            context_stds[source_name] = context_stds[source_name] / len(dataloader)
+            print(
+                f"Context mean: {context_means[source_name]}, Context std: {context_stds[source_name]}"
+            )
 
 
 if __name__ == "__main__":

@@ -1,18 +1,22 @@
 # @package _global_
 defaults:
   - override /paths: jz
-  - override /sources: best_track_from_era5
+  - override /sources: sat_to_ibtracs
   - override /lightning_module: mae_reworked
   - override /lr_scheduler: cosine_warmup_150epochs.yaml
 
 wandb:
-  name: all_sources
-  group: 37GHz
+  name: sat_to_ibtracs
+  group: sat_to_ibtracs
+
+lightning_module:
+  train_only_on_sources: ['tc_primed_storm_metadata']
+  exclude_sources_from_training: ['tc_primed_era5', 'tc_primed_storm_metadata']
 
 dataset:
   train:
     dt_max: 6
-    min_available_sources: 2
+    min_available_sources: 3
     single_channel_sources: false
   val:
     single_channel_sources: false

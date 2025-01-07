@@ -15,11 +15,16 @@ from multi_sources.models.utils import (
 )
 from multi_sources.models.embedding_layers import (
     CoordinatesEmbedding2d,
-    SourceSpecificEmbedding2d,
     SupplementaryValuesEmbedding2d,
     SourcetypeEmbedding2d,
+    CoordinatesEmbedding0d,
+    SupplementaryValuesEmbedding0d,
+    SourceSpecificEmbedding0d,
 )
-from multi_sources.models.output_layers import SourceSpecificProjection2d
+from multi_sources.models.output_layers import (
+    SourceSpecificProjection2d,
+    SourceSpecificProjection0d,
+)
 
 
 class MultisourceMAE(pl.LightningModule):
@@ -46,13 +51,15 @@ class MultisourceMAE(pl.LightningModule):
         sources,
         backbone,
         cfg,
-        masking_ratio,
+        n_sources_to_mask,
         patch_size,
         values_dim,
         coords_dim,  # Changed from coordinates_dim
         adamw_kwargs,
         lr_scheduler_kwargs,
         loss_max_distance_from_center,
+        train_only_on_sources=[],
+        exclude_sources_from_training=[],
         use_attention_masks=False,
         normalize_coords_across_sources=True,
         metrics={},
@@ -63,8 +70,7 @@ class MultisourceMAE(pl.LightningModule):
             backbone (nn.Module): The backbone of the model.
             cfg (dict): The whole configuration of the experiment. This will be saved
                 within the checkpoints and can be used to rebuild the exact experiment.
-            masking_ratio (float): The ratio of tokens to mask. If mask_full_sources is True,
-                ratio of sources to mask instead.
+            n_sources_to_mask (int): The number of sources to mask in each sample.
             patch_size (int): The size of the patches to split the images into.
             values_dim (int): The dimension of the values embeddings.
             coords_dim (int): The dimension of the coordinates embeddings.
@@ -73,6 +79,12 @@ class MultisourceMAE(pl.LightningModule):
             loss_max_distance_from_center (int or None): If specified, only pixels within this
                 distance from the center of the storm (in km) will be considered
                 in the loss computation.
+            train_only_on_sources (list of str): If not empty, list of sources to train on
+                exclusively. This means that at each training step, only those sources can
+                be masked and then backpropagated on.
+            exclude_sources_from_training (list of str): If not empty, list of sources to exclude
+                from training. This means that at each training step, those sources will not be
+                masked and the model will not backpropagate on them.
             use_attention_masks (bool): If True, the model will use attention masks to
                 ignore the tokens that are missing or masked.
             normalize_coords_across_sources (bool): If True, the coordinates of each source
@@ -86,7 +98,7 @@ class MultisourceMAE(pl.LightningModule):
         self.sources = sources
         self.source_names = [source.name for source in sources]
         self.backbone = backbone
-        self.masking_ratio = masking_ratio
+        self.n_sources_to_mask = n_sources_to_mask
         self.patch_size = patch_size
         self.values_dim = values_dim
         self.coords_dim = coords_dim  # Changed from self.coordinates_dim
@@ -94,9 +106,18 @@ class MultisourceMAE(pl.LightningModule):
         self.adamw_kwargs = adamw_kwargs
         self.metrics = metrics
         self.loss_max_distance_from_center = loss_max_distance_from_center
+        self.train_only_on_sources = train_only_on_sources
+        self.exclude_sources_from_training = exclude_sources_from_training
         self.use_attention_masks = use_attention_masks
         self.normalize_coords_across_sources = normalize_coords_across_sources
+        self.cfg = cfg
         self.save_hyperparameters(ignore=["backbone", "metrics"])
+
+        if set(self.train_only_on_sources) & set(self.exclude_sources_from_training):
+            raise ValueError(
+                "The lists of sources to train on exclusively and to exclude from training "
+                "should not have any element in common."
+            )
 
         # Embedding and output projection layers
         # Type embedding layers: one for each source type
@@ -106,14 +127,23 @@ class MultisourceMAE(pl.LightningModule):
         self.sourcetype_embeddings = nn.ModuleDict()
         self.source_to_type = {source.name: source.type for source in sources}
         for source in sources:
+            # Only create the embedding layer for that source type if it doesn't exist yet
             if source.type not in self.sourcetypes_context_vars:
                 self.sourcetypes_context_vars[source.type] = source.n_context_variables()
-                self.sourcetype_embeddings[source.type] = SourcetypeEmbedding2d(
-                    source.n_data_variables(),
-                    source.n_context_variables(),
-                    self.patch_size,
-                    values_dim,
-                )
+                # Create the embedding layer for that source type depending on
+                # its dimensionality
+                if source.dim == 2:
+                    self.sourcetype_embeddings[source.type] = SourcetypeEmbedding2d(
+                        source.n_data_variables(),
+                        source.n_context_variables(),
+                        self.patch_size,
+                        values_dim,
+                    )
+                elif source.dim == 0:
+                    self.sourcetype_embeddings[source.type] = SourceSpecificEmbedding0d(
+                        source.n_data_variables(),
+                        values_dim,
+                    )
             else:
                 # Check that the number of context variables is the same for all sources
                 # of the same type
@@ -121,21 +151,32 @@ class MultisourceMAE(pl.LightningModule):
                     raise ValueError(
                         f"Number of context variables is not the same for all sources of type {source.type}"
                     )
-        # Output projection layers: one for each source
-        self.output_projs = nn.ModuleDict()
-        for source in sources:
-            # note: torch doesn't allow dots in keys of nn.ModuleDict, so we remove them
-            self.output_projs[remove_dots(source.name)] = SourceSpecificProjection2d(
-                source.n_data_variables(), source.shape, self.patch_size, values_dim
-            )
 
         # Check if any source is 2D and create the 2D embedding layers if required.
         has_2d_source = any(len(source.shape) == 2 for source in sources)
         if has_2d_source:
             # Coordinates embedding, shared across sources
-            self.coords_embedding = CoordinatesEmbedding2d(self.patch_size, coords_dim)
+            self.coords_embedding_2d = CoordinatesEmbedding2d(self.patch_size, coords_dim)
             # Supplementary values embedding, also shared across sources
-            self.supp_embedding = SupplementaryValuesEmbedding2d(self.patch_size, values_dim)
+            self.supp_embedding_2d = SupplementaryValuesEmbedding2d(self.patch_size, values_dim)
+        # Same for 0D sources
+        has_0d_source = any(source.dim == 0 for source in sources)
+        if has_0d_source:
+            self.coords_embedding_0d = CoordinatesEmbedding0d(coords_dim)
+            self.supp_embedding_0d = SupplementaryValuesEmbedding0d(values_dim)
+
+        # Output projection layers: one for each source
+        self.output_projs = nn.ModuleDict()
+        for source in sources:
+            if source.dim == 2:
+                # note: torch doesn't allow dots in keys of nn.ModuleDict, so we remove them
+                self.output_projs[remove_dots(source.name)] = SourceSpecificProjection2d(
+                    source.n_data_variables(), source.shape, self.patch_size, values_dim
+                )
+            elif source.dim == 0:
+                self.output_projs[remove_dots(source.name)] = SourceSpecificProjection0d(
+                    source.n_data_variables(), values_dim
+                )
 
         # learnable [MASK] token
         self.mask_token = nn.Parameter(torch.randn(1, 1, self.values_dim))
@@ -168,7 +209,7 @@ class MultisourceMAE(pl.LightningModule):
             d = torch.nan_to_num(d, nan=float("inf"))
             # Potential context variables
             if "context" in data:
-                ct = data['context'].float()
+                ct = data["context"].float()
                 ct = torch.nan_to_num(ct, nan=0)
 
             # Create two separate dictionaries: one for embedding input, one for loss computation
@@ -200,11 +241,14 @@ class MultisourceMAE(pl.LightningModule):
             # Embed the source's values
             source_type = self.source_to_type[source]
             v = self.sourcetype_embeddings[source_type](data)
-            # Embed the source's coordinates using the shared coordinates embedding layer
-            c = self.coords_embedding(data)
-            # Compute the supplementary values embedding. This embedding will be used
-            # at every block of the backbone, and can be used to store information.
-            supp = self.supp_embedding(data)
+            # Fetch the right coords en supp embedding depending on the source's
+            # dimensionality
+            if len(data["coords"].shape) == 2:  # (B, C)
+                c = self.coords_embedding_0d(data)
+                supp = self.supp_embedding_0d(data)
+            elif len(data["coords"].shape) == 4:  # (B, C, H, W)
+                c = self.coords_embedding_2d(data)
+                supp = self.supp_embedding_2d(data)
             # Save the layout of the tokens for the output projection. For example
             # a tokens_shape of (3, 2) means 3 tokens in the first dimension and 2 in the second.
             # That info is lost in the embedded sequences as they are flattened.
@@ -239,18 +283,28 @@ class MultisourceMAE(pl.LightningModule):
                 it was missing.
         """
         n_sources = len(x)
-        n_sources_to_mask = max(1, int(n_sources * self.masking_ratio))
         any_elem = next(iter(x.values()))["embedded_values"]
         batch_size = any_elem.shape[0]
         device = any_elem.device
 
         # Select the sources to mask, which can differ between samples in the batch.
         # Missing sources cannot be masked.
+        # Strategy: we'll generate a random noise tensor of shape (B, n_sources)
+        # and for each row, mask the sources with the highest noise.
         noise = torch.rand((batch_size, n_sources), device=device)
         for i, (source, data) in enumerate(x.items()):
             # Multiply the noise by the availability mask (-1 for missing sources, 1 otherwise)
             noise[:, i] = noise[:, i] * data["avail"].squeeze(-1)
-        _, sources_to_mask = noise.topk(n_sources_to_mask, dim=1)  # (B, n_sources_to_mask)
+            # If the source is not included in the list of sources to train on, set its
+            # noise to a value inferior to -1 so that it's not selected.
+            if (self.train_only_on_sources and source not in self.train_only_on_sources) or (
+                source in self.exclude_sources_from_training
+            ):
+                noise[:, i] = -2
+        # Gather the indices of the sources to mask for each sample
+        _, sources_to_mask = noise.topk(self.n_sources_to_mask, dim=1)  # (B, n_sources_to_mask)
+        # Deduce a matrix M of shape (B, n_sources) such that M[b, i] = 1 if the source i
+        # should be masked for the sample b, and 0 otherwise.
         masked_sources_matrix = torch.zeros(
             (batch_size, n_sources), dtype=torch.bool, device=device
         )  # (B, n_sources)
@@ -282,8 +336,7 @@ class MultisourceMAE(pl.LightningModule):
                 {source_name: tensor} where the tensor has shape (B, C, ...).
             avail_tensors (dict of str to tensor): The availability tensors for each source,
                 of shape (B,).
-        """
-        preprocessed = x  # Store reference to preprocessed data
+        """  # Store reference to preprocessed data
         x = self.embed(x)
         x = self.mask(x)
 
@@ -298,7 +351,7 @@ class MultisourceMAE(pl.LightningModule):
 
         pred = self.backbone(x, attn_masks)
         pred = {
-            source: self.output_projs[source](v, x[source]["tokens_shape"])
+            source: self.output_projs[source](v, tokens_shape=x[source]["tokens_shape"])
             for source, v in pred.items()
         }
         # Compute availability tensors just before returning
@@ -359,18 +412,23 @@ class MultisourceMAE(pl.LightningModule):
         """
         losses = {}
         for source, true_data in y_true.items():
+            B, C = true_data["values"].shape[:2]
             # We'll compute a mask M on the tokens of the source of shape (B, C, ...)
             # such that M[b, ...] = True if and only if the following conditions are met:
             # - The source was masked for the sample b (avail_tensors[b] == 0);
             # - the value at position ... was not missing (true_data["am"] == True);
             # - If self.loss_max_distance_from_center is not None, the token is within
             #   the specified distance from the center.
-            mask = (true_data["avail_mask"] >= 1) & (avail_tensors[source].view(-1, 1, 1) == 0)
+            where_avail = true_data["avail_mask"] >= 1
+            when_masked = (avail_tensors[source] == 0).reshape(
+                (B,) + (1,) * (where_avail.ndim - 1)
+            )  # (B, 1, 1, ... one for each spatial dimension)
+            mask = where_avail & when_masked  # (B, ... one for each spatial dimension)
             if self.loss_max_distance_from_center is not None:
                 dist = true_data["dist_to_center"]
                 mask = mask & (dist <= self.loss_max_distance_from_center)
             # Expand the mask to the number of channels in the source
-            mask = mask.unsqueeze(1).expand(-1, y_pred[source].shape[1], -1, -1)
+            mask = mask.unsqueeze(1).expand_as(true_data["values"])  # (B, C, ...)
             # Compute the loss on the elements for which the loss maks is True
             true_values = true_data["values"][mask]
             pred_values = y_pred[source][mask]

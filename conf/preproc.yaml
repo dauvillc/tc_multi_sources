@@ -7,6 +7,12 @@ defaults:
 target_resolution: [0.15, 0.15]
 # List of sources that should not be regridded
 no_regrid: ["tc_primed_era5"]
+# Fraction of the data to use when computing the normalization statistics
+norm_constants_fraction: 0.25
+# Minimum number of data points to use when computing the normalization statistics
+norm_constants_min_samples: 100
+# Maximum amount of memory per worker
+max_mem_per_worker: "3.8GB"
 
 # Seed for the train-val-test splitting
 splitting_seed: 42

@@ -2,48 +2,54 @@ import hydra
 import numpy as np
 import pandas as pd
 import json
+import xarray as xr
+import dask
 from netCDF4 import Dataset
 from omegaconf import OmegaConf
 from tqdm import tqdm
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 from collections import defaultdict
+from dask.distributed import Client
 
 
-def process_source(train_metadata, source_name, constants_dir):
+def process_source(train_metadata, source_name, constants_dir, use_fraction, min_files):
     """
     Computes the normalization constants for all samples in a source.
     """
     # Filter the metadata to keep only the samples from the source.
     train_metadata = train_metadata[train_metadata["source_name"] == source_name]
-    means, stds = defaultdict(float), defaultdict(float)
-    # Compute the normalization constants for each sample sequentially.
-    for _, sample in train_metadata.iterrows():
-        data_path = Path(sample["data_path"])
-        with Dataset(data_path, "r") as ds:
-            # Compute the stats for all variables except 'land_mask', 'latitude'
-            # and 'longitude'.
-            data_vars = [
-                v for v in ds.variables if v not in ["land_mask", "latitude", "longitude"]
-            ]
-            for var in data_vars:
-                data = ds[var][:]
-                if data.mask.all():
-                    # The variable is entirely masked, we'll skip it.
-                    continue
-                means[var] += np.nanmean(data)
-                stds[var] += np.nanstd(data)
-    # Compute the means and stds.
-    n_samples = len(train_metadata)
-    for var in means:
-        means[var] /= n_samples
-        stds[var] /= n_samples
-    # Save the means and stds in a JSON file.
+    data_paths = [sample["data_path"] for _, sample in train_metadata.iterrows()]
+    new_len = max(int(len(data_paths) * use_fraction), min_files)
+    data_paths = np.random.choice(
+        data_paths, size=min(new_len, len(data_paths)), replace=False
+    ).tolist()
+    # Concatenate the data from all samples, ignoring the coordinates as we won't
+    # be computing the normalization constants for them here.
+    ds = xr.open_mfdataset(
+        data_paths,
+        combine="nested",
+        concat_dim="sample",
+        parallel=True,
+        coords="minimal",
+        compat="override",
+        autoclose=True,
+    )
+    ds = ds.drop_vars(["land_mask", "latitude", "longitude"], errors="ignore")
+    if "time" in ds.data_vars:
+        ds = ds.drop_vars("time", errors="ignore")
+    # Compute the mean and std of the data.
+    means = ds.mean(skipna=True).compute()
+    stds = ds.std(skipna=True).compute()
+    means_dict = {var: float(means[var].values) for var in ds.data_vars}
+    stds_dict = {var: float(stds[var].values) for var in ds.data_vars}
+    ds.close()
+
     constants_dir.mkdir(parents=True, exist_ok=True)
     with open(constants_dir / "data_means.json", "w") as f:
-        json.dump(means, f)
+        json.dump(means_dict, f)
     with open(constants_dir / "data_stds.json", "w") as f:
-        json.dump(stds, f)
+        json.dump(stds_dict, f)
 
 
 def load_merged_metadata(processed_dir):
@@ -62,6 +68,11 @@ def load_merged_metadata(processed_dir):
 def main(cfg):
     cfg = OmegaConf.to_container(cfg, resolve=True)
     num_workers = 0 if "num_workers" not in cfg else cfg["num_workers"]
+    # Option to use only a fraction of the samples to compute the normalization constants,
+    # while keeping a minimum number of samples.
+    use_fraction = cfg["norm_constants_fraction"]
+    min_files = cfg["norm_constants_min_samples"]
+    max_mem_per_worker = cfg["max_mem_per_worker"]
     # Path to the preprocessed dataset directory
     preprocessed_dir = Path(cfg["paths"]["preprocessed_dataset"])
     # Path to the regridded dataset
@@ -71,32 +82,30 @@ def main(cfg):
     # Load the metadata for the training samples.
     samples_metadata = pd.read_json(preprocessed_dir / "train.json", orient="records", lines=True)
 
+    # Create the dask client
+    client = Client(
+        n_workers=max(num_workers, 1),
+        threads_per_worker=1,
+        memory_limit=max_mem_per_worker,
+        processes=True,
+    )
+
     # Load the metadata for all sources
     source_metadata = load_merged_metadata(regridded_dir)
 
     # The prepared data directory contains one sub-directory per source.
     source_dirs = [d for d in regridded_dir.iterdir() if d.is_dir()]
-    if num_workers > 1:
-        with ProcessPoolExecutor(max_workers=num_workers) as executor:
-            futures = []
-            for source_dir in source_dirs:
-                source_name = source_dir.name
-                futures.append(
-                    executor.submit(
-                        process_source, samples_metadata, source_name, constants_dir / source_name
-                    )
-                )
-            for future in tqdm(futures, desc="Processing sources"):
-                future.result()
-    else:
-        for source_dir in tqdm(source_dirs, desc="Processing sources"):
-            source_name = source_dir.name
-            process_source(samples_metadata, source_name, constants_dir / source_name)
+    for source_dir in tqdm(source_dirs, desc="Processing sources"):
+        print("Processing source ", source_dir.name)
+        source_name = source_dir.name
+        process_source(
+            samples_metadata, source_name, constants_dir / source_name, use_fraction, min_files
+        )
 
     # We know need to compute the normalization constants for the context variables.
     # However, the context variables can be shared across sources (e.g. the observing frequency
     # or the IFOV). Thus, we'll load all of the context variables across all samples and compute
-    # the normalization constants at once. 
+    # the normalization constants at once.
     # sources_metadata[source_name]["context_vars"] contains the context variables for the source.
     # Retrieve the list of context variables that can be found in at least one source.
     context_vars = set()
@@ -112,7 +121,7 @@ def main(cfg):
         df = context_df[cvar]
         # Not all samples have a value for this context variable, which
         # creates NaN values.
-        df = df[~df.isna() & (df != '') & (df != {})]
+        df = df[~df.isna() & (df != "") & (df != {})]
         df = df.apply(lambda m: list(m.values())).explode()
         means[cvar] = df.mean()
         stds[cvar] = df.std()
@@ -120,6 +129,8 @@ def main(cfg):
     # Save the means and stds in two JSON files.
     json.dump(means, open(constants_dir / "context_means.json", "w"))
     json.dump(stds, open(constants_dir / "context_stds.json", "w"))
+
+    client.close()
 
 
 if __name__ == "__main__":

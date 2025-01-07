@@ -46,11 +46,11 @@ def normalize_coords_across_sources(coords):
     """Normalizes the coordinates across multiple sources, by setting the min
     and max of each channel to 0 and 1 respectively, across all sources.
     Args:
-        coords (list of torch.Tensor): list of tensors of shape (B, C, H, W).
+        coords (list of torch.Tensor): list of tensors of shape (B, C, ...).
             For example, if lat/lon then C=2; if lat sin/lon sin/lon cos then C=3.
     Returns:
         list of torch.Tensor: the normalized coordinates, as list of tensors
-            of shape (B, C, H, W). For each channel, its min across all sources is 0
+            of shape (B, C, ...). For each channel, its min across all sources is 0
             and its max is 1.
     """
     shapes = [c.shape for c in coords]
@@ -60,12 +60,12 @@ def normalize_coords_across_sources(coords):
     # to avoid them, we'll replace them with +inf for min and -inf for max.
     min_vals = [torch.nan_to_num(c, float("inf")).min(dim=-1)[0] for c in flat_coords]
     max_vals = [torch.nan_to_num(c, float("-inf")).max(dim=-1)[0] for c in flat_coords]
-    cross_source_min = torch.stack(min_vals, dim=0).min(dim=0)[0].view(B, C, 1, 1)
-    cross_source_max = torch.stack(max_vals, dim=0).max(dim=0)[0].view(B, C, 1, 1)
+    cross_source_min = torch.stack(min_vals, dim=0).min(dim=0)[0].view(B, C, -1)
+    cross_source_max = torch.stack(max_vals, dim=0).max(dim=0)[0].view(B, C, -1)
     # Normalize the latitudes and longitudes. NaNs remain NaNs.
-    coords = [(c - cross_source_min) / (cross_source_max - cross_source_min) for c in coords]
+    coords = [(c - cross_source_min) / (cross_source_max - cross_source_min) for c in flat_coords]
     # Reshape the coordinates.
-    coords = [c.view(*s) for c, s in zip(coords, shapes)]
+    coords = [c.view(*s) for c, s in zip(flat_coords, shapes)]
     return coords
 
 
@@ -86,7 +86,7 @@ def embed_coords_to_sincos(coords_list):
         lat, lon = coords.unbind(dim=1)
         # Ensure the longitudes are in the range [-180, 180].
         lon = torch.where(lon > 180, lon - 360, lon)
-        lat_sin = torch.sin((lat * 3.141592653589793) / 180) 
+        lat_sin = torch.sin((lat * 3.141592653589793) / 180)
         lon_sin = torch.sin((lon * 3.141592653589793) / 180)
         lon_cos = torch.cos((lon * 3.141592653589793) / 180)
         embedded_coords.append(torch.stack([lat_sin, lon_sin, lon_cos], dim=1))
