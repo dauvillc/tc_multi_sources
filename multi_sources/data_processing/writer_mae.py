@@ -12,8 +12,9 @@ class MultiSourceWriter(BasePredictionWriter):
     such that:
     - The targets are of the form {source_name: D} where D is a dictionary with the following keys:
         - dt: The datetime of the observation
-        - values: The values to predict as a tensor of shape (bs, C, H, W)
-        - coords: The coordinates of each pixel as a tensor of shape (bs, 2, H, W).
+        - values: The values to predict as a tensor of shape (bs, C, ...)
+            where ... are the spatial dimensions and C is the number of channels.
+        - coords: The coordinates of each pixel as a tensor of shape (bs, 2, ...).
             The first channel is the latitude and the second channel is the longitude.
     - The outputs are of the form {source_name: v'} where v' are the predicted values.
         A source may not be included in the outputs.
@@ -55,15 +56,23 @@ class MultiSourceWriter(BasePredictionWriter):
             # Append the lat/lon to the targets
             latlon = data['coords'].detach().cpu().numpy()
             dt = data['dt'].detach().cpu().numpy() * self.dt_max
+            # The dimensions of the Datasets we'll create depend on the
+            # dimensionality of the source.
+            if len(targets.shape) == 4:  # 2d sources -> (B, C, H, W)
+                dims = ("samples", "channels", "H", "W")
+                coord_dims = ("samples", "H", "W")
+            elif len(targets.shape) == 2:  # 0d sources -> (B, C)
+                dims = ("samples", "channels")
+                coord_dims = ("samples",)
             # Create xarray Dataset for targets
             targets_ds = xr.Dataset(
                 {
-                    "targets": (("samples", "channels", "H", "W"), targets),
+                    "targets": (dims, targets),
                 },
                 coords={
                     "samples": np.arange(targets.shape[0]),
-                    "lat": (("samples", "H", "W"), latlon[:, 0, :, :]),
-                    "lon": (("samples", "H", "W"), latlon[:, 1, :, :]),
+                    "lat": (coord_dims, latlon[:, 0]),
+                    "lon": (coord_dims, latlon[:, 1]),
                     "dt": (("samples"), dt),
                 }
             )
@@ -78,12 +87,12 @@ class MultiSourceWriter(BasePredictionWriter):
                 # Create xarray Dataset for outputs
                 outputs_ds = xr.Dataset(
                     {
-                        "outputs": (("samples", "channels", "H", "W"), outputs),
+                        "outputs": (dims, outputs),
                     },
                     coords={
                         "samples": np.arange(outputs.shape[0]),
-                        "lat": (("samples", "H", "W"), latlon[:, 0, :, :]),
-                        "lon": (("samples", "H", "W"), latlon[:, 1, :, :]),
+                        "lat": (coord_dims, latlon[:, 0]),
+                        "lon": (coord_dims, latlon[:, 1]),
                         "dt": (("samples"), dt),
                     }
                 )

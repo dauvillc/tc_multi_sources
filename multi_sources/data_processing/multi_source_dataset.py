@@ -243,7 +243,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                                 load_nc_with_nan(ds[dvar]), dtype=torch.float32
                             ).unsqueeze(0)
                             # Normalize the context and values tensors
-                            CT, V = self.normalize(CT, V, source, dvar)
+                            CT, V = self.normalize(V, source, CT, dvar)
                             output_entry = {
                                 "source_type": source_type,
                                 "dt": DT,
@@ -278,7 +278,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                         )
                         V = torch.tensor(V, dtype=torch.float32)
                         # Normalize the context and values tensors
-                        CT, V = self.normalize(CT, V, source)
+                        CT, V = self.normalize(V, source, CT)
                         output_entry = {
                             "source_type": source_type,
                             "dt": DT,
@@ -296,15 +296,16 @@ class MultiSourceDataset(torch.utils.data.Dataset):
 
         return output
 
-    def normalize(self, context, values, source, dvar=None, denormalize=False):
+    def normalize(self, values, source, context=None, dvar=None, denormalize=False):
         """Normalizes the context and values tensors associated with a given
         source, and optionally a specific data variable.
         Args:
-            context (torch.Tensor): tensor of shape (n_context_vars,)
             values (torch.Tensor): tensor of shape (C, H, W) if dvar is None,
                 or (1, H, W) if dvar is specified.
             source (Source or str): Source object representing the source, or name
                 of the source.
+            context (torch.Tensor, optiona): tensor of shape (n_context_vars,)
+                containing the context variables. If None, the context is not normalized.
             dvar (str, optional): Name of a specific variable (ie channel) within
                 the source to normalize.
             denormalize (bool, optional): If True, denormalize the context and values tensors

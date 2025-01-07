@@ -11,7 +11,7 @@ wandb:
 
 lightning_module:
   train_only_on_sources: ['tc_primed_storm_metadata']
-  exclude_sources_from_training: ['tc_primed_era5', 'tc_primed_storm_metadata']
+  exclude_sources_from_training: ['tc_primed_era5']
 
 dataset:
   train:
