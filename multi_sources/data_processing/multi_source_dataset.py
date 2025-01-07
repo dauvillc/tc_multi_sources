@@ -111,11 +111,12 @@ class MultiSourceDataset(torch.utils.data.Dataset):
             source: included_variables_dict[source] for source in sources_metadata
         }
 
-        self.sources = []
+        self.sources, self.sources_dict = [], {}
         for source_name in self.variables_dict:
             # Isolate the variables to include for the source
             sources_metadata[source_name]["data_vars"] = self.variables_dict[source_name]
             self.sources.append(Source(**sources_metadata[source_name]))
+            self.sources_dict[source_name] = self.sources[-1]
         # Load the samples metadata based on the split
         self.df = pd.read_json(
             self.dataset_dir / f"{split}.json",
@@ -295,21 +296,28 @@ class MultiSourceDataset(torch.utils.data.Dataset):
 
         return output
 
-    def normalize(self, context, values, source, dvar=None):
+    def normalize(self, context, values, source, dvar=None, denormalize=False):
         """Normalizes the context and values tensors associated with a given
         source, and optionally a specific data variable.
         Args:
             context (torch.Tensor): tensor of shape (n_context_vars,)
             values (torch.Tensor): tensor of shape (C, H, W) if dvar is None,
                 or (1, H, W) if dvar is specified.
-            source (Source): Source object representing the source.
+            source (Source or str): Source object representing the source, or name
+                of the source.
             dvar (str, optional): Name of a specific variable (ie channel) within
                 the source to normalize.
+            denormalize (bool, optional): If True, denormalize the context and values tensors
+                instead of normalizing them.
         Returns:
             normalized_context (torch.Tensor): normalized context.
             normalized_values (torch.Tensor): normalized values.
         """
-        source_name = source.name
+        if isinstance(source, Source):
+            source_name = source.name
+        else:
+            source_name = source
+            source = self.sources_dict[source_name]
         # Context normalization. There can be no context variables.
         if context is not None:
             context_means = np.array([self.context_means[cvar] for cvar in source.context_vars])
@@ -323,7 +331,10 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                 context_stds = np.repeat(context_stds, self._get_n_data_variables(source_name))
             context_means = torch.tensor(context_means, dtype=context.dtype)
             context_stds = torch.tensor(context_stds, dtype=context.dtype)
-            normalized_context = (context - context_means) / context_stds
+            if denormalize:
+                normalized_context = context * context_stds + context_means
+            else:
+                normalized_context = (context - context_means) / context_stds
         else:
             normalized_context = None
 
@@ -342,7 +353,10 @@ class MultiSourceDataset(torch.utils.data.Dataset):
             data_stds = self.data_stds[source_name][dvar]  # scalar value
         data_means = torch.tensor(data_means, dtype=values.dtype)
         data_stds = torch.tensor(data_stds, dtype=values.dtype)
-        normalized_values = (values - data_means) / data_stds
+        if denormalize:
+            normalized_values = values * data_stds + data_means
+        else:
+            normalized_values = (values - data_means) / data_stds
         return normalized_context, normalized_values
 
     def __len__(self):
