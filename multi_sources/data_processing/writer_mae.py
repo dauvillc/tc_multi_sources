@@ -23,18 +23,23 @@ class MultiSourceWriter(BasePredictionWriter):
     root_dir/targets/source_name/<batch_idx>.npy
     root_dir/outputs/source_name/<batch_idx>.npy
     Additionally, the file root_dir/info.csv is written with the following columns:
-    source_name, avail, batch_idx, index_in_batch, dt
+    source_name, avail, batch_idx, index_in_batch, dt, channels, spatial_shape.
     """
 
-    def __init__(self, root_dir, dt_max):
+    def __init__(self, root_dir, dt_max, dataset=None):
         """
         Args:
             root_dir (str or Path): The root directory where the predictions will be written.
             dt_max (pd.Timedelta): The maximum time delta in the dataset.
+            dataset (MultiSourceDataset, optional): Dataset object that includes a method
+                normalize(values, source_name, denorm=False) that can be used to denormalize the
+                values before writing them to disk. If None, the values will
+                not be denormalized.
         """
         super().__init__(write_interval="batch")
         self.root_dir = Path(root_dir)
         self.dt_max = dt_max
+        self.dataset = dataset
 
     def setup(self, trainer, pl_module, stage):
         self.root_dir.mkdir(parents=True, exist_ok=True)
@@ -112,6 +117,8 @@ class MultiSourceWriter(BasePredictionWriter):
                     "batch_idx": [batch_idx] * batch_size,
                     "index_in_batch": np.arange(batch_size),
                     "dt": dt,
+                    "channels": [targets.shape[1]] * batch_size,
+                    "spatial_shape": [targets.shape[2:]] * batch_size,
                 },
             )
             include_header = not info_file.exists()

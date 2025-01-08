@@ -4,6 +4,7 @@ for a given source.
 """
 
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
 from concurrent.futures import ProcessPoolExecutor
 from tqdm import tqdm
@@ -97,38 +98,59 @@ def display_batch(batch_info, batch_idx, targets, preds, results_dir):
     for idx in batch_indices:
         # Create a figure with two columns (target and prediction) and S rows
         fig, axes = plt.subplots(nrows=S, ncols=2, figsize=(10, 5 * S))
+        fig.suptitle(
+            f"Left: Targets - Right: Predictions - batch_idx={batch_idx}, idx={idx}", y=1.05
+        )
         for i, source in enumerate(sources):
             target_ds = targets[source]
             pred_ds = preds[source]
             if target_ds is not None:
-                target_sample = target_ds.isel(samples=idx)
-                lat = target_sample["lat"].values
-                lon = target_sample["lon"].values
-                target = target_sample["targets"].values[0]  # Assuming first channel
-
-                axes[i, 0].imshow(target, cmap="viridis")
-                axes[i, 0].set_title(f"{source} - target")
-
-                # Set axis ticks and labels
-                set_axis_ticks(axes[i, 0], lat, lon)
-
+                dt = pd.to_timedelta(batch_info["dt"].values[0])
+                axes[i, 0].set_title(f"{source} - dt={str(dt)}")
                 sample_info = batch_info[
                     (batch_info["source_name"] == source) & (batch_info["index_in_batch"] == idx)
                 ]
+                # Check the spatial shape of the sample. If it is an image (2d shape),
+                # display it.
+                sample_shape = sample_info["spatial_shape"].values[0]
+                if len(sample_shape) == 2:
+                    target_sample = target_ds.isel(samples=idx)
+                    lat = target_sample["lat"].values
+                    lon = target_sample["lon"].values
+                    target = target_sample["targets"].values[0]  # Display the first channel
+                    axes[i, 0].imshow(target, cmap="viridis")
 
-                if pred_ds is not None and sample_info["avail"].item() == 0:
-                    pred_sample = pred_ds.isel(samples=idx)
-                    pred = pred_sample["outputs"].values[0]  # Assuming first channel
+                    # Set axis ticks and labels
+                    set_axis_ticks(axes[i, 0], lat, lon)
 
-                    axes[i, 1].imshow(pred, cmap="viridis")
-                    axes[i, 1].set_title(f"pred. - dt={sample_info['dt'].item()}")
-                    set_axis_ticks(axes[i, 1], lat, lon)
+                    # The model only made a prediction when the sample was masked,
+                    # which corresponds to avail=0 (-1 for unavailable and 1 for available
+                    # but not masked).
+                    if pred_ds is not None and sample_info["avail"].item() == 0:
+                        pred_sample = pred_ds.isel(samples=idx)
+                        pred = pred_sample["outputs"].values[0]  # first channel
+
+                        axes[i, 1].imshow(pred, cmap="viridis")
+                        set_axis_ticks(axes[i, 1], lat, lon)
+                    else:
+                        axes[i, 1].set_title(f"Prediction not available")
                 else:
-                    axes[i, 1].set_title(f"{source} - prediction not available")
+                    # For scalar data, just display the target and prediction values
+                    # as text.
+                    target = target_ds.isel(samples=idx)["targets"].values  # (channels,)
+                    for j, value in enumerate(target):
+                        axes[i, 0].text(0.5, 0.5 - 0.1 * j, f"Channel {j}: {value}", ha="center")
+                    # Display the prediction if available
+                    if pred_ds is not None and sample_info["avail"].item() == 0:
+                        axes[i, 1].set_title(f"pred. - dt={str(dt)}")
+                        pred = pred_ds.isel(samples=idx)["outputs"].values
+                        for j, value in enumerate(pred):
+                            axes[i, 1].text(
+                                0.5, 0.5 - 0.1 * j, f"Channel {j}: {value}", ha="center"
+                            )
             else:
-                axes[i, 0].set_title(f"{source} - target not available")
-                axes[i, 1].set_title(f"{source} - prediction not available")
-        # Save the figure
+                axes[i, 0].set_title(f"{source} not available")
+            # Save the figure
         plt.tight_layout()
         plt.savefig(results_dir / f"{batch_idx}_{idx}.png")
         plt.close(fig)

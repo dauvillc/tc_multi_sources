@@ -60,6 +60,10 @@ def main(cfg: DictConfig):
     # Load the info dataframe written by the writer.
     info_df = pd.read_csv(info_filepath)
     info_df['dt'] = pd.to_timedelta(info_df['dt']).dt.round('min')
+    # Convert the "spatial_shape" from string to tuple
+    info_df["spatial_shape"] = info_df["spatial_shape"].apply(
+        lambda x: tuple(map(int, x.strip("()").split(", "))) if x != '()' else ()
+    )
     # Create the results directory
     results_dir = Path(cfg["paths"]["results"]) / run_id
     results_dir.mkdir(parents=True, exist_ok=True)
