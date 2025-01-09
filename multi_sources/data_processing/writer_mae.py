@@ -2,6 +2,7 @@
 
 import numpy as np
 import pandas as pd
+import torch
 from pathlib import Path
 from lightning.pytorch.callbacks import BasePredictionWriter
 import xarray as xr  # Import xarray
@@ -55,71 +56,88 @@ class MultiSourceWriter(BasePredictionWriter):
         # We'll write to the info file in append mode
         info_file = self.root_dir / "info.csv"
         for source_name, data in batch.items():
-            target_dir = self.targets_dir / source_name
-            target_dir.mkdir(parents=True, exist_ok=True)
-            targets = data['values'].detach().cpu().numpy()
-            # Append the lat/lon to the targets
-            latlon = data['coords'].detach().cpu().numpy()
-            dt = data['dt'].detach().cpu().numpy() * self.dt_max
-            # The dimensions of the Datasets we'll create depend on the
-            # dimensionality of the source.
-            if len(targets.shape) == 4:  # 2d sources -> (B, C, H, W)
-                dims = ("samples", "channels", "H", "W")
-                coord_dims = ("samples", "H", "W")
-            elif len(targets.shape) == 2:  # 0d sources -> (B, C)
-                dims = ("samples", "channels")
-                coord_dims = ("samples",)
-            # Create xarray Dataset for targets
-            targets_ds = xr.Dataset(
-                {
-                    "targets": (dims, targets),
-                },
-                coords={
-                    "samples": np.arange(targets.shape[0]),
-                    "lat": (coord_dims, latlon[:, 0]),
-                    "lon": (coord_dims, latlon[:, 1]),
-                    "dt": (("samples"), dt),
-                }
-            )
-            targets_ds.to_netcdf(target_dir / f"{batch_idx}.nc")
-
-            if source_name in pred:
-                # If no prediction was made for this source,
-                # skip it.
-                output_dir = self.outputs_dir / source_name
-                output_dir.mkdir(parents=True, exist_ok=True)
-                outputs = pred[source_name].detach().cpu().numpy()
-                # Create xarray Dataset for outputs
-                outputs_ds = xr.Dataset(
+            with torch.no_grad():
+                # If a dataset is provided, denormalize the values
+                if self.dataset is not None:
+                    device = data["values"].device
+                    _, targets = self.dataset.normalize(
+                        data["values"], source_name, denormalize=True, batched=True, device=device
+                    )
+                    if source_name in pred:
+                        _, pred[source_name] = self.dataset.normalize(
+                            pred[source_name],
+                            source_name,
+                            denormalize=True,
+                            batched=True,
+                            device=device,
+                        )
+                # WRITING TARGETS
+                target_dir = self.targets_dir / source_name
+                target_dir.mkdir(parents=True, exist_ok=True)
+                targets = targets.detach().cpu().numpy()
+                # Append the lat/lon to the targets
+                latlon = data["coords"].detach().cpu().numpy()
+                dt = data["dt"].detach().cpu().numpy() * self.dt_max
+                # The dimensions of the Datasets we'll create depend on the
+                # dimensionality of the source.
+                if len(targets.shape) == 4:  # 2d sources -> (B, C, H, W)
+                    dims = ("samples", "channels", "H", "W")
+                    coord_dims = ("samples", "H", "W")
+                elif len(targets.shape) == 2:  # 0d sources -> (B, C)
+                    dims = ("samples", "channels")
+                    coord_dims = ("samples",)
+                # Create xarray Dataset for targets
+                targets_ds = xr.Dataset(
                     {
-                        "outputs": (dims, outputs),
+                        "targets": (dims, targets),
                     },
                     coords={
-                        "samples": np.arange(outputs.shape[0]),
+                        "samples": np.arange(targets.shape[0]),
                         "lat": (coord_dims, latlon[:, 0]),
                         "lon": (coord_dims, latlon[:, 1]),
                         "dt": (("samples"), dt),
-                    }
+                    },
                 )
-                outputs_ds.to_netcdf(output_dir / f"{batch_idx}.nc")
+                targets_ds.to_netcdf(target_dir / f"{batch_idx}.nc")
 
-            batch_size = latlon.shape[0]
-            # We'll also save the time deltas of the samples. The deltas
-            # in data['dt'] are coded as a fraction between 0 and 1 of the
-            # maximum datetime in the dataset. We'll convert them into
-            # actual Timedeltas here.
-            dt = data['dt'].detach().cpu().numpy() * self.dt_max
-            dt = pd.Series(dt, name="dt")
-            info_df = pd.DataFrame(
-                {
-                    "source_name": [source_name] * batch_size,
-                    "avail": avail_tensors[source_name].detach().cpu().numpy(),
-                    "batch_idx": [batch_idx] * batch_size,
-                    "index_in_batch": np.arange(batch_size),
-                    "dt": dt,
-                    "channels": [targets.shape[1]] * batch_size,
-                    "spatial_shape": [targets.shape[2:]] * batch_size,
-                },
-            )
-            include_header = not info_file.exists()
+                # WRITING PREDICTIONS
+                if source_name in pred:
+                    # If no prediction was made for this source,
+                    # skip it.
+                    output_dir = self.outputs_dir / source_name
+                    output_dir.mkdir(parents=True, exist_ok=True)
+                    outputs = pred[source_name].detach().cpu().numpy()
+                    # Create xarray Dataset for outputs
+                    outputs_ds = xr.Dataset(
+                        {
+                            "outputs": (dims, outputs),
+                        },
+                        coords={
+                            "samples": np.arange(outputs.shape[0]),
+                            "lat": (coord_dims, latlon[:, 0]),
+                            "lon": (coord_dims, latlon[:, 1]),
+                            "dt": (("samples"), dt),
+                        },
+                    )
+                    outputs_ds.to_netcdf(output_dir / f"{batch_idx}.nc")
+
+                batch_size = latlon.shape[0]
+                # We'll also save the time deltas of the samples. The deltas
+                # in data['dt'] are coded as a fraction between 0 and 1 of the
+                # maximum datetime in the dataset. We'll convert them into
+                # actual Timedeltas here.
+                dt = data["dt"].detach().cpu().numpy() * self.dt_max
+                dt = pd.Series(dt, name="dt")
+                info_df = pd.DataFrame(
+                    {
+                        "source_name": [source_name] * batch_size,
+                        "avail": avail_tensors[source_name].detach().cpu().numpy(),
+                        "batch_idx": [batch_idx] * batch_size,
+                        "index_in_batch": np.arange(batch_size),
+                        "dt": dt,
+                        "channels": [targets.shape[1]] * batch_size,
+                        "spatial_shape": [targets.shape[2:]] * batch_size,
+                    },
+                )
+                include_header = not info_file.exists()
             info_df.to_csv(info_file, mode="a", header=include_header, index=False)
