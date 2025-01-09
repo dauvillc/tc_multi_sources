@@ -1,20 +1,21 @@
 tc_primed:
-  AMSR2_GCOMW1:
-    S4:
-      variables: ['TB_36.5H']
-  ATMS_NPP:
-    S2:
-      variables: ['TB_31.4QV']
-  GMI_GPM:
-    S1:
-      variables: ['TB_36.64H']
-  SSMIS_F16:
-    S2:
-      variables: ['TB_37.0H']
-  SSMIS_F17:
-    S2:
-      variables: ['TB_37.0H']
-  SSMIS_F18:
-    S2:
-      variables: ['TB_37.0H']
+  pmw:
+    AMSR2_GCOMW1:
+      S4:
+        variables: ['TB_36.5H']
+    ATMS_NPP:
+      S2:
+        variables: ['TB_31.4QV']
+    GMI_GPM:
+      S1:
+        variables: ['TB_36.64H']
+    SSMIS_F16:
+      S2:
+        variables: ['TB_37.0H']
+    SSMIS_F17:
+      S2:
+        variables: ['TB_37.0H']
+    SSMIS_F18:
+      S2:
+        variables: ['TB_37.0H']
 
