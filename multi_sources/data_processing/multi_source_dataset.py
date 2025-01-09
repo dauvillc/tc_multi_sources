@@ -4,6 +4,7 @@ import torch
 import pandas as pd
 import json
 import numpy as np
+import itertools
 from netCDF4 import Dataset
 from pathlib import Path
 from multi_sources.data_processing.source import Source
@@ -47,6 +48,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         include_seasons=None,
         exclude_seasons=None,
         data_augmentation=None,
+        dist_to_center_as_channel=False,
     ):
         """
         Args:
@@ -82,7 +84,10 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                 If None, no years are excluded.
             data_augmentation (None or MultiSourceDataAugmentation): If not None, instance
                 of MultiSourceDataAugmentation to apply to the data.
+            dist_to_center_as_channel (bool, optional): If True, include the distance to the center
+                of the storm as an additional channel in the data.
         """
+
         self.dataset_dir = Path(dataset_dir)
         self.constants_dir = self.dataset_dir / "constants"
         self.processed_dir = self.dataset_dir / "processed"
@@ -90,6 +95,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         self.dt_max = pd.Timedelta(dt_max, unit="h")
         self.single_channel_sources = single_channel_sources
         self.data_augmentation = data_augmentation
+        self.dist_to_center_as_channel = dist_to_center_as_channel
 
         print(f"{split}: Browsing requested sources and loading metadata...")
         # Load and merge individual source metadata files
@@ -115,6 +121,9 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         for source_name in self.variables_dict:
             # Isolate the variables to include for the source
             sources_metadata[source_name]["data_vars"] = self.variables_dict[source_name]
+            # (Maybe) include the distance to the center of the storm as a channel
+            if self.dist_to_center_as_channel:
+                sources_metadata[source_name]["data_vars"].append("dist_to_center")
             self.sources.append(Source(**sources_metadata[source_name]))
             self.sources_dict[source_name] = self.sources[-1]
         # Load the samples metadata based on the split
@@ -144,6 +153,24 @@ class MultiSourceDataset(torch.utils.data.Dataset):
             self.df = self.df[~self.df["season"].isin(exclude_seasons)]
         if len(self.df) == 0:
             raise ValueError("No elements available for the selected sources and seasons.")
+
+        # If we added the distance to the center as a channel, we need to fill in the context
+        # variables for this new channel. The context variables are the same for all channels
+        # of a source, so we'll use those and set their values to nan for the dist channel.
+        # The context variables are stored as columns of self.df. Each cell is a dict (yes)
+        # {var_name: value of the context variable for the sample} or nan if the context
+        # variable does not exist for that sample's source.
+        # Retrieve the list of all context variables (with a terrible one-liner)
+        all_context_vars = set(
+            [x for x in itertools.chain(*(s.context_vars for s in self.sources))]
+        )
+        # For every col in self.df corresponding to a context variable, modify every cell
+        # that is not NaN to add {"dist_to_center": np.nan} to the dict.
+        for cvar in all_context_vars:
+            self.df[cvar] = self.df[cvar].apply(
+                lambda x: {**x, "dist_to_center": np.nan} if not pd.isna(x) else x
+            )
+
         # ========================================================================================
         # We'll now filter the samples to only keep the ones where at least min_available_sources
         # sources are available.
@@ -296,12 +323,21 @@ class MultiSourceDataset(torch.utils.data.Dataset):
 
         return output
 
-    def normalize(self, values, source, context=None, dvar=None, denormalize=False):
+    def normalize(
+        self,
+        values,
+        source,
+        context=None,
+        dvar=None,
+        denormalize=False,
+        batched=False,
+        device=None,
+    ):
         """Normalizes the context and values tensors associated with a given
         source, and optionally a specific data variable.
         Args:
-            values (torch.Tensor): tensor of shape (C, H, W) if dvar is None,
-                or (1, H, W) if dvar is specified.
+            values (torch.Tensor): tensor of shape (C, ...) if dvar is None,
+                or (1, ...) if dvar is specified, where ... are the spatial dimensions.
             source (Source or str): Source object representing the source, or name
                 of the source.
             context (torch.Tensor, optiona): tensor of shape (n_context_vars,)
@@ -310,6 +346,9 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                 the source to normalize.
             denormalize (bool, optional): If True, denormalize the context and values tensors
                 instead of normalizing them.
+            batched (bool, optional): If True, the values tensor is expected to have
+                shape (B, C, ...), where B is the batch size.
+            device (torch.device, optional): Device to use for the normalization.
         Returns:
             normalized_context (torch.Tensor): normalized context.
             normalized_values (torch.Tensor): normalized values.
@@ -332,6 +371,10 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                 context_stds = np.repeat(context_stds, self._get_n_data_variables(source_name))
             context_means = torch.tensor(context_means, dtype=context.dtype)
             context_stds = torch.tensor(context_stds, dtype=context.dtype)
+            if device is not None:
+                context_means = context_means.to(device)
+                context_stds = context_stds.to(device)
+            # Denormalize or normalize based on the flag
             if denormalize:
                 normalized_context = context * context_stds + context_means
             else:
@@ -339,21 +382,25 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         else:
             normalized_context = None
 
-        # Values normalization
+        # Values normalization. The process depends on whether we're yielding
+        # multi-channel sources or not.
         if dvar is None:
             data_means = np.array(
                 [self.data_means[source_name][var] for var in source.data_vars]
             ).reshape(
-                -1, *(1 for _ in values.shape[1:])
+                -1, *(1 for _ in (values.shape[1:] if not batched else values.shape[2:]))
             )  # (C, 1, ...) like values
             data_stds = np.array(
                 [self.data_stds[source_name][var] for var in source.data_vars]
-            ).reshape(-1, *(1 for _ in values.shape[1:]))
+            ).reshape(-1, *(1 for _ in (values.shape[1:] if not batched else values.shape[2:])))
         else:
             data_means = self.data_means[source_name][dvar]  # scalar value
             data_stds = self.data_stds[source_name][dvar]  # scalar value
         data_means = torch.tensor(data_means, dtype=values.dtype)
         data_stds = torch.tensor(data_stds, dtype=values.dtype)
+        if device is not None:
+            data_means = data_means.to(device)
+            data_stds = data_stds.to(device)
         if denormalize:
             normalized_values = values * data_stds + data_means
         else:
