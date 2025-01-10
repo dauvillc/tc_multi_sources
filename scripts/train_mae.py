@@ -16,7 +16,7 @@ from multi_sources.data_processing.collate_fn import multi_source_collate_fn
 @hydra.main(version_base=None, config_path="../conf", config_name="train")
 def main(cfg: DictConfig):
     OmegaConf.register_new_resolver("eval", eval)
-    OmegaConf.register_new_resolver("nan", lambda : float("nan"))
+    OmegaConf.register_new_resolver("nan", lambda: float("nan"))
     cfg = OmegaConf.to_object(cfg)
     # If resume_run_id is in the config, load this run's cfg
     resume_run_id = cfg["resume_run_id"] if "resume_run_id" in cfg else None
@@ -27,10 +27,10 @@ def main(cfg: DictConfig):
         # For fields that define the experiment, use the values from the checkpoint:
         # - For the dataset, everything except the dataset_dir should come from the checkpoint.
         cfg["model"] = exp_cfg["model"]
-        for split, split_cfg in cfg['dataset'].items():
+        for split, split_cfg in cfg["dataset"].items():
             for key in split_cfg.keys():
-                if key != 'dataset_dir':
-                    split_cfg[key] = exp_cfg['dataset'][split][key]
+                if key != "dataset_dir":
+                    split_cfg[key] = exp_cfg["dataset"][split][key]
         # The lightning module parameters should come from the checkpoint
         cfg["lightning_module"] = exp_cfg["lightning_module"]
         # The user can change fields from the checkpoint by setting them under the "change"
@@ -42,8 +42,13 @@ def main(cfg: DictConfig):
     pl.seed_everything(cfg["seed"], workers=True)
     # Initialize Wandb and log the configuration
     if resume_run_id:
-        wandb.init(**cfg["wandb"], config=cfg, dir=cfg["paths"]["wandb_logs"], resume="allow",
-                   id=resume_run_id)
+        wandb.init(
+            **cfg["wandb"],
+            config=cfg,
+            dir=cfg["paths"]["wandb_logs"],
+            resume="allow",
+            id=resume_run_id
+        )
     else:
         wandb.init(**cfg["wandb"], config=cfg, dir=cfg["paths"]["wandb_logs"])
     # Create the logs directory if it does not exist
@@ -51,44 +56,34 @@ def main(cfg: DictConfig):
 
     # Create the training dataset and dataloader
     train_dataset = hydra.utils.instantiate(cfg["dataset"]["train"])
-    train_dataloader = DataLoader(train_dataset, **cfg["dataloader"], shuffle=True,
-                                  collate_fn=multi_source_collate_fn)
+    train_dataloader = DataLoader(
+        train_dataset, **cfg["dataloader"], shuffle=True, collate_fn=multi_source_collate_fn
+    )
     # Create the validation dataset and dataloader
     val_dataset = hydra.utils.instantiate(cfg["dataset"]["val"])
-    val_dataloader = DataLoader(val_dataset, **cfg["dataloader"], shuffle=False,
-                                collate_fn=multi_source_collate_fn)
+    val_dataloader = DataLoader(
+        val_dataset, **cfg["dataloader"], shuffle=False, collate_fn=multi_source_collate_fn
+    )
     print("Train dataset size:", len(train_dataset))
     print("Validation dataset size:", len(val_dataset))
 
-    source_names = train_dataset.get_source_names()
-    context_vars = train_dataset.get_source_types_context_vars()
     # Create the backbone
     backbone = instantiate(cfg["model"]["backbone"])
-    output_convs = None
-    if "output_conv" in cfg["model"] and cfg["model"]["output_conv"]:
-        # Instantiate one output conv per source
-        output_convs = {
-            source: instantiate(cfg["model"]["output_conv"]) for source in source_names
-        }
     # Create the lightning module
     if resume_run_id:
         lightning_module_class = get_class(cfg["lightning_module"]["_target_"])
         pl_module = lightning_module_class.load_from_checkpoint(
             checkpoint_path,
-            source_names=source_names,
+            sources=train_dataset.sources,
             backbone=backbone,
             cfg=cfg,
-            output_convs=output_convs,
-            context_variables=context_vars,
         )
     else:
         pl_module = instantiate(
             cfg["lightning_module"],
-            source_names,
+            train_dataset.sources,
             backbone,
             cfg,
-            output_convs=output_convs,
-            context_variables=context_vars,
         )
 
     # Create the logger

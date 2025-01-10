@@ -1,19 +1,20 @@
 # @package _global_
 defaults:
   - override /paths: jz
-  - override /sources: all_sources_test
+  - override /sources: sat_interp_37GHz_improved
   - override /lightning_module: mae
   - override /lr_scheduler: cosine_warmup_150epochs.yaml
 
 wandb:
-  name: all_sources
-  group: all_sources
+  name: sat_interp_37GHz_improved
+  group: 37GHz_improved
 
 dataset:
   train:
     dt_max: 6
-    min_available_sources: 3
+    min_available_sources: 2 
     single_channel_sources: false
+    dist_to_center_as_channel: true
   val:
     single_channel_sources: false
 

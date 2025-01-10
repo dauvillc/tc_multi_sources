@@ -2,7 +2,7 @@
 defaults:
   - override /paths: jz
   - override /sources: sat_to_ibtracs
-  - override /lightning_module: mae_reworked
+  - override /lightning_module: mae
   - override /lr_scheduler: cosine_warmup_150epochs.yaml
 
 wandb:
@@ -26,4 +26,4 @@ trainer:
 
 model:
   backbone:
-    _target_: multi_sources.models.backbone_reworked.MultisourceGeneralBackbone
+    _target_: multi_sources.models.backbone.MultisourceGeneralBackbone

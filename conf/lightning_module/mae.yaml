@@ -1,4 +1,4 @@
-_target_: multi_sources.structure.mae_reworked.MultisourceMAE
+_target_: multi_sources.structure.mae.MultisourceMAE
 patch_size: 16
 values_dim: ${model.values_dim}
 coords_dim: ${model.coords_dim}
