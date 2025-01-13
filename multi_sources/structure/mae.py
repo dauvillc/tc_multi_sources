@@ -21,10 +21,7 @@ from multi_sources.models.embedding_layers import (
     SupplementaryValuesEmbedding0d,
     SourceSpecificEmbedding0d,
 )
-from multi_sources.models.output_layers import (
-    SourceSpecificProjection2d,
-    SourceSpecificProjection0d,
-)
+from multi_sources.models.output_layers import SourcetypeProjection0d, SourcetypeProjection2d
 
 
 class MultisourceMAE(pl.LightningModule):
@@ -120,17 +117,18 @@ class MultisourceMAE(pl.LightningModule):
             )
 
         # Embedding and output projection layers
-        # Type embedding layers: one for each source type
+        # An embedding and an output layer for each source type
         # - We need to retrieve the list of each source type from the sources,
         #   as well as the number of context variables for each source type.
         self.sourcetypes_context_vars = {}
         self.sourcetype_embeddings = nn.ModuleDict()
+        self.sourcetype_output_projs = nn.ModuleDict()
         self.source_to_type = {source.name: source.type for source in sources}
         for source in sources:
             # Only create the embedding layer for that source type if it doesn't exist yet
             if source.type not in self.sourcetypes_context_vars:
                 self.sourcetypes_context_vars[source.type] = source.n_context_variables()
-                # Create the embedding layer for that source type depending on
+                # Create the layers for that source type depending on
                 # its dimensionality
                 if source.dim == 2:
                     self.sourcetype_embeddings[source.type] = SourcetypeEmbedding2d(
@@ -139,9 +137,20 @@ class MultisourceMAE(pl.LightningModule):
                         self.patch_size,
                         values_dim,
                     )
+                    self.sourcetype_output_projs[source.type] = SourcetypeProjection2d(
+                        source.n_data_variables(),
+                        source.n_context_variables(),
+                        self.patch_size,
+                        values_dim,
+                    )
                 elif source.dim == 0:
                     self.sourcetype_embeddings[source.type] = SourceSpecificEmbedding0d(
                         source.n_data_variables(),
+                        values_dim,
+                    )
+                    self.sourcetype_output_projs[source.type] = SourcetypeProjection0d(
+                        source.n_data_variables(),
+                        source.n_context_variables(),
                         values_dim,
                     )
             else:
@@ -164,19 +173,6 @@ class MultisourceMAE(pl.LightningModule):
         if has_0d_source:
             self.coords_embedding_0d = CoordinatesEmbedding0d(coords_dim)
             self.supp_embedding_0d = SupplementaryValuesEmbedding0d(values_dim)
-
-        # Output projection layers: one for each source
-        self.output_projs = nn.ModuleDict()
-        for source in sources:
-            if source.dim == 2:
-                # note: torch doesn't allow dots in keys of nn.ModuleDict, so we remove them
-                self.output_projs[remove_dots(source.name)] = SourceSpecificProjection2d(
-                    source.n_data_variables(), source.shape, self.patch_size, values_dim
-                )
-            elif source.dim == 0:
-                self.output_projs[remove_dots(source.name)] = SourceSpecificProjection0d(
-                    source.n_data_variables(), values_dim
-                )
 
         # learnable [MASK] token
         self.mask_token = nn.Parameter(torch.randn(1, 1, self.values_dim))
@@ -336,10 +332,19 @@ class MultisourceMAE(pl.LightningModule):
                 {source_name: tensor} where the tensor has shape (B, C, ...).
             avail_tensors (dict of str to tensor): The availability tensors for each source,
                 of shape (B,).
-        """  # Store reference to preprocessed data
+        """
+        # Save the shape of the tokens before they're embedded, so that we can
+        # later remove the padding.
+        spatial_shapes = {
+            source: data["values"].shape[2:]
+            for source, data in x.items()
+            if len(data["values"].shape) > 2
+        }
+        # Embed and mask the sources
         x = self.embed(x)
         x = self.mask(x)
 
+        # (Optionally) create the attention masks
         attn_masks = None
         if self.use_attention_masks:
             attn_masks = {}
@@ -349,11 +354,20 @@ class MultisourceMAE(pl.LightningModule):
                 attn_mask = attn_mask.view(B, 1).expand(B, L)
                 attn_masks[source] = attn_mask
 
+        # Run the transformer backbone
         pred = self.backbone(x, attn_masks)
-        pred = {
-            source: self.output_projs[source](v, tokens_shape=x[source]["tokens_shape"])
-            for source, v in pred.items()
-        }
+
+        # Output projections
+        for source, v in pred.items():
+            # Project from latent values space to output space using the output layer
+            # corresponding to the source type
+            pred[source] = self.sourcetype_output_projs[self.source_to_type[source]](
+                v, tokens_shape=x[source]["tokens_shape"]
+            )
+        # For 2D sources, remove the padding
+        for source, spatial_shape in spatial_shapes.items():
+            pred[source] = pred[source][:, :, :spatial_shape[0], :spatial_shape[1]]
+
         # Compute availability tensors just before returning
         avail_tensors = {source: data["avail"] for source, data in x.items()}
         return pred, avail_tensors

@@ -39,6 +39,15 @@ class SourceSpecificProjection2d(nn.Module):
             self.conv.weight, initializer=nn.init.kaiming_normal_, upscale_factor=patch_size
         )
         self.conv.weight.data.copy_(weight)
+        # Final Conv2d to reduce the artifacts
+        self.final_conv = nn.Conv2d(
+            in_channels=channels,
+            out_channels=channels,
+            kernel_size=3,
+            stride=1,
+            padding=1,
+            bias=False,
+        )
 
     def forward(self, x, tokens_shape):
         """
@@ -55,8 +64,64 @@ class SourceSpecificProjection2d(nn.Module):
         # Apply the subpixel deconvolution
         x = self.conv(x)  # (B, C * patch_size ** 2, w, h)
         x = self.pixel_shuffle(x)  # (B, C, H, W)
+        # Apply the final Conv2d to reduce the artifacts
+        x = self.final_conv(x)
         # Remove the potential padding that was added to the image
         x = x[:, :, : self.spatial_shape[0], : self.spatial_shape[1]]
+        return x
+
+
+class SourcetypeProjection2d(nn.Module):
+    """Projects the ViT output in latent space to the output space for multiple
+    2D sources sharing the same source type.
+    """
+
+    def __init__(self, channels, n_context_vars, patch_size, latent_dim):
+        """
+        Args:
+            channels (int): Number of channels in the 2D source type.
+            n_context_vars (int): Number of context variables for the source type.
+            patch_size (int): The size of each patch used in the embedding.
+            latent_dim (int): Dimension of the latent tokens from the ViT.
+        """
+        super().__init__()
+        self.patch_size = patch_size
+        self.norm = nn.LayerNorm(latent_dim)
+        self.conv = nn.Conv2d(
+            in_channels=latent_dim,
+            out_channels=channels * patch_size**2,
+            kernel_size=3,
+            stride=1,
+            padding=1,
+            bias=False,
+        )
+        self.pixel_shuffle = nn.PixelShuffle(patch_size)
+        self.final_conv = nn.Conv2d(
+            in_channels=channels,
+            out_channels=channels,
+            kernel_size=3,
+            stride=1,
+            padding=1,
+            bias=False,
+        )
+
+    def forward(self, x, tokens_shape, context_vars=None):
+        """
+        Args:
+            x (torch.Tensor): Latent tokens of shape (B, L, D).
+            tokens_shape (tuple of int): Shape for rearranging tokens, (width, height).
+            context_vars (torch.Tensor, optional): (B, n_context_vars) containing
+                context variables for each sample.
+        Returns:
+            torch.Tensor of shape (B, channels, H, W) containing the projected output.
+        """
+        x = self.norm(x)
+        # Transpose x from (B, L, D) to (B, D, w, h)
+        x = x.transpose(1, 2).view(x.size(0), -1, *tokens_shape)
+        # Deconvolve the latent space using subpixel convolutions
+        x = self.conv(x)
+        x = self.pixel_shuffle(x)  # (B, C, H, W)
+        x = self.final_conv(x)
         return x
 
 
@@ -89,4 +154,20 @@ class SourceSpecificProjection0d(nn.Module):
         x = self.norm(x[:, 0])  # (B, D)
         # Apply the linear layer
         x = self.linear(x)  # (B, C)
+        return x
+
+
+class SourcetypeProjection0d(nn.Module):
+    """Projects the ViT output in latent space to the output space for multiple
+    0D sources sharing the same source type.
+    """
+
+    def __init__(self, channels, n_context_vars, latent_dim):
+        super().__init__()
+        self.norm = nn.LayerNorm(latent_dim)
+        self.linear = nn.Linear(latent_dim, channels)
+
+    def forward(self, x, context_vars=None):
+        x = self.norm(x[:, 0])  # (B, D)
+        x = self.linear(x)      # (B, C)
         return x
