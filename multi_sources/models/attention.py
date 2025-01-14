@@ -29,18 +29,14 @@ class AttentionMap(nn.Module):
             pos_key: Tensor of shape (batch_size, num_keys, rel_pos_dim)
             pos_query: Tensor of shape (batch_size, num_queries, rel_pos_dim)
             mask: Tensor of shape (batch_size, num_keys) or (batch_size, heads, num_keys),
-                or None. Keys for which the mask is True will not be attended to.
+                or None. Keys for which the mask is False will not be attended to.
         Returns:
             Tensor of shape (batch_size, num_queries, num_keys)
         """
-        # Clamp the keys and queries to avoid numerical instability in the case where
-        # they are perfectly correlated.
-        keys, queries = keys.clamp(-5, 5), queries.clamp(-5, 5)
         dots = torch.matmul(queries, keys.transpose(-2, -1)) * self.scale
 
         # Optional relative positional encodings
         if self.relative_pos:
-            pos_key, pos_query = pos_key.clamp(-5, 5), pos_query.clamp(-5, 5)
             rel_pos_dots = torch.matmul(pos_query, pos_key.transpose(-2, -1)) * self.rel_pos_scale
             dots = dots + rel_pos_dots
         # Mask the columns of the attention map that correspond to the masked tokens.
@@ -50,7 +46,7 @@ class AttentionMap(nn.Module):
                 mask = mask.unsqueeze(1)
             elif dots.dim() == 4:
                 mask = mask.unsqueeze(1).unsqueeze(1)
-            dots = dots.masked_fill(mask, float("-inf"))
+            dots = dots.masked_fill(~mask, float("-inf"))
 
         return F.softmax(dots, dim=-1)
 

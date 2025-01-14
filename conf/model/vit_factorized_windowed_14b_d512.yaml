@@ -21,7 +21,7 @@ backbone:
         path: multi_sources.models.factorized_attention.SeparateWindowedValuesCoordinatesAttention
       inner_dim: 512
       window_size: 7
-      use_shifted_windows: false
+      shifted: false
       num_heads: 8
       dropout: ${model.dropout}
     spatial_attention_shifted:
@@ -30,12 +30,12 @@ backbone:
         path: multi_sources.models.factorized_attention.SeparateWindowedValuesCoordinatesAttention
       inner_dim: 512
       window_size: 7
-      use_shifted_windows: true
+      shifted: true
       num_heads: 8
       dropout: ${model.dropout}
     ff1:
       layer_class:
         _target_: hydra.utils.get_class
-        path: multi_sources.models.small_layers.FeedForward
+        path: multi_sources.models.small_layers.SwiGLU
       inner_dim: 512
       dropout: ${model.dropout}

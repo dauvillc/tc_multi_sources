@@ -3,9 +3,9 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import numpy as np
 from einops import rearrange
 from multi_sources.models.attention import ValuesCoordinatesAttentionInternal
-from multi_sources.models.window_utils import source_to_2D_windows, windows_2D_to_source
 
 
 class MultisourcesAnchoredCrossAttention(nn.Module):
@@ -73,9 +73,7 @@ class MultisourcesAnchoredCrossAttention(nn.Module):
             anchor_indices[source_name] = indices
         # Concatenate the anchor tokens from all sources;
         anchor_values = torch.cat([anchor_values[source_name] for source_name in inputs], dim=1)
-        anchor_coords = torch.cat(
-            [anchor_coords[source_name] for source_name in inputs], dim=1
-        )
+        anchor_coords = torch.cat([anchor_coords[source_name] for source_name in inputs], dim=1)
         if attention_mask is not None:
             anchor_masks = torch.cat([anchor_masks[source_name] for source_name in inputs], dim=1)
         else:
@@ -169,9 +167,7 @@ class MultisourcesAnchoredTemporalAttention(nn.Module):
             [anchor_values[source_name] for source_name in inputs], dim=1
         )  # (b, S, K, d)
         anchor_values = rearrange(anchor_values, "b S K d -> (b K) S d")
-        anchor_coords = torch.stack(
-            [anchor_coords[source_name] for source_name in inputs], dim=1
-        )
+        anchor_coords = torch.stack([anchor_coords[source_name] for source_name in inputs], dim=1)
         anchor_coords = rearrange(anchor_coords, "b S K d -> (b K) S d")
         if attention_mask is not None:
             anchor_masks = torch.stack(
@@ -184,7 +180,7 @@ class MultisourcesAnchoredTemporalAttention(nn.Module):
         out = self.attention(anchor_values, anchor_coords, anchor_masks)
         # Split back the sequences of anchor tokens to the sources;
         out = rearrange(out, "(b K) S d -> b K S d", K=self.num_anchor_points)
-        out = torch.split(out, 1, dim=2) # Tuple of S tensors of shape (b, K, 1, d)
+        out = torch.split(out, 1, dim=2)  # Tuple of S tensors of shape (b, K, 1, d)
         # Sum the output to the original tokens of each source;
         outputs = {}
         for i, (source_name, source_inputs) in enumerate(inputs.items()):
@@ -199,6 +195,9 @@ class MultisourcesAnchoredTemporalAttention(nn.Module):
         return outputs
 
 
+# Adapted from
+# https://medium.com/thedeephub/building-swin-transformer-from-scratch-using-pytorch-hierarchical
+# -vision-transformer-using-shifted-91cbf6abc678
 class SeparateWindowedValuesCoordinatesAttention(nn.Module):
     """Attention block that computes the attention over each source independently,
     using a spatial window over the tokens as in the Swin Transformer."""
@@ -211,7 +210,7 @@ class SeparateWindowedValuesCoordinatesAttention(nn.Module):
         num_heads=8,
         dropout=0.0,
         window_size=8,
-        use_shifted_windows=False,
+        shifted=0,
     ):
         """
         Args:
@@ -221,70 +220,121 @@ class SeparateWindowedValuesCoordinatesAttention(nn.Module):
             num_heads (int): Number of heads in the attention block.
             dropout (float): Dropout rate.
             window_size (int): Number of tokens included in each window.
-            use_shifted_windows (bool): Whether to shift the windows by half the window size.
+            shifted (bool): Whether to shift the windows by half the window size.
         """
         super().__init__()
+        self.values_dim = values_dim
+        self.coords_dim = coords_dim
+        self.inner_dim = inner_dim
+        self.head_dim = inner_dim // num_heads
+        self.num_heads = num_heads
         self.window_size = window_size
-        self.use_shifted_windows = use_shifted_windows
+        self.shifted = shifted
+        self.values_qkv = nn.Linear(values_dim, inner_dim * 3)
+        self.coords_qkv = nn.Linear(coords_dim, inner_dim * 2)  # No values for the coordinates
+        self.dropout = nn.Dropout(dropout)
 
-        self.attention = ValuesCoordinatesAttentionInternal(
-            values_dim, coords_dim, inner_dim, num_heads, dropout
+        self.pos_embeddings = nn.Parameter(torch.randn(window_size * 2 - 1, window_size * 2 - 1))
+        self.indices = torch.tensor(
+            np.array([[x, y] for x in range(window_size) for y in range(window_size)])
         )
+        self.relative_indices = self.indices[None, :, :] - self.indices[:, None, :]
+        self.relative_indices += self.window_size - 1
 
-    def forward(self, inputs, attention_mask=None):
+        self.output_proj = nn.Sequential(nn.Linear(inner_dim, values_dim), nn.Dropout(dropout))
+
+    def forward(self, x, attention_mask=None):
         """
         Args:
-            inputs (dict of str: dict of str: tensor): Dictionary of inputs, such that
-                inputs[source_name] contains the keys "embedded_coords" and "embedded_values",
+            x (dict of str: dict of str: tensor): Dictionary of inputs, such that
+                x[source_name] contains the keys "embedded_coords" and "embedded_values",
                 "tokens_shape".
-            attention_mask (dict of str: tensor): Dictionary of attention masks for each source,
-                such that attention_mask[source_name] has shape (b, n).
 
         Returns:
             dict of str: tensor: Dictionary of outputs, such that
                 outputs[source_name] contains the predicted values of the tokens.
         """
-        shift = self.window_size // 2 if self.use_shifted_windows else 0
-        # For each source, partition the values, coordinates and attention mask into windows.
-        values, coords, masks = [], [], []
-        for source_name, data in inputs.items():
-            source_values = data["embedded_values"]
-            source_coords = data["embedded_coords"]
-            source_mask = attention_mask[source_name] if attention_mask is not None else None
-            tokens_shape = data["tokens_shape"]
-            # Partitions the values, coordinates and the mask, and also sets mask = True
-            # where padding is added for the partitioning.
-            (source_values, source_coords), source_mask = source_to_2D_windows(
-                [source_values, source_coords],
-                tokens_shape,
-                self.window_size,
-                shift,
-                source_mask,
+        outputs = {}
+        for source_name, source_inputs in x.items():
+            # Apply the linear transformations to the values and coordinates
+            v = self.values_qkv(source_inputs["embedded_values"])
+            c = self.coords_qkv(source_inputs["embedded_coords"])
+            # Reshape to the original spatial layout of the tokens
+            h, w = source_inputs["tokens_shape"]
+            v = rearrange(v, "b (h w) (d k) -> b h w d k", h=h, w=w, k=3, d=self.values_dim)
+            c = rearrange(c, "b (h w) (d k) -> b h w d k", h=h, w=w, k=2, d=self.coords_dim)
+            # --> k=3 for queries, keys and values (no values for the coordinates)
+            # Pad the values and coordinates so that h and w are multiples of the window size
+            pad_h = (self.window_size - h % self.window_size) % self.window_size
+            pad_w = (self.window_size - w % self.window_size) % self.window_size
+            v = F.pad(v, (0, 0, 0, 0, 0, pad_w, 0, pad_h))
+            c = F.pad(c, (0, 0, 0, 0, 0, pad_w, 0, pad_h))
+            # Roll the windows if needed
+            if self.shifted:
+                v = torch.roll(v, (-self.window_size // 2, -self.window_size // 2), dims=(1, 2))
+                c = torch.roll(c, (-self.window_size // 2, -self.window_size // 2), dims=(1, 2))
+            # Reshape to windows and separate the heads
+            v = rearrange(
+                v,
+                "b (Wh w1) (Ww w2) (e H) k -> b H Wh Ww (w1 w2) e k",
+                w1=self.window_size,
+                w2=self.window_size,
+                H=self.num_heads,
             )
-            values.append(source_values)
-            coords.append(source_coords)
-            masks.append(source_mask)
-        # Save the size of each source along the batch dimension.
-        source_sizes = [v.shape[0] for v in values]
-        # Concatenate the windows from all sources.
-        values = torch.cat(values, dim=0)
-        coords = torch.cat(coords, dim=0)
-        masks = torch.cat(masks, dim=0)
-        # Feed the windows to the attention block.
-        att_out = self.attention(values, coords, masks)
-        # Split the attention output back to the sources.
-        att_out = torch.split(att_out, source_sizes, dim=0)
-        # Reconstruct the source from the windows.
-        out = {}
-        for source_name, source_out in zip(inputs.keys(), att_out):
-            # Reconstruct the source from the windows.
-            tokens_shape = inputs[source_name]["tokens_shape"]
-            out[source_name] = windows_2D_to_source(
-                [source_out], tokens_shape, self.window_size, shift
-            )[
-                0
-            ]  # Takes in and returns a list of tensors
-        return out
+            c = rearrange(
+                c,
+                "b (Wh w1) (Ww w2) (e H) k -> b H Wh Ww (w1 w2) e k",
+                w1=self.window_size,
+                w2=self.window_size,
+                H=self.num_heads,
+            )
+            # Compute the queries, keys and values
+            qv, kv, vv = v.chunk(3, dim=6)
+            qv, kv, vv = qv.squeeze(6), kv.squeeze(6), vv.squeeze(6)  # (b H Wh Ww w**2 d)
+            qc, kc = c.chunk(2, dim=6)
+            qc, kc = qc.squeeze(6), kc.squeeze(6)
+            # Matrix product for the queries and keys from the values and coordinates
+            dots = (qv @ kv.transpose(4, 5) + qc @ kc.transpose(4, 5)) / self.head_dim**0.5
+            # (b H Wh Ww w**2 w**2)
+            # Add the positional embeddings
+            dots += self.pos_embeddings[
+                self.relative_indices[:, :, 0], self.relative_indices[:, :, 1]
+            ]
+            # For shifted windows, compute the attention mask
+            if self.shifted:
+                row_mask = torch.zeros((self.window_size**2, self.window_size**2)).cuda()
+                row_mask[
+                    -self.window_size * (self.window_size // 2) :,
+                    0 : -self.window_size * (self.window_size // 2),
+                ] = float("-inf")
+                row_mask[
+                    0 : -self.window_size * (self.window_size // 2),
+                    -self.window_size * (self.window_size // 2) :,
+                ] = float("-inf")
+                column_mask = rearrange(
+                    row_mask,
+                    "(r w1) (c w2) -> (w1 r) (w2 c)",
+                    w1=self.window_size,
+                    w2=self.window_size,
+                )
+                dots[:, :, -1, :] += row_mask
+                dots[:, :, :, -1] += column_mask
+            # Deduce the attention weights
+            y = F.softmax(dots, dim=-1) @ vv  # (b H Wh Ww w**2 d)
+            # Reshape back to the original spatial layout of the tokens
+            y = rearrange(
+                y,
+                "b H Wh Ww (w1 w2) e -> b (Wh w1) (Ww w2) (H e)",
+                w1=self.window_size,
+                w2=self.window_size,
+                H=self.num_heads,
+            )
+            # Remove the padding
+            y = y[:, :h, :w, :]
+            # Reshape back to the original sequence layout
+            y = rearrange(y, "b h w d -> b (h w) d")
+            outputs[source_name] = self.output_proj(y)  # Back to values_dim
+        return outputs
 
 
 class SeparateValuesCoordinatesAttention(nn.Module):

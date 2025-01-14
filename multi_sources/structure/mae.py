@@ -55,7 +55,6 @@ class MultisourceMAE(pl.LightningModule):
         loss_max_distance_from_center,
         train_only_on_sources=[],
         exclude_sources_from_training=[],
-        use_attention_masks=False,
         normalize_coords_across_sources=True,
         metrics={},
     ):
@@ -80,8 +79,6 @@ class MultisourceMAE(pl.LightningModule):
             exclude_sources_from_training (list of str): If not empty, list of sources to exclude
                 from training. This means that at each training step, those sources will not be
                 masked and the model will not backpropagate on them.
-            use_attention_masks (bool): If True, the model will use attention masks to
-                ignore the tokens that are missing or masked.
             normalize_coords_across_sources (bool): If True, the coordinates of each source
                 will be normalized across all sources in the batch so that the minimum
                 latitude and longitude in each example is 0 and maximum is 1.
@@ -103,7 +100,6 @@ class MultisourceMAE(pl.LightningModule):
         self.loss_max_distance_from_center = loss_max_distance_from_center
         self.train_only_on_sources = train_only_on_sources
         self.exclude_sources_from_training = exclude_sources_from_training
-        self.use_attention_masks = use_attention_masks
         self.normalize_coords_across_sources = normalize_coords_across_sources
         self.cfg = cfg
         self.save_hyperparameters(ignore=["backbone", "metrics"])
@@ -329,18 +325,8 @@ class MultisourceMAE(pl.LightningModule):
         x = self.embed(x)
         x = self.mask(x)
 
-        # (Optionally) create the attention masks
-        attn_masks = None
-        if self.use_attention_masks:
-            attn_masks = {}
-            for source, data in x.items():
-                B, L = data["embedded_values"].shape[:2]
-                attn_mask = data["avail"] <= 0  # (B,)
-                attn_mask = attn_mask.view(B, 1).expand(B, L)
-                attn_masks[source] = attn_mask
-
         # Run the transformer backbone
-        pred = self.backbone(x, attn_masks)
+        pred = self.backbone(x)
 
         # Output projections
         for source, v in pred.items():

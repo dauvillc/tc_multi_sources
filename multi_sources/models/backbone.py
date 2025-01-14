@@ -53,14 +53,12 @@ class MultisourceGeneralBackbone(nn.Module):
                 )
             self.blocks.append(block)
 
-    def forward(self, x, attention_mask=None):
+    def forward(self, x):
         """
         Args:
             x (dict of str: dict of str: tensor): Dictionary of inputs, such that
                 inputs[source_name] contains the keys "embedded_coordinates",
                 "embedded_values" and "tokens_shape".
-            attention_mask (list): List of attention masks for each source,
-                of shape (b, n).
         Returns:
             dict of str: tensor: Dictionary of outputs, such that
                 outputs[source_name] contains the predicted values of the tokens.
@@ -69,7 +67,7 @@ class MultisourceGeneralBackbone(nn.Module):
             # Update the values via the successive layers
             for layer in block:
                 # Apply the layer and update the values
-                layer_otp = layer(x, attention_mask=attention_mask)
+                layer_otp = layer(x)
                 for source_name, source_output in layer_otp.items():
                     x[source_name]["embedded_values"] = source_output
 
