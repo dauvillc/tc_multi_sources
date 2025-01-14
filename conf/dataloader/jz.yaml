@@ -1,4 +1,4 @@
 # torch DataLoader kwargs
-num_workers: 8
+num_workers: ${hydra.job.cpus_per_task}
 batch_size: 16
 pin_memory: true
