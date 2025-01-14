@@ -360,6 +360,7 @@ class MultisourceMAE(pl.LightningModule):
                 f"{train_or_val}_loss_{source}",
                 loss,
                 on_epoch=True,
+                on_step=False,
                 sync_dist=True,
                 batch_size=batch_size,
             )
@@ -370,6 +371,7 @@ class MultisourceMAE(pl.LightningModule):
             loss,
             prog_bar=True,
             on_epoch=True,
+            on_step=False,
             sync_dist=True,
             batch_size=batch_size,
         )

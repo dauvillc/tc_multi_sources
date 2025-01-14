@@ -3,3 +3,4 @@ accelerator: gpu
 devices: 8
 precision: 16-mixed
 gradient_clip_val: 1.0
+ddp_find_unused_parameters: true

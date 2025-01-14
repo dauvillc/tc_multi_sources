@@ -18,9 +18,6 @@ dataset:
   val:
     single_channel_sources: false
 
-trainer:
-  strategy: ddp_find_unused_parameters_true
-
 model:
   backbone:
     _target_: multi_sources.models.backbone.MultisourceGeneralBackbone
