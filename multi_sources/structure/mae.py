@@ -15,10 +15,8 @@ from multi_sources.models.utils import (
 )
 from multi_sources.models.embedding_layers import (
     CoordinatesEmbedding2d,
-    SupplementaryValuesEmbedding2d,
     SourcetypeEmbedding2d,
     CoordinatesEmbedding0d,
-    SupplementaryValuesEmbedding0d,
     SourceSpecificEmbedding0d,
 )
 from multi_sources.models.output_layers import SourcetypeProjection0d, SourcetypeProjection2d
@@ -123,6 +121,7 @@ class MultisourceMAE(pl.LightningModule):
         self.sourcetypes_context_vars = {}
         self.sourcetype_embeddings = nn.ModuleDict()
         self.sourcetype_output_projs = nn.ModuleDict()
+        self.sourcetype_coords_embeddings = nn.ModuleDict()
         self.source_to_type = {source.name: source.type for source in sources}
         for source in sources:
             # Only create the embedding layer for that source type if it doesn't exist yet
@@ -133,15 +132,18 @@ class MultisourceMAE(pl.LightningModule):
                 if source.dim == 2:
                     self.sourcetype_embeddings[source.type] = SourcetypeEmbedding2d(
                         source.n_data_variables(),
-                        source.n_context_variables(),
                         self.patch_size,
                         values_dim,
                     )
                     self.sourcetype_output_projs[source.type] = SourcetypeProjection2d(
                         source.n_data_variables(),
-                        source.n_context_variables(),
                         self.patch_size,
                         values_dim,
+                    )
+                    self.sourcetype_coords_embeddings[source.type] = CoordinatesEmbedding2d(
+                        self.patch_size,
+                        coords_dim,
+                        source.n_context_variables(),
                     )
                 elif source.dim == 0:
                     self.sourcetype_embeddings[source.type] = SourceSpecificEmbedding0d(
@@ -150,29 +152,19 @@ class MultisourceMAE(pl.LightningModule):
                     )
                     self.sourcetype_output_projs[source.type] = SourcetypeProjection0d(
                         source.n_data_variables(),
-                        source.n_context_variables(),
                         values_dim,
+                    )
+                    self.sourcetype_coords_embeddings[source.type] = CoordinatesEmbedding0d(
+                        coords_dim,
                     )
             else:
                 # Check that the number of context variables is the same for all sources
                 # of the same type
                 if self.sourcetypes_context_vars[source.type] != source.n_context_variables():
                     raise ValueError(
-                        f"Number of context variables is not the same for all sources of type {source.type}"
+                        f"Number of context variables is not "
+                        "the same for all sources of type {source.type}"
                     )
-
-        # Check if any source is 2D and create the 2D embedding layers if required.
-        has_2d_source = any(len(source.shape) == 2 for source in sources)
-        if has_2d_source:
-            # Coordinates embedding, shared across sources
-            self.coords_embedding_2d = CoordinatesEmbedding2d(self.patch_size, coords_dim)
-            # Supplementary values embedding, also shared across sources
-            self.supp_embedding_2d = SupplementaryValuesEmbedding2d(self.patch_size, values_dim)
-        # Same for 0D sources
-        has_0d_source = any(source.dim == 0 for source in sources)
-        if has_0d_source:
-            self.coords_embedding_0d = CoordinatesEmbedding0d(coords_dim)
-            self.supp_embedding_0d = SupplementaryValuesEmbedding0d(values_dim)
 
         # learnable [MASK] token
         self.mask_token = nn.Parameter(torch.randn(1, 1, self.values_dim))
@@ -237,14 +229,8 @@ class MultisourceMAE(pl.LightningModule):
             # Embed the source's values
             source_type = self.source_to_type[source]
             v = self.sourcetype_embeddings[source_type](data)
-            # Fetch the right coords en supp embedding depending on the source's
-            # dimensionality
-            if len(data["coords"].shape) == 2:  # (B, C)
-                c = self.coords_embedding_0d(data)
-                supp = self.supp_embedding_0d(data)
-            elif len(data["coords"].shape) == 4:  # (B, C, H, W)
-                c = self.coords_embedding_2d(data)
-                supp = self.supp_embedding_2d(data)
+            # Embed the source's coordinates
+            c = self.sourcetype_coords_embeddings[source_type](data)
             # Save the layout of the tokens for the output projection. For example
             # a tokens_shape of (3, 2) means 3 tokens in the first dimension and 2 in the second.
             # That info is lost in the embedded sequences as they are flattened.
@@ -257,7 +243,6 @@ class MultisourceMAE(pl.LightningModule):
                 "avail": data["avail"],
                 "embedded_values": v,
                 "embedded_coords": c,
-                "embedded_supp": supp,
             }
         return output
 
@@ -366,7 +351,7 @@ class MultisourceMAE(pl.LightningModule):
             )
         # For 2D sources, remove the padding
         for source, spatial_shape in spatial_shapes.items():
-            pred[source] = pred[source][:, :, :spatial_shape[0], :spatial_shape[1]]
+            pred[source] = pred[source][:, :, : spatial_shape[0], : spatial_shape[1]]
 
         # Compute availability tensors just before returning
         avail_tensors = {source: data["avail"] for source, data in x.items()}

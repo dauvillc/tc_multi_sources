@@ -3,7 +3,6 @@ which can be used with custom blocks."""
 
 import torch
 import torch.nn as nn
-from multi_sources.models.utils import pair
 
 
 class MultisourceGeneralBackbone(nn.Module):
@@ -15,13 +14,12 @@ class MultisourceGeneralBackbone(nn.Module):
         coords_dim,
         values_dim,
         layers={},
-        sum_coords_to_values=False,
     ):
         """
         Args:
             n_blocks (int): number of blocks in the backbone.
             coords_dim (int): Embedding dimension for the coordinates of each source.
-            values_dim (int): Embedding dimension for the values of each source. 
+            values_dim (int): Embedding dimension for the values of each source.
             layers (dict): Dict defining the successive layers that compose the backbone,
                 as {layer_name: layer_kwargs}.
                 For each layer, the kwargs must include the key 'layer_class',
@@ -33,12 +31,9 @@ class MultisourceGeneralBackbone(nn.Module):
                 `forward(values_seq, coords_seq) -> values_seq`.
                 Each block in the backbone will be composed of these layers, in the order
                 they appear in the dict.
-            sum_coords_to_values (bool): Whether to sum the coordinates embeddings to the
-                values embeddings at the beginning of the backbone.
         """
         super().__init__()
         self.values_dim, self.coords_dim = values_dim, coords_dim
-        self.sum_coords_to_values = sum_coords_to_values
         # Build the successive blocks
         self.blocks = nn.ModuleList()
         for _ in range(n_blocks):
@@ -46,14 +41,14 @@ class MultisourceGeneralBackbone(nn.Module):
             for layer_name, layer_kwargs in layers.items():
                 layer_class = layer_kwargs["layer_class"]
                 kwargs = {k: v for k, v in layer_kwargs.items() if k != "layer_class"}
-                # Before each block, add a layer normalization for the values
-                # (the coordinates don't change between blocks, so no need to re-normalize them).
+                # Each layer is wrapped in an adaptive conditional normalization
+                # that applies the conditioning to the values embeddings based on the
+                # coordinates embeddings.
                 block.append(
-                    nn.ModuleList(
-                        [
-                            nn.LayerNorm(values_dim),
-                            layer_class(self.values_dim, self.coords_dim, **kwargs),
-                        ]
+                    AdapativeConditionalNormalization(
+                        layer_class(self.values_dim, self.coords_dim, **kwargs),
+                        self.values_dim,
+                        self.coords_dim,
                     )
                 )
             self.blocks.append(block)
@@ -63,48 +58,64 @@ class MultisourceGeneralBackbone(nn.Module):
         Args:
             x (dict of str: dict of str: tensor): Dictionary of inputs, such that
                 inputs[source_name] contains the keys "embedded_coordinates",
-                "embedded_values", "embedded_supp" and "tokens_shape".
+                "embedded_values" and "tokens_shape".
             attention_mask (list): List of attention masks for each source,
                 of shape (b, n).
         Returns:
             dict of str: tensor: Dictionary of outputs, such that
                 outputs[source_name] contains the predicted values of the tokens.
         """
-        # Apply the blocks with skip connections
         for block in self.blocks:
-            # Add supplementary embeddings at the start of each block if they exist
-            block_input = {}
-            for source_name, data in x.items():
-                block_input[source_name] = {k: v for k, v in data.items()}
-                if data.get("embedded_supp") is not None:
-                    block_input[source_name]["embedded_values"] = (
-                        data["embedded_values"] + data["embedded_supp"]
-                    )
-                else:
-                    block_input[source_name]["embedded_values"] = data["embedded_values"]
-
-            for norm, layer in block:
-                # Create new dict for normalized values
-                new_x = {}
-                for source_name, data in block_input.items():
-                    # Copy coordinates and shape
-                    new_x[source_name] = {
-                        "embedded_coords": data["embedded_coords"],
-                        "tokens_shape": data["tokens_shape"],
-                        "embedded_supp": data.get("embedded_supp"),
-                    }
-                    # Normalize the values
-                    new_x[source_name]["embedded_values"] = norm(data["embedded_values"])
-                
-                # Apply layer and add skip connection
-                new_values = layer(new_x, attention_mask=attention_mask)
-                for source_name, data in new_x.items():
-                    new_x[source_name]["embedded_values"] = (
-                        new_values[source_name] + block_input[source_name]["embedded_values"]
-                    )
-                block_input = new_x
-
-            x = block_input
+            # Update the values via the successive layers
+            for layer in block:
+                # Apply the layer and update the values
+                layer_otp = layer(x, attention_mask=attention_mask)
+                for source_name, source_output in layer_otp.items():
+                    x[source_name]["embedded_values"] = source_output
 
         # Return only the predicted values
         return {source_name: x[source_name]["embedded_values"] for source_name in x.keys()}
+
+
+class AdapativeConditionalNormalization(nn.Module):
+    """Wraps a torch module to apply adaptive conditional normalization."""
+
+    def __init__(self, module, input_dim, cond_dim):
+        super().__init__()
+        self.module = module
+        self.input_norm = nn.LayerNorm(input_dim)
+        self.cond_norm = nn.Sequential(nn.SiLU(), nn.Linear(cond_dim, input_dim * 3))
+        # Initialize the weights and biases of the normalization layer to zero,
+        # so that the conditioning has no effect at the beginning.
+        nn.init.constant_(self.cond_norm[-1].weight, 0)
+        nn.init.constant_(self.cond_norm[-1].bias, 0)
+
+    def forward(self, data, *args, **kwargs):
+        """Args:
+            data (dict of str: tensor): Dictionary of inputs, such that
+                data[source_name] contains the keys "embedded_coords" and
+                "embedded_values".
+            args, kwargs: Additional arguments for the wrapped module.
+        Returns:
+            dict of str: tensor: Dictionary of outputs, such that
+                outputs[source_name] contains the predicted values of the tokens,
+                of shape (B, L, D).
+        """
+        skips, gates = {}, {}
+        for source_name, source_data in data.items():
+            skip, cond = source_data["embedded_values"], source_data["embedded_coords"]
+            x = self.input_norm(skip)
+            shift, scale, gate = self.cond_norm(cond).chunk(3, dim=-1)
+            x = x * (scale + 1) + shift
+            # Save the module's input for that source
+            source_data["embedded_values"] = x
+            # Save the skip connection and gate for after the module
+            skips[source_name] = skip
+            gates[source_name] = gate
+        # Apply the wrapped module with the updated inputs
+        module_output = self.module(data, *args, **kwargs)
+        # Multiply by the gate and the skip connections
+        output = {}
+        for source_name, source_output in module_output.items():
+            output[source_name] = source_output * gates[source_name] + skips[source_name]
+        return module_output

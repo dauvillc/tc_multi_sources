@@ -69,70 +69,60 @@ class CoordinatesEmbedding2d(nn.Module):
     Made for 2D coordinates, which means that:
     * the coordinates tensor has shape (B, 3, H, W),
         for latitude, longitude sin and longitude cos.
+    * the land-sea mask tensor has shape (B, H, W).
     * the time delta tensor has shape (B,)
+    * Optional: context variables tensor has shape (B, n_context_vars).
     Patches of the input are separately embedded into tokens of shape (B, emb_dim)
     and concatenated into a sequence of shape (B, num_patches, emb_dim).
     The time coordinates are embedded using a linear layer and summed to the
     embedded spatial coordinates.
     """
 
-    def __init__(self, patch_size, emb_dim):
+    def __init__(self, patch_size, emb_dim, n_context_vars=0):
         """
         Args:
             patch_size (int): The size of the patches.
             emb_dim (int): The dimension of the embedding space.
+            n_context_vars (int): The number of context variables for the source type.
+                A value of 0 means that there are no context variables.
         """
         super().__init__()
         self.patch_size = patch_size
         self.emb_dim = emb_dim
-        self.coords_embedding = ConvPatchEmbedding2d(3, patch_size, emb_dim, norm=False)
+        self.coords_embedding = ConvPatchEmbedding2d(4, patch_size, emb_dim, norm=False)
         self.time_embedding = nn.Linear(1, emb_dim)
+        if n_context_vars > 0:
+            self.context_embedding = nn.Linear(n_context_vars, emb_dim)
         self.norm = nn.LayerNorm(emb_dim)
 
     def forward(self, data):
         """
         Args:
-            data (dict of str to torch.Tensor): A dictionary containing at least the following keys:
+            data (dict of str to torch.Tensor): A dict including at least the following keys:
             * coords : A tensor of shape (B, 3, H, W) containing the coordinates.
+            * landmask : A tensor of shape (B, H, W) containing the land-sea mask.
             * dt : A tensor of shape (B,) containing the time delta.
+            * optional: context_vars : A tensor of shape (B, n_context_vars) containing the
+                context variables for the source type.
         Returns:
             embedded_coords: torch.Tensor of shape (B, num_patches, emb_dim).
         """
-        coords, dt = data["coords"], data["dt"]
+        coords, landmask, dt = data["coords"], data["landmask"], data["dt"]
         B = coords.size(0)
         dt = dt.view(B, 1, 1)
         embedded_dt = self.time_embedding(dt)
+        # Concatenate the landmask to the coordinates
+        coords = torch.cat([coords, landmask.unsqueeze(1)], dim=1)
         embedded_coords = self.coords_embedding(coords)
         embedded_coords += embedded_dt
+        
+        if "context_vars" in data and data["context_vars"] is not None:
+            context_vars = data["context_vars"]
+            embedded_context = self.context_embedding(context_vars)
+            embedded_coords += embedded_context
+
         embedded_coords = self.norm(embedded_coords)
         return embedded_coords
-
-
-class SupplementaryValuesEmbedding2d(nn.Module):
-    """A module that embeds masks into a sequence of patches using
-    a 2D convolutional layer. Takes as input a land-sea mask and
-    embeds it into a sequence of patches.
-    """
-
-    def __init__(self, patch_size, emb_dim):
-        """
-        Args:
-            patch_size (int): The size of the patches.
-            emb_dim (int): The dimension of the embedding space.
-        """
-        super().__init__()
-        self.embedding = ConvPatchEmbedding2d(1, patch_size, emb_dim)
-
-    def forward(self, data):
-        """
-        Args:
-            data (dict of str to torch.Tensor): A dictionary containing at least:
-                * 'landmask': torch.Tensor of shape (B, H, W) containing the land-sea mask
-        Returns:
-            embedded_masks: torch.Tensor of shape (B, num_patches, emb_dim).
-        """
-        masks = data["landmask"].unsqueeze(1)  # (B, 1, H, W)
-        return self.embedding(masks)
 
 
 class SourceSpecificEmbedding2d(nn.Module):
@@ -186,21 +176,15 @@ class SourcetypeEmbedding2d(nn.Module):
 
     A source type is a set of sources that supposedly contain the same information
     but from different sources that may have different characteristics. For example,
-    microwave brightness temperatures from different satellites. A source type is
-    associated with a set of context variables, the same for all sources of the type.
-    Those describe more precisely the characteristics of the sources within the type,
-    for example the frequency of the microwave sensor or its ground resolution.
-    A source may include no context variables, if it only contains a single source (
-    e.g. "era5").
+    microwave brightness temperatures from different satellites.
 
     All sources in a given type must have the same channels, in the same order.
     """
 
-    def __init__(self, channels, n_context_vars, patch_size, values_dim):
+    def __init__(self, channels, patch_size, values_dim):
         """Args:
         channels (int): The number of channels in the source, not counting
             the availability mask.
-        n_context_vars (int): The number of context variables for the source type.
         patch_size (int): The size of the patches to be embedded.
         values_dim (int): The dimension of the embedding space for the values.
         """
@@ -210,9 +194,6 @@ class SourcetypeEmbedding2d(nn.Module):
         self.values_embedding = ConvPatchEmbedding2d(
             channels + 1, patch_size, values_dim, norm=False
         )
-        if n_context_vars > 0:
-            # Context embedding: embeds the context variables
-            self.context_embedding = LinearEmbedding(n_context_vars, values_dim, norm=False)
         self.norm = nn.LayerNorm(values_dim)
 
     def forward(self, data):
@@ -221,9 +202,6 @@ class SourcetypeEmbedding2d(nn.Module):
                 keys:
                 * 'values': torch.Tensor of shape (B, C, H, W) containing the pixels of the source.
                 * 'avail_mask': torch.Tensor of shape (B, H, W) containing the availability mask.
-                * 'context_vars': torch.Tensor of shape (B, n_context_vars) containing the context
-                    variables for the source type. Not included, or None if the source type has no
-                    context variables.
         Returns:
             embedded_values: torch.Tensor of shape (B, num_patches, values_dim).
         """
@@ -235,11 +213,6 @@ class SourcetypeEmbedding2d(nn.Module):
             avail_mask = data["avail_mask"].unsqueeze(1)
             values = torch.cat([values, avail_mask], dim=1)
             embedded_values = self.values_embedding(values)
-            # Embed the context variables if they exist
-            if "context_vars" in data and data["context_vars"] is not None:
-                context_vars = data["context_vars"]
-                embedded_context = self.context_embedding(context_vars)
-                embedded_values += embedded_context
             embedded_values = self.norm(embedded_values)
         return embedded_values
 
@@ -249,6 +222,7 @@ class CoordinatesEmbedding0d(nn.Module):
     Made for 0D coordinates, which means that:
     * the coordinates tensor has shape (B, 3),
         for latitude, longitude sin and longitude cos.
+    * the land-sea mask tensor has shape (B,).
     * the time delta tensor has shape (B,)
     The coordinates are embedded using a linear layer and summed to the
     embedded time delta.
@@ -261,7 +235,7 @@ class CoordinatesEmbedding0d(nn.Module):
         """
         super().__init__()
         self.emb_dim = emb_dim
-        self.coords_embedding = LinearEmbedding(3, emb_dim)
+        self.coords_embedding = LinearEmbedding(4, emb_dim)
         self.time_embedding = nn.Linear(1, emb_dim)
         self.norm = nn.LayerNorm(emb_dim)
 
@@ -274,39 +248,16 @@ class CoordinatesEmbedding0d(nn.Module):
         Returns:
             embedded_coords: torch.Tensor of shape (B, 1, emb_dim).
         """
-        coords, dt = data["coords"], data["dt"]
+        coords, landmask, dt = data["coords"], data["landmask"], data["dt"]
         B = coords.size(0)
         dt = dt.view(B, 1)
         embedded_dt = self.time_embedding(dt)  # (B, emb_dim)
+        # Concatenate the landmask to the coordinates
+        coords = torch.cat([coords, landmask.unsqueeze(1)], dim=1)  # (B, 4)
         embedded_coords = self.coords_embedding(coords)  # (B, emb_dim)
         embedded_coords += embedded_dt
         embedded_coords = self.norm(embedded_coords)  # (B, emb_dim)
         return embedded_coords.unsqueeze(1)  # (B, 1, emb_dim)
-
-
-class SupplementaryValuesEmbedding0d(nn.Module):
-    """Takes as input the land-sea mask at one point
-    and embeds it into a single token.
-    """
-
-    def __init__(self, emb_dim):
-        """
-        Args:
-            emb_dim (int): The dimension of the embedding space.
-        """
-        super().__init__()
-        self.embedding = LinearEmbedding(1, emb_dim)
-
-    def forward(self, data):
-        """
-        Args:
-            data (dict of str to torch.Tensor): A dictionary containing at least:
-                * 'landmask': torch.Tensor of shape (B,) containing the land-sea mask
-        Returns:
-            embedded_masks: torch.Tensor of shape (B, 1, emb_dim).
-        """
-        masks = data["landmask"].unsqueeze(1)  # (B, 1)
-        return self.embedding(masks).unsqueeze(1)  # (B, 1, emb_dim)
 
 
 class SourceSpecificEmbedding0d(nn.Module):

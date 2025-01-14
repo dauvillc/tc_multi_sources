@@ -76,11 +76,10 @@ class SourcetypeProjection2d(nn.Module):
     2D sources sharing the same source type.
     """
 
-    def __init__(self, channels, n_context_vars, patch_size, latent_dim):
+    def __init__(self, channels, patch_size, latent_dim):
         """
         Args:
             channels (int): Number of channels in the 2D source type.
-            n_context_vars (int): Number of context variables for the source type.
             patch_size (int): The size of each patch used in the embedding.
             latent_dim (int): Dimension of the latent tokens from the ViT.
         """
@@ -105,13 +104,11 @@ class SourcetypeProjection2d(nn.Module):
             bias=False,
         )
 
-    def forward(self, x, tokens_shape, context_vars=None):
+    def forward(self, x, tokens_shape):
         """
         Args:
             x (torch.Tensor): Latent tokens of shape (B, L, D).
             tokens_shape (tuple of int): Shape for rearranging tokens, (width, height).
-            context_vars (torch.Tensor, optional): (B, n_context_vars) containing
-                context variables for each sample.
         Returns:
             torch.Tensor of shape (B, channels, H, W) containing the projected output.
         """
@@ -162,12 +159,12 @@ class SourcetypeProjection0d(nn.Module):
     0D sources sharing the same source type.
     """
 
-    def __init__(self, channels, n_context_vars, latent_dim):
+    def __init__(self, channels, latent_dim):
         super().__init__()
         self.norm = nn.LayerNorm(latent_dim)
         self.linear = nn.Linear(latent_dim, channels)
 
-    def forward(self, x, context_vars=None):
+    def forward(self, x):
         x = self.norm(x[:, 0])  # (B, D)
         x = self.linear(x)      # (B, C)
         return x
