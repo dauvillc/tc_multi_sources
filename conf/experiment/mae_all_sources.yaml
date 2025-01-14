@@ -1,7 +1,7 @@
 # @package _global_
 defaults:
   - override /paths: jz
-  - override /sources: all_sources_test
+  - override /sources: all_sources
   - override /lightning_module: mae
   - override /lr_scheduler: cosine_warmup_150epochs.yaml
 
@@ -14,6 +14,7 @@ dataset:
     dt_max: 6
     min_available_sources: 3
     single_channel_sources: false
+    dist_to_center_as_channel: true
   val:
     single_channel_sources: false
 
