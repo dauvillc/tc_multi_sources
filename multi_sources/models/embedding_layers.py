@@ -102,7 +102,7 @@ class CoordinatesEmbedding2d(nn.Module):
             * coords : A tensor of shape (B, 3, H, W) containing the coordinates.
             * landmask : A tensor of shape (B, H, W) containing the land-sea mask.
             * dt : A tensor of shape (B,) containing the time delta.
-            * optional: context_vars : A tensor of shape (B, n_context_vars) containing the
+            * optional: context: A tensor of shape (B, n_context_vars) containing the
                 context variables for the source type.
         Returns:
             embedded_coords: torch.Tensor of shape (B, num_patches, emb_dim).
@@ -116,10 +116,10 @@ class CoordinatesEmbedding2d(nn.Module):
         embedded_coords = self.coords_embedding(coords)
         embedded_coords += embedded_dt
         
-        if "context_vars" in data and data["context_vars"] is not None:
-            context_vars = data["context_vars"]
+        if "context" in data and data["context"] is not None:
+            context_vars = data["context"]
             embedded_context = self.context_embedding(context_vars)
-            embedded_coords += embedded_context
+            embedded_coords += embedded_context.unsqueeze(1)
 
         embedded_coords = self.norm(embedded_coords)
         return embedded_coords

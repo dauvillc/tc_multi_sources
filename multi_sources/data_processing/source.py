@@ -36,7 +36,8 @@ class Source:
 
     def n_context_variables(self):
         """Returns the number of context variables in the source."""
-        return len(self.context_vars)
+        # Each context var is repeated for each data var
+        return len(self.context_vars) * self.n_data_variables()
 
     def __repr__(self):
         return f"Source(name={self.name}, \n\
