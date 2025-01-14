@@ -1,10 +1,10 @@
 defaults:
-  - paths: local
+  - paths: jz
   - wandb: default
   - sources: sat_interp_37GHz
   - dataset: default
   - data_augmentation: none
-  - dataloader: local
+  - dataloader: jz
   - lightning_module: mae
   - model: vit_69M
   - trainer: 1gpu
