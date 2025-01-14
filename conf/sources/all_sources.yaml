@@ -34,7 +34,7 @@ tc_primed:
       S2:
         variables: ['TB_37.0H']
   era5:
-    variables: ["pressure_msl", "u_wind_10m", "v_wind_10m", "sst"]
+    variables: ["pressure_msl", "u_wind_10m", "v_wind_10m"]
   infrared:
     variables: ['IRWIN']
 
