@@ -1,7 +1,5 @@
 import lightning.pytorch as pl
 import hydra
-import wandb
-import os
 import multi_sources
 from hydra.utils import get_class, instantiate
 from pathlib import Path
@@ -21,6 +19,8 @@ def main(cfg: DictConfig):
     cfg = OmegaConf.to_object(cfg)
     # If resume_run_id is in the config, load this run's cfg
     resume_run_id = cfg["resume_run_id"] if "resume_run_id" in cfg else None
+    # Create a random id for the run if it is not resuming
+    run_id = get_random_code() if not resume_run_id else resume_run_id
     if resume_run_id:
         exp_cfg, checkpoint_path = load_experiment_cfg_from_checkpoint(
             cfg["paths"]["checkpoints"], resume_run_id
@@ -76,13 +76,12 @@ def main(cfg: DictConfig):
 
     # Create the logs directory if it does not exist
     Path(cfg["paths"]["wandb_logs"]).mkdir(parents=True, exist_ok=True)
-    # Create a random id for the run if it is not resuming
-    run_id = get_random_code() if not resume_run_id else resume_run_id
     # Create the logger
     if resume_run_id:
         logger = WandbLogger(
             **cfg["wandb"],
             dir=cfg["paths"]["wandb_logs"],
+            save_dir=cfg["paths"]["wandb_logs"],
             log_model=False,
             config=cfg,
             id=resume_run_id,
@@ -90,7 +89,12 @@ def main(cfg: DictConfig):
         )
     else:
         logger = WandbLogger(
-            **cfg["wandb"], dir=cfg["paths"]["wandb_logs"], log_model=False, config=cfg, id=run_id
+            **cfg["wandb"],
+            log_model=False,
+            config=cfg,
+            id=run_id,
+            dir=cfg["paths"]["wandb_logs"],
+            save_dir=cfg["paths"]["wandb_logs"],
         )
     # Model checkpoint
     checkpoint_callback = ModelCheckpoint(
