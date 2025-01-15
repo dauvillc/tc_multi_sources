@@ -2,6 +2,7 @@
 
 import torch.nn as nn
 from multi_sources.models.icnr import ICNR
+from multi_sources.models.conv import ResNet
 
 
 class SourceSpecificProjection2d(nn.Module):
@@ -39,15 +40,8 @@ class SourceSpecificProjection2d(nn.Module):
             self.conv.weight, initializer=nn.init.kaiming_normal_, upscale_factor=patch_size
         )
         self.conv.weight.data.copy_(weight)
-        # Final Conv2d to reduce the artifacts
-        self.final_conv = nn.Conv2d(
-            in_channels=channels,
-            out_channels=channels,
-            kernel_size=3,
-            stride=1,
-            padding=1,
-            bias=False,
-        )
+        # Final CNN to reduce the artifacts
+        self.final_conv = ResNet(channels, 64, n_blocks=2)
 
     def forward(self, x, tokens_shape):
         """
@@ -95,6 +89,12 @@ class SourcetypeProjection2d(nn.Module):
             bias=False,
         )
         self.pixel_shuffle = nn.PixelShuffle(patch_size)
+        # Apply the ICNR initialization to the deconvolution
+        weight = ICNR(
+            self.conv.weight, initializer=nn.init.kaiming_normal_, upscale_factor=patch_size
+        )
+        self.conv.weight.data.copy_(weight)
+        # Final Conv2d to reduce the artifacts
         self.final_conv = nn.Conv2d(
             in_channels=channels,
             out_channels=channels,
