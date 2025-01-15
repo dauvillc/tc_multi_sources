@@ -7,7 +7,6 @@ import torch
 import torch.nn as nn
 import numpy as np
 from multi_sources.utils.scheduler import CosineAnnealingWarmupRestarts
-from multi_sources.utils.image_processing import patches_to_img
 from multi_sources.models.utils import (
     normalize_coords_across_sources,
     embed_coords_to_sincos,
@@ -56,6 +55,7 @@ class MultisourceMAE(pl.LightningModule):
         train_only_on_sources=[],
         exclude_sources_from_training=[],
         normalize_coords_across_sources=True,
+        predict_dist_to_center=True,
         metrics={},
     ):
         """
@@ -83,6 +83,8 @@ class MultisourceMAE(pl.LightningModule):
                 will be normalized across all sources in the batch so that the minimum
                 latitude and longitude in each example is 0 and maximum is 1.
                 If False, the coordinates will be normalized as sinusoïds.
+            predict_dist_to_center (bool): If True, adds the distance to the center of the storm
+                as a target channel. The distance is not given as input to the backbone.
             metrics (dict of str: callable): The metrics to compute during training and validation.
                 A metric should have the signature metric(y_pred, y_true) -> torch.Tensor.
         """
@@ -96,6 +98,7 @@ class MultisourceMAE(pl.LightningModule):
         self.coords_dim = coords_dim  # Changed from self.coordinates_dim
         self.lr_scheduler_kwargs = lr_scheduler_kwargs
         self.adamw_kwargs = adamw_kwargs
+        self.predict_dist_to_center = predict_dist_to_center
         self.metrics = metrics
         self.loss_max_distance_from_center = loss_max_distance_from_center
         self.train_only_on_sources = train_only_on_sources
@@ -123,15 +126,12 @@ class MultisourceMAE(pl.LightningModule):
             # Only create the embedding layer for that source type if it doesn't exist yet
             if source.type not in self.sourcetypes_context_vars:
                 self.sourcetypes_context_vars[source.type] = source.n_context_variables()
+                n_output_channels = source.n_data_variables()
+                n_output_channels += 1 if self.predict_dist_to_center else 0
                 # Create the layers for that source type depending on
                 # its dimensionality
                 if source.dim == 2:
                     self.sourcetype_embeddings[source.type] = SourcetypeEmbedding2d(
-                        source.n_data_variables(),
-                        self.patch_size,
-                        values_dim,
-                    )
-                    self.sourcetype_output_projs[source.type] = SourcetypeProjection2d(
                         source.n_data_variables(),
                         self.patch_size,
                         values_dim,
@@ -141,13 +141,18 @@ class MultisourceMAE(pl.LightningModule):
                         coords_dim,
                         source.n_context_variables(),
                     )
+                    self.sourcetype_output_projs[source.type] = SourcetypeProjection2d(
+                        n_output_channels,
+                        self.patch_size,
+                        values_dim,
+                    )
                 elif source.dim == 0:
                     self.sourcetype_embeddings[source.type] = SourceSpecificEmbedding0d(
                         source.n_data_variables(),
                         values_dim,
                     )
                     self.sourcetype_output_projs[source.type] = SourcetypeProjection0d(
-                        source.n_data_variables(),
+                        n_output_channels,
                         values_dim,
                     )
                     self.sourcetype_coords_embeddings[source.type] = CoordinatesEmbedding0d(
@@ -390,6 +395,14 @@ class MultisourceMAE(pl.LightningModule):
         losses = {}
         for source, true_data in y_true.items():
             B, C = true_data["values"].shape[:2]
+            # If also predicting the distance to the center, concatenate it to the true values
+            # after normalizing it. We can normalize by dividing by the max distance, which will
+            # make the distance values between 0 and 1.
+            if self.predict_dist_to_center:
+                normalized_dist = true_data["dist_to_center"] / self.loss_max_distance_from_center
+                true_data["values"] = torch.cat(
+                    [true_data["values"], normalized_dist.unsqueeze(1)], dim=1
+                )
             # We'll compute a mask M on the tokens of the source of shape (B, C, ...)
             # such that M[b, ...] = True if and only if the following conditions are met:
             # - The source was masked for the sample b (avail_tensors[b] == 0);
