@@ -1,0 +1,24 @@
+# @package _global_
+defaults:
+  - override /paths: jz
+  - override /dataloader: jz
+  - override /sources: sat_interp_89GHz
+  - override /lightning_module: mae
+  - override /lr_scheduler: cosine_warmup_150epochs.yaml
+
+wandb:
+  name: 89GHz
+  group: 89GHz
+
+dataset:
+  train:
+    dt_max: 6
+    min_available_sources: 2 
+    single_channel_sources: false
+    dist_to_center_as_channel: false
+  val:
+    single_channel_sources: false
+
+model:
+  backbone:
+    _target_: multi_sources.models.backbone.MultisourceGeneralBackbone
