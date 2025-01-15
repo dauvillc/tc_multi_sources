@@ -355,15 +355,6 @@ class MultisourceMAE(pl.LightningModule):
         # raise an error.
         if len(losses) == 0:
             raise ValueError("No tokens to compute the loss on")
-        for source, loss in losses.items():
-            self.log(
-                f"{train_or_val}_loss_{source}",
-                loss,
-                on_epoch=True,
-                on_step=False,
-                sync_dist=True,
-                batch_size=batch_size,
-            )
         # Compute the total loss
         loss = sum(losses.values()) / len(losses)
         self.log(
@@ -371,8 +362,7 @@ class MultisourceMAE(pl.LightningModule):
             loss,
             prog_bar=True,
             on_epoch=True,
-            on_step=False,
-            sync_dist=True,
+            on_step=True,
             batch_size=batch_size,
         )
 

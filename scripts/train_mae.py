@@ -45,12 +45,17 @@ def main(cfg: DictConfig):
     # Create the training dataset and dataloader
     train_dataset = hydra.utils.instantiate(cfg["dataset"]["train"])
     train_dataloader = DataLoader(
-        train_dataset, **cfg["dataloader"], shuffle=True, collate_fn=multi_source_collate_fn
+        train_dataset, **cfg["dataloader"], shuffle=True, collate_fn=multi_source_collate_fn,
+        drop_last=True,
     )
     # Create the validation dataset and dataloader
     val_dataset = hydra.utils.instantiate(cfg["dataset"]["val"])
     val_dataloader = DataLoader(
-        val_dataset, **cfg["dataloader"], shuffle=False, collate_fn=multi_source_collate_fn
+        val_dataset,
+        **cfg["dataloader"],
+        shuffle=False,
+        collate_fn=multi_source_collate_fn,
+        drop_last=True,
     )
     print("Train dataset size:", len(train_dataset))
     print("Validation dataset size:", len(val_dataset))
@@ -85,7 +90,7 @@ def main(cfg: DictConfig):
             log_model=False,
             config=cfg,
             id=resume_run_id,
-            resume="allow"
+            resume="allow",
         )
     else:
         logger = WandbLogger(
@@ -109,7 +114,7 @@ def main(cfg: DictConfig):
         logger=logger,
         log_every_n_steps=5,
         callbacks=[checkpoint_callback, LearningRateMonitor()],
-        **cfg["trainer"]
+        **cfg["trainer"],
     )
     # Train the model
     if resume_run_id:
