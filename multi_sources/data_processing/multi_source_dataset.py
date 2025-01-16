@@ -84,8 +84,6 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                 If None, no years are excluded.
             data_augmentation (None or MultiSourceDataAugmentation): If not None, instance
                 of MultiSourceDataAugmentation to apply to the data.
-            dist_to_center_as_channel (bool, optional): If True, include the distance to the center
-                of the storm as an additional channel in the data.
         """
 
         self.dataset_dir = Path(dataset_dir)
@@ -95,7 +93,6 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         self.dt_max = pd.Timedelta(dt_max, unit="h")
         self.single_channel_sources = single_channel_sources
         self.data_augmentation = data_augmentation
-        self.dist_to_center_as_channel = dist_to_center_as_channel
 
         print(f"{split}: Browsing requested sources and loading metadata...")
         # Load and merge individual source metadata files
@@ -121,9 +118,6 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         for source_name in self.variables_dict:
             # Isolate the variables to include for the source
             sources_metadata[source_name]["data_vars"] = self.variables_dict[source_name]
-            # (Maybe) include the distance to the center of the storm as a channel
-            if self.dist_to_center_as_channel:
-                sources_metadata[source_name]["data_vars"].append("dist_to_center")
             self.sources.append(Source(**sources_metadata[source_name]))
             self.sources_dict[source_name] = self.sources[-1]
         # Load the samples metadata based on the split
@@ -153,23 +147,6 @@ class MultiSourceDataset(torch.utils.data.Dataset):
             self.df = self.df[~self.df["season"].isin(exclude_seasons)]
         if len(self.df) == 0:
             raise ValueError("No elements available for the selected sources and seasons.")
-
-        # If we added the distance to the center as a channel, we need to fill in the context
-        # variables for this new channel. The context variables are the same for all channels
-        # of a source, so we'll use those and set their values to nan for the dist channel.
-        # The context variables are stored as columns of self.df. Each cell is a dict (yes)
-        # {var_name: value of the context variable for the sample} or nan if the context
-        # variable does not exist for that sample's source.
-        # Retrieve the list of all context variables (with a terrible one-liner)
-        all_context_vars = set(
-            [x for x in itertools.chain(*(s.context_vars for s in self.sources))]
-        )
-        # For every col in self.df corresponding to a context variable, modify every cell
-        # that is not NaN to add {"dist_to_center": np.nan} to the dict.
-        for cvar in all_context_vars:
-            self.df[cvar] = self.df[cvar].apply(
-                lambda x: {**x, "dist_to_center": np.nan} if not pd.isna(x) else x
-            )
 
         # ========================================================================================
         # We'll now filter the samples to only keep the ones where at least min_available_sources
