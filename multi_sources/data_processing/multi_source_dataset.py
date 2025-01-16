@@ -68,9 +68,11 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                         - data_means/stds.json: dictionaries containing the means and stds
                             for the data variables of the source.
             split (str): The split of the dataset to use. Must be one of "train", "val", or "test".
-            included_variables_dict (dict): A dictionary {source_name: list of variables}
-                containing the variables to include for each source. A source not in the
-                dictionary will not be included in the dataset.
+            included_variables_dict (dict): A dictionary
+                {source_name: (list of variables, list of input-only variables)}
+                containing the variables (i.e. channels) to include for each source.
+                Variables also included in the second list will be included in the yielded
+                data but will be flagged as input-only in the Source object.
             single_channel_sources (bool): If True, sources with multiple channels will
                 be split into multiple sources with a single channel each.
             dt_max (int): The maximum time delta between the elements returned for each source,
@@ -115,9 +117,11 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         }
 
         self.sources, self.sources_dict = [], {}
-        for source_name in self.variables_dict:
-            # Isolate the variables to include for the source
-            sources_metadata[source_name]["data_vars"] = self.variables_dict[source_name]
+        for source_name, (all_vars, input_only_vars) in self.variables_dict.items():
+            # Update the source metadata with the included variables
+            sources_metadata[source_name]["data_vars"] = all_vars
+            sources_metadata[source_name]["input_only_vars"] = input_only_vars
+            # Create the source object
             self.sources.append(Source(**sources_metadata[source_name]))
             self.sources_dict[source_name] = self.sources[-1]
         # Load the samples metadata based on the split

@@ -8,10 +8,10 @@ tc_primed:
         variables: ['TB_A89.0H']
     ATMS_NOAA20:
       S3:
-        variables: ['TB_88.2QH']
+        variables: ['TB_88.2QV']
     ATMS_NPP:
       S3:
-        variables: ['TB_88.2QH']
+        variables: ['TB_88.2QV']
     AMSUB_NOAA16:
       S1:
         variables: ['TB_89.0_0.9QV']
@@ -58,7 +58,8 @@ tc_primed:
       S4:
         variables: ['TB_91.665H']
   era5:
-    variables: ["pressure_msl", "u_wind_10m", "v_wind_10m"]
+    variables: ["pressure_msl", "u_wind_10m", "v_wind_10m", "sst"]
+    input_only: ["sst"]
   infrared:
     variables: ['IRWIN']
 

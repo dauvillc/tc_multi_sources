@@ -5,14 +5,19 @@ import numpy as np
 from concurrent.futures import ProcessPoolExecutor
 
 
-def _get_leaf_subsources(source_dict, path="", previous_vars=[]):
+def _get_leaf_subsources(source_dict, path="", previous_vars=[], previous_input_only=[]):
     """Returns the leaf subsources of a source dictionary."""
     # Recursivity stop condition: if no subsource key is found, return the source
     # with its varables as well as the previous ones. Replace
     # the dim key if it is already present.
-    subsource_keys = [key for key in source_dict.keys() if key != "variables"]
+    subsource_keys = [key for key in source_dict.keys() if key not in ["variables", "input_only"]]
     if not subsource_keys:
-        return {path: (previous_vars + source_dict.get("variables", []))}
+        return {
+            path: (
+                previous_vars + source_dict.get("variables", []),
+                previous_input_only + source_dict.get("input_only", []),
+            )
+        }
     # If there are subsource keys, call the function recursively on each subsource.
     returned_dict = {}
     for subsource_key in subsource_keys:
@@ -21,6 +26,7 @@ def _get_leaf_subsources(source_dict, path="", previous_vars=[]):
                 source_dict[subsource_key],
                 path + "_" + subsource_key,  # source_subsource_ ... _lastsubsource
                 previous_vars + source_dict.get("variables", []),
+                previous_input_only + source_dict.get("input_only", []),
             )
         )
     return returned_dict
@@ -28,15 +34,17 @@ def _get_leaf_subsources(source_dict, path="", previous_vars=[]):
 
 def read_variables_dict(variables_dict):
     """Reads the variables dictionary that specifies which variables should be
-    included from which source.
+    included from which source, as well as which variables are input-only.
     Args:
         variables_dict: dictionary with the following structure:
             {
                 "source1": {
                     "subsource1": {
                         "variables": ["var1", "var2", ...],
+                        "input_only": ["var1", "var2", ...],
                         "subsource2": {
                             "variables": ["var3", "var4", ...],
+                            "input_only": ["var3", "var4", ...],
                             ...
                         },
                         ...
@@ -50,8 +58,10 @@ def read_variables_dict(variables_dict):
             }
     Returns:
         A dictionary with the following structure:
+        variables_dict:
             {
-                "source1_subsource1_subsource2_..._lastsubsource": ["var1", "var2", ...],
+                "source1_subsource1_subsource2_..._lastsubsource":
+                    (["var1", "var2", ...], ['input_only_var_1', 'input_only_var_2', ...]),
                 ...
             }
     """

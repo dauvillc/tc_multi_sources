@@ -89,7 +89,7 @@ class MultisourceMAE(pl.LightningModule):
                 A metric should have the signature metric(y_pred, y_true) -> torch.Tensor.
         """
         super().__init__()
-        self.sources = sources
+        self.sources = {source.name: source for source in sources}
         self.source_names = [source.name for source in sources]
         self.backbone = backbone
         self.n_sources_to_mask = n_sources_to_mask
@@ -381,6 +381,8 @@ class MultisourceMAE(pl.LightningModule):
         """Computes the MSE between the predicted and true values. The loss is only computed
         on the masked tokens. If a max distance from the center is specified, the loss is also
         only computed for the tokens that are within this distance from the center.
+        Variables that have been tagged as input-only in their source are not considered
+        in the loss computation.
         Args:
             y_pred (dict of str to tensor): The predicted values of shape
                 (B, C, ...) for each source.
@@ -394,7 +396,7 @@ class MultisourceMAE(pl.LightningModule):
         """
         losses = {}
         for source, true_data in y_true.items():
-            B, C = true_data["values"].shape[:2]
+            B = true_data["values"].shape[0]  # Batch size
             # If also predicting the distance to the center, concatenate it to the true values
             # after normalizing it. We can normalize by dividing by the max distance, which will
             # make the distance values between 0 and 1.
@@ -403,6 +405,14 @@ class MultisourceMAE(pl.LightningModule):
                 true_data["values"] = torch.cat(
                     [true_data["values"], normalized_dist.unsqueeze(1)], dim=1
                 )
+            # Retrieve the mask of the output-enabled variables for the source,
+            # and exclude them from the predictions and true values.
+            output_vars = self.sources[source].get_output_variables_mask()  # (C,)
+            if self.predict_dist_to_center:
+                output_vars = output_vars + [True]  # Add the distance to the center
+            output_vars = torch.tensor(output_vars, device=true_data["values"].device)
+            true_data["values"] = true_data["values"][:, output_vars]
+            y_pred[source] = y_pred[source][:, output_vars]
             # We'll compute a mask M on the tokens of the source of shape (B, C, ...)
             # such that M[b, ...] = True if and only if the following conditions are met:
             # - The source was masked for the sample b (avail_tensors[b] == 0);
