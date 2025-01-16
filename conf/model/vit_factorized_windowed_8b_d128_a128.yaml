@@ -36,6 +36,6 @@ backbone:
     ff1:
       layer_class:
         _target_: hydra.utils.get_class
-        path: multi_sources.models.small_layers.SwiGLU
+        path: multi_sources.models.small_layers.FeedForward
       inner_dim: 256
       dropout: ${model.dropout}
