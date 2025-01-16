@@ -6,9 +6,25 @@ for a given source.
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+from string import Template
 from concurrent.futures import ProcessPoolExecutor
 from tqdm import tqdm
 from multi_sources.eval.abstract_evaluation_metric import AbstractMultisourceEvaluationMetric
+
+
+# A little code snippet from Shawn Chin & Peter Mortensen
+# https://stackoverflow.com/questions/8906926/formatting-timedelta-objects/8907269#8907269
+class DeltaTemplate(Template):
+    delimiter = "%"
+
+
+def strfdelta(tdelta, fmt):
+    """equivalent of strftime for timedelta objects"""
+    d = {"D": tdelta.days}
+    d["H"], rem = divmod(tdelta.seconds, 3600)
+    d["M"], d["S"] = divmod(rem, 60)
+    t = DeltaTemplate(fmt)
+    return t.substitute(**d)
 
 
 class VisualEvaluation(AbstractMultisourceEvaluationMetric):
@@ -105,11 +121,11 @@ def display_batch(batch_info, batch_idx, targets, preds, results_dir):
             target_ds = targets[source]
             pred_ds = preds[source]
             if target_ds is not None:
-                dt = pd.to_timedelta(batch_info["dt"].values[0])
-                axes[i, 0].set_title(f"{source} - dt={str(dt)}")
                 sample_info = batch_info[
                     (batch_info["source_name"] == source) & (batch_info["index_in_batch"] == idx)
                 ]
+                dt = pd.to_timedelta(sample_info["dt"].values[0])
+                axes[i, 0].set_title(f"{source} - dt={strfdelta(dt, '%D d%H h:%M min')}")
                 # Check the spatial shape of the sample. If it is an image (2d shape),
                 # display it.
                 sample_shape = sample_info["spatial_shape"].values[0]
@@ -142,7 +158,7 @@ def display_batch(batch_info, batch_idx, targets, preds, results_dir):
                         axes[i, 0].text(0.5, 0.5 - 0.1 * j, f"Channel {j}: {value}", ha="center")
                     # Display the prediction if available
                     if pred_ds is not None and sample_info["avail"].item() == 0:
-                        axes[i, 1].set_title(f"pred. - dt={str(dt)}")
+                        axes[i, 1].set_title(f"pred. - dt={strfdelta(dt, '%D days %H:%M')}")
                         pred = pred_ds.isel(samples=idx)["outputs"].values
                         for j, value in enumerate(pred):
                             axes[i, 1].text(
