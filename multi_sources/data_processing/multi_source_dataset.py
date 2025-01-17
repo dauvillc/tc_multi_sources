@@ -48,7 +48,6 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         include_seasons=None,
         exclude_seasons=None,
         data_augmentation=None,
-        dist_to_center_as_channel=False,
     ):
         """
         Args:

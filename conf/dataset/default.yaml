@@ -30,4 +30,3 @@ val:
   min_available_sources: ${dataset.train.min_available_sources}
   num_workers: ${dataset.train.num_workers}
   data_augmentation: null
-  dist_to_center_as_channel: ${dataset.train.dist_to_center_as_channel}
