@@ -27,6 +27,8 @@ class MultisourceGeneralBackbone(nn.Module):
                 to this class's constructor.
                 The class's constructor must be of the form
                 `layer_class(values_dim, coords_dim, **kwargs)`.
+                It can accept an argument 'block_idx' (int), which is the index of the block
+                in which the layer is applied.
                 The class's forward method must be of the form
                 `forward(values_seq, coords_seq) -> values_seq`.
                 Each block in the backbone will be composed of these layers, in the order
@@ -36,11 +38,12 @@ class MultisourceGeneralBackbone(nn.Module):
         self.values_dim, self.coords_dim = values_dim, coords_dim
         # Build the successive blocks
         self.blocks = nn.ModuleList()
-        for _ in range(n_blocks):
+        for block_idx in range(n_blocks):
             block = nn.ModuleList()
             for layer_name, layer_kwargs in layers.items():
                 layer_class = layer_kwargs["layer_class"]
                 kwargs = {k: v for k, v in layer_kwargs.items() if k != "layer_class"}
+                kwargs["block_idx"] = block_idx
                 # Each layer is wrapped in an adaptive conditional normalization
                 # that applies the conditioning to the values embeddings based on the
                 # coordinates embeddings.

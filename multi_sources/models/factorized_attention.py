@@ -16,7 +16,14 @@ class MultisourcesAnchoredCrossAttention(nn.Module):
     """
 
     def __init__(
-        self, values_dim, coords_dim, inner_dim, num_anchor_points, num_heads=8, dropout=0.0
+        self,
+        values_dim,
+        coords_dim,
+        inner_dim,
+        num_anchor_points,
+        num_heads=8,
+        dropout=0.0,
+        **kwargs
     ):
         """
         Args:
@@ -211,6 +218,8 @@ class SeparateWindowedValuesCoordinatesAttention(nn.Module):
         dropout=0.0,
         window_size=8,
         shifted=0,
+        block_idx=None,
+        **kwargs
     ):
         """
         Args:
@@ -221,6 +230,9 @@ class SeparateWindowedValuesCoordinatesAttention(nn.Module):
             dropout (float): Dropout rate.
             window_size (int): Number of tokens included in each window.
             shifted (bool): Whether to shift the windows by half the window size.
+            block_idx (int): Index of the block in the model. If specified, the shifting
+                will be determined by block_idx's parity: odd blocks shift the windows.
+                If not None, it overrides the shifted argument.
         """
         super().__init__()
         self.values_dim = values_dim
@@ -230,6 +242,9 @@ class SeparateWindowedValuesCoordinatesAttention(nn.Module):
         self.num_heads = num_heads
         self.window_size = window_size
         self.shifted = shifted
+        if block_idx is not None:  # Override the shifted argument if block_idx is specified
+            self.shifted = bool(block_idx % 2)
+
         self.values_qkv = nn.Linear(values_dim, inner_dim * 3)
         self.coords_qkv = nn.Linear(coords_dim, inner_dim * 2)  # No values for the coordinates
         self.dropout = nn.Dropout(dropout)
@@ -340,7 +355,7 @@ class SeparateWindowedValuesCoordinatesAttention(nn.Module):
 class SeparateValuesCoordinatesAttention(nn.Module):
     """Attention block that computes the attention over each source independently."""
 
-    def __init__(self, values_dim, coords_dim, inner_dim, num_heads=8, dropout=0.0):
+    def __init__(self, values_dim, coords_dim, inner_dim, num_heads=8, dropout=0.0, **kwargs):
         """
         Args:
             values_dim (int): Embedding dimension of the values.

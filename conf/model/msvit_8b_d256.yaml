@@ -1,0 +1,31 @@
+dropout: 0.0
+values_dim: 256
+coords_dim: 256
+backbone:
+  _target_: multi_sources.models.general_backbone.MultisourceGeneralBackbone
+  values_dim: ${lightning_module.coords_dim}
+  coords_dim: ${lightning_module.values_dim}
+  n_blocks: 8
+  layers:
+    cross_attention:
+      layer_class:
+        _target_: hydra.utils.get_class
+        path: multi_sources.models.factorized_attention.MultisourcesAnchoredCrossAttention
+      inner_dim: 256
+      num_anchor_points: 64
+      num_heads: 8
+      dropout: ${model.dropout}
+    spatial_attention:
+      layer_class:
+        _target_: hydra.utils.get_class
+        path: multi_sources.models.factorized_attention.SeparateWindowedValuesCoordinatesAttention
+      inner_dim: 256
+      window_size: 7
+      num_heads: 8
+      dropout: ${model.dropout}
+    ff1:
+      layer_class:
+        _target_: hydra.utils.get_class
+        path: multi_sources.models.small_layers.FeedForward
+      inner_dim: 256
+      dropout: ${model.dropout}
