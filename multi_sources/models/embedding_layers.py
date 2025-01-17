@@ -10,12 +10,14 @@ class LinearEmbedding(nn.Module):
     def __init__(self, input_dim, output_dim, norm=False):
         super(LinearEmbedding, self).__init__()
         self.embedding = nn.Linear(input_dim, output_dim)
+        self.act = nn.GELU()
         self.use_norm = norm
         if norm:
             self.ln = nn.LayerNorm(output_dim)
 
     def forward(self, x):
         x = self.embedding(x)
+        x = self.act(x)
         if self.use_norm:
             x = self.ln(x)
         return x
@@ -36,8 +38,9 @@ class ConvPatchEmbedding2d(nn.Module):
         """
         super().__init__()
         self.patch_size = patch_size
-        self.embedding = nn.Conv2d(
-            channels, emb_dim, kernel_size=self.patch_size, stride=self.patch_size
+        self.embedding = nn.Sequential(
+            nn.Conv2d(channels, emb_dim, kernel_size=self.patch_size, stride=self.patch_size),
+            nn.GELU(),
         )
         if norm:
             self.norm = nn.LayerNorm(emb_dim)
@@ -78,13 +81,14 @@ class CoordinatesEmbedding2d(nn.Module):
     embedded spatial coordinates.
     """
 
-    def __init__(self, patch_size, emb_dim, n_context_vars=0):
+    def __init__(self, patch_size, emb_dim, n_context_vars=0, mlp_ratio=4):
         """
         Args:
             patch_size (int): The size of the patches.
             emb_dim (int): The dimension of the embedding space.
             n_context_vars (int): The number of context variables for the source type.
                 A value of 0 means that there are no context variables.
+            mlp_ratio (int): The ratio of the hidden dimension of the feedforward layer.
         """
         super().__init__()
         self.patch_size = patch_size
@@ -93,6 +97,13 @@ class CoordinatesEmbedding2d(nn.Module):
         self.time_embedding = nn.Linear(1, emb_dim)
         if n_context_vars > 0:
             self.context_embedding = nn.Linear(n_context_vars, emb_dim)
+        # We apply a feedforward layer to the embeddings as those won't ever be modified
+        # in the backbone, thus we need some representation power here.
+        self.ff = nn.Sequential(
+            nn.Linear(emb_dim, emb_dim * mlp_ratio),
+            nn.GELU(),
+            nn.Linear(emb_dim * mlp_ratio, emb_dim),
+        )
         self.norm = nn.LayerNorm(emb_dim)
 
     def forward(self, data):
@@ -115,12 +126,13 @@ class CoordinatesEmbedding2d(nn.Module):
         coords = torch.cat([coords, landmask.unsqueeze(1)], dim=1)
         embedded_coords = self.coords_embedding(coords)
         embedded_coords += embedded_dt
-        
+
         if "context" in data and data["context"] is not None:
             context_vars = data["context"]
             embedded_context = self.context_embedding(context_vars)
             embedded_coords += embedded_context.unsqueeze(1)
 
+        embedded_coords = self.ff(embedded_coords)
         embedded_coords = self.norm(embedded_coords)
         return embedded_coords
 
@@ -228,15 +240,21 @@ class CoordinatesEmbedding0d(nn.Module):
     embedded time delta.
     """
 
-    def __init__(self, emb_dim):
+    def __init__(self, emb_dim, mlp_ratio=4):
         """
         Args:
             emb_dim (int): The dimension of the embedding space.
+            mlp_ratio (int): The ratio of the hidden dimension of the feedforward layer.
         """
         super().__init__()
         self.emb_dim = emb_dim
         self.coords_embedding = LinearEmbedding(4, emb_dim)
         self.time_embedding = nn.Linear(1, emb_dim)
+        self.ff = nn.Sequential(
+            nn.Linear(emb_dim, emb_dim * mlp_ratio),
+            nn.GELU(),
+            nn.Linear(emb_dim * mlp_ratio, emb_dim),
+        )
         self.norm = nn.LayerNorm(emb_dim)
 
     def forward(self, data):

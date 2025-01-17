@@ -86,6 +86,9 @@ class AdapativeConditionalNormalization(nn.Module):
         self.module = module
         self.input_norm = nn.LayerNorm(input_dim)
         self.cond_norm = nn.Sequential(nn.SiLU(), nn.Linear(cond_dim, input_dim * 3))
+        # Initialize the weights of the conditional normalization to zero (no effect)
+        nn.init.zeros_(self.cond_norm[1].weight)
+        nn.init.zeros_(self.cond_norm[1].bias)
 
     def forward(self, data, *args, **kwargs):
         """Args:

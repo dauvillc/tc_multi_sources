@@ -6,14 +6,21 @@ from .utils import pair
 
 class FeedForward(nn.Module):
     def __init__(
-        self, values_dim, coords_dim, inner_dim, dropout=0.0, act_layer=nn.GELU, **kwargs
+        self,
+        values_dim,
+        coords_dim,
+        inner_dim,
+        dropout=0.0,
+        act_layer=nn.GELU,
+        inner_ratio=2,
+        **kwargs
     ):
         super().__init__()
         self.net = nn.Sequential(
-            nn.Linear(values_dim, inner_dim),
+            nn.Linear(values_dim, inner_dim * inner_ratio),
             act_layer(),
             nn.Dropout(dropout),
-            nn.Linear(inner_dim, values_dim),
+            nn.Linear(inner_dim * inner_ratio, values_dim),
             nn.Dropout(dropout),
         )
 
