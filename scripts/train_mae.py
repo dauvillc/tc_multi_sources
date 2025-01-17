@@ -17,10 +17,12 @@ def main(cfg: DictConfig):
     OmegaConf.register_new_resolver("eval", eval)
     OmegaConf.register_new_resolver("nan", lambda: float("nan"))
     cfg = OmegaConf.to_object(cfg)
-    # If resume_run_id is in the config, load this run's cfg
     resume_run_id = cfg["resume_run_id"] if "resume_run_id" in cfg else None
     # Create a random id for the run if it is not resuming
     run_id = get_random_code() if not resume_run_id else resume_run_id
+    print("Run ID:", run_id)
+
+    # If resuming, load the experiment configuration from the checkpoint
     if resume_run_id:
         exp_cfg, checkpoint_path = load_experiment_cfg_from_checkpoint(
             cfg["paths"]["checkpoints"], resume_run_id
@@ -39,6 +41,7 @@ def main(cfg: DictConfig):
         if "change" in cfg:
             changed_cfg = cfg.pop("change")
             cfg = update(cfg, changed_cfg)
+
     # Seed everything
     pl.seed_everything(cfg["seed"], workers=True)
 
@@ -90,7 +93,7 @@ def main(cfg: DictConfig):
             log_model=False,
             config=cfg,
             id=resume_run_id,
-            resume="allow",
+            resume="must",
         )
     else:
         logger = WandbLogger(
