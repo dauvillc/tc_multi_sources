@@ -44,7 +44,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         dt_max=24,
         min_available_sources=2,
         num_workers=0,
-        select_most_recent=True,
+        select_most_recent=False,
         include_seasons=None,
         exclude_seasons=None,
         data_augmentation=None,
@@ -209,8 +209,12 @@ class MultiSourceDataset(torch.utils.data.Dataset):
             # Isolate the rows of sample_df corresponding to the right source
             # and where the time is less than or equal to t0
             df = sample_df[(sample_df["source_name"] == source_name) & (sample_df["time"] <= t0)]
-            # Sort by descending time so that the first row is the closest to t0
-            df = df.sort_values("time", ascending=False)
+            if self.select_most_recent:
+                # Sort by descending time so that the first row is the closest to t0
+                df = df.sort_values("time", ascending=False)
+            else:
+                # Shuffle the rows so that the first row is random
+                df = df.sample(frac=1)
             # Check that there is at least one element available for this source,
             # and that the time delta is within the acceptable range
             if len(df) > 0 and t0 - df["time"].iloc[0] < self.dt_max:
