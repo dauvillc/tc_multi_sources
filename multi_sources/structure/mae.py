@@ -54,7 +54,7 @@ class MultisourceMAE(pl.LightningModule):
         loss_max_distance_from_center,
         train_only_on_sources=[],
         exclude_sources_from_training=[],
-        normalize_coords_across_sources=True,
+        normalize_coords_across_sources=False,
         predict_dist_to_center=True,
         metrics={},
     ):
