@@ -41,7 +41,6 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         dataset_dir,
         split,
         included_variables_dict,
-        single_channel_sources=True,
         dt_max=24,
         min_available_sources=2,
         num_workers=0,
