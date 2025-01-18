@@ -31,8 +31,8 @@ class MultiSourceDataset(torch.utils.data.Dataset):
     - "values" is a tensor of shape (n_variables, H, W) containing the variables for the source.
 
     For a given storm S and reference time t0,
-    the dataset returns the element from each source that is closest
-    to t0 and between t0 and t0 - dt_max.
+    the dataset returns an element from each source that is between t0 and t0 - dt_max.
+    When multiple elements are available for a source, a random one is selected.
     If a source is not available for the storm S at time t0, it is not included in the sample.
     """
 
@@ -45,6 +45,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         dt_max=24,
         min_available_sources=2,
         num_workers=0,
+        select_most_recent=True,
         include_seasons=None,
         exclude_seasons=None,
         data_augmentation=None,
@@ -72,13 +73,13 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                 containing the variables (i.e. channels) to include for each source.
                 Variables also included in the second list will be included in the yielded
                 data but will be flagged as input-only in the Source object.
-            single_channel_sources (bool): If True, sources with multiple channels will
-                be split into multiple sources with a single channel each.
             dt_max (int): The maximum time delta between the elements returned for each source,
                 in hours.
             min_available_sources (int): The minimum number of sources that must be available
                 for a sample to be included in the dataset.
             num_workers (int): If > 1, number of workers to use for parallel loading of the data.
+            select_most_recent (bool): If True, selects the most recent element for each source
+                when multiple elements are available. If False, selects a random element.
             include_seasons (list of int): The years to include in the dataset.
                 If None, all years are included.
             exclude_seasons (list of int): The years to exclude from the dataset.
@@ -92,7 +93,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         self.processed_dir = self.dataset_dir / "processed"
         self.split = split
         self.dt_max = pd.Timedelta(dt_max, unit="h")
-        self.single_channel_sources = single_channel_sources
+        self.select_most_recent = select_most_recent
         self.data_augmentation = data_augmentation
 
         print(f"{split}: Browsing requested sources and loading metadata...")
@@ -234,69 +235,40 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                     LM = torch.tensor(load_nc_with_nan(ds["land_mask"]), dtype=torch.float32)
                     D = torch.tensor(load_nc_with_nan(ds["dist_to_center"]), dtype=torch.float32)
 
-                    if self.single_channel_sources:
-                        for dvar in source.data_vars:
-                            # Load the context variables for the given data variable
-                            if len(source.context_vars) == 0:
-                                CT = None
-                            else:
-                                context_df = df[source.context_vars].iloc[0]
-                                CT = np.array(
-                                    [context_df[cvar][dvar] for cvar in source.context_vars]
-                                )
-                                CT = torch.tensor(CT, dtype=torch.float32)
-                            # Load the data variable, yield it with shape (1, H, W)
-                            V = torch.tensor(
-                                load_nc_with_nan(ds[dvar]), dtype=torch.float32
-                            ).unsqueeze(0)
-                            # Normalize the context and values tensors
-                            CT, V = self.normalize(V, source, CT, dvar)
-                            output_entry = {
-                                "source_type": source_type,
-                                "dt": DT,
-                                "coords": C,
-                                "landmask": LM,
-                                "dist_to_center": D,
-                                "values": V,
-                            }
-                            if CT is not None:  # Don't include the context if it's empty
-                                output_entry["context"] = CT
-                            output[f"{source_name}_{dvar}"] = output_entry
+                    if len(source.context_vars) == 0:
+                        CT = None
                     else:
-                        if len(source.context_vars) == 0:
-                            CT = None
-                        else:
-                            # The context variables can be loaded from the sample dataframe.
-                            context_df = df[source.context_vars].iloc[0]
-                            # context_vars[cvar] is a dict {dvar: value} for each data variable dvar
-                            # of the source. We want to obtain a tensor of shape
-                            # (n_context_vars * n_data_vars,)
-                            CT = np.stack(
-                                [
-                                    np.array([context_df[cvar][dvar] for dvar in source.data_vars])
-                                    for cvar in source.context_vars
-                                ],
-                                axis=1,
-                            )  # (n_data_vars, n_context_vars)
-                            CT = torch.tensor(CT.flatten(), dtype=torch.float32)
-                        # Load the variables in the order specified in the source
-                        V = np.stack(
-                            [load_nc_with_nan(ds[var]) for var in source.data_vars], axis=0
-                        )
-                        V = torch.tensor(V, dtype=torch.float32)
-                        # Normalize the context and values tensors
-                        CT, V = self.normalize(V, source, CT)
-                        output_entry = {
-                            "source_type": source_type,
-                            "dt": DT,
-                            "coords": C,
-                            "landmask": LM,
-                            "dist_to_center": D,
-                            "values": V,
-                        }
-                        if CT is not None:  # Don't include the context if it's empty
-                            output_entry["context"] = CT
-                        output[source_name] = output_entry
+                        # The context variables can be loaded from the sample dataframe.
+                        context_df = df[source.context_vars].iloc[0]
+                        # context_vars[cvar] is a dict {dvar: value} for each data variable dvar
+                        # of the source. We want to obtain a tensor of shape
+                        # (n_context_vars * n_data_vars,)
+                        CT = np.stack(
+                            [
+                                np.array([context_df[cvar][dvar] for dvar in source.data_vars])
+                                for cvar in source.context_vars
+                            ],
+                            axis=1,
+                        )  # (n_data_vars, n_context_vars)
+                        CT = torch.tensor(CT.flatten(), dtype=torch.float32)
+                    # Load the variables in the order specified in the source
+                    V = np.stack(
+                        [load_nc_with_nan(ds[var]) for var in source.data_vars], axis=0
+                    )
+                    V = torch.tensor(V, dtype=torch.float32)
+                    # Normalize the context and values tensors
+                    CT, V = self.normalize(V, source, CT)
+                    output_entry = {
+                        "source_type": source_type,
+                        "dt": DT,
+                        "coords": C,
+                        "landmask": LM,
+                        "dist_to_center": D,
+                        "values": V,
+                    }
+                    if CT is not None:  # Don't include the context if it's empty
+                        output_entry["context"] = CT
+                    output[source_name] = output_entry
         # (Optional) Data augmentation
         if isinstance(self.data_augmentation, MultisourceDataAugmentation):
             output = self.data_augmentation(output)
@@ -424,12 +396,6 @@ class MultiSourceDataset(torch.utils.data.Dataset):
 
     def get_source_names(self):
         """Returns a list of the source names, including the split sources if needed."""
-        if self.single_channel_sources:
-            return [
-                f"{source_name}_{var}"
-                for source_name in self._get_source_names()
-                for var in self.source_variables[source_name]
-            ]
         return self.source_names
 
     def get_n_sources(self):
@@ -455,11 +421,4 @@ class MultiSourceDataset(torch.utils.data.Dataset):
 
     def get_n_context_variables(self):
         """Returns a dict {source_name: number of context variables}."""
-        if self.single_channel_sources:
-            return {
-                f"{source.name}_{var}": source.n_context_variables()
-                for source in self.sources
-                for var in source.variables
-            }
-        else:
-            return self._get_n_context_variables()
+        return self._get_n_context_variables()
