@@ -13,10 +13,7 @@ wandb:
 dataset:
   train:
     dt_max: 6
-    min_available_sources: 2 
-    single_channel_sources: false
-  val:
-    single_channel_sources: false
+    min_available_sources: 2
 
 model:
   backbone:

@@ -13,9 +13,6 @@ dataset:
   train:
     dt_max: 48
     min_available_sources: 3
-    single_channel_sources: false
-  val:
-    single_channel_sources: false
 
 model:
   backbone:
