@@ -14,6 +14,10 @@ train:
   min_available_sources: ???
   # Number of workers for the data loading
   num_workers: ${dataloader.num_workers}
+  # By default, don't drop any sources
+  randomly_drop_sources: {}
+  # By default, don't select the most recent sources
+  select_most_recent: false
   data_augmentation: ${data_augmentation}
 
 # Validation dataset
@@ -27,4 +31,6 @@ val:
   dt_max: ${dataset.train.dt_max}
   min_available_sources: ${dataset.train.min_available_sources}
   num_workers: ${dataset.train.num_workers}
+  randomly_drop_sources: ${dataset.train.randomly_drop_sources}
+  select_most_recent: ${dataset.train.select_most_recent}
   data_augmentation: null

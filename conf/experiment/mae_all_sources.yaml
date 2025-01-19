@@ -13,6 +13,11 @@ dataset:
   train:
     dt_max: 48
     min_available_sources: 3
+    # ERA5 and infrared are nearly always available, so we'll drop them
+    # 50% of the time so that the model can still learn to do without them
+    randomly_drop_sources:
+      tc_primed_era5: 0.5
+      tc_primed_infrared: 0.5
 
 model:
   backbone:

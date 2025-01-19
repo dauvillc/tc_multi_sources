@@ -4,7 +4,7 @@ import torch
 import pandas as pd
 import json
 import numpy as np
-import itertools
+from random import shuffle
 from netCDF4 import Dataset
 from pathlib import Path
 from multi_sources.data_processing.source import Source
@@ -47,7 +47,9 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         select_most_recent=False,
         include_seasons=None,
         exclude_seasons=None,
+        randomly_drop_sources={},
         data_augmentation=None,
+        seed=42,
     ):
         """
         Args:
@@ -83,8 +85,13 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                 If None, all years are included.
             exclude_seasons (list of int): The years to exclude from the dataset.
                 If None, no years are excluded.
+            randomly_drop_sources (dict of str to float): A dictionary {source_name: p}
+                where p is the probability of dropping the source from the sample when
+                it is available. A source cannot be dropped if it would result in a sample
+                with less than min_available_sources sources.
             data_augmentation (None or MultiSourceDataAugmentation): If not None, instance
                 of MultiSourceDataAugmentation to apply to the data.
+            seed (int): The seed to use for the random number generator.
         """
 
         self.dataset_dir = Path(dataset_dir)
@@ -93,7 +100,10 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         self.split = split
         self.dt_max = pd.Timedelta(dt_max, unit="h")
         self.select_most_recent = select_most_recent
+        self.min_available_sources = min_available_sources
+        self.randomly_drop_sources = randomly_drop_sources
         self.data_augmentation = data_augmentation
+        self.rng = np.random.default_rng(seed)
 
         print(f"{split}: Browsing requested sources and loading metadata...")
         # Load and merge individual source metadata files
@@ -169,7 +179,16 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         #   that defines a sample for which at least min_available_sources sources are available.
         mask = available_sources_count >= min_available_sources
         self.reference_df = self.df[mask][["sid", "time"]]
+        self.reference_df["n_available_sources"] = available_sources_count[mask]
         self.reference_df = self.reference_df.drop_duplicates().reset_index(drop=True)
+
+        # ========================================================================================
+        # Pre-computation to speed up the data loading
+        # Map {sid: subset of self.df}
+        print(f"{split}: Pre-computing the sid to dataframe mapping...")
+        self.sid_to_df = {}
+        for sid in self.reference_df["sid"].unique():
+            self.sid_to_df[sid] = self.df[self.df["sid"] == sid]
 
         # ========================================================================================
         # Load the data means and stds
@@ -199,25 +218,44 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         sample = self.reference_df.iloc[idx]
         sid, t0 = sample["sid"], sample["time"]
         # Isolate the rows of self.df corresponding to the sample sid
-        sample_df = self.df[self.df["sid"] == sid]
-
+        sample_df = self.sid_to_df[sid]
+        # Will count the number of sources available for the sample
+        n_sources_available = sample["n_available_sources"]
         # For each source, try to load the element at the given time
         output = {}
-        for source in self.sources:
+        # If we're randomly dropping sources, shuffle the sources so that
+        # the probability of being dropped is uniform (as dropping source A
+        # may prevent source B from being dropped).
+        iterator = self.sources
+        if self.randomly_drop_sources:
+            iterator = [self.sources[i] for i in self.rng.permutation(len(self.sources))]
+        for source in iterator:  # Source objects
             source_name = source.name
             source_type = source.type
+            # Random dropping: check if the source should be dropped
+            if (source_name in self.randomly_drop_sources) and (
+                n_sources_available > self.min_available_sources
+            ):
+                p = self.randomly_drop_sources[source_name]
+                if np.random.rand() < p:
+                    # Skip the source
+                    continue
+
             # Isolate the rows of sample_df corresponding to the right source
-            # and where the time is less than or equal to t0
-            df = sample_df[(sample_df["source_name"] == source_name) & (sample_df["time"] <= t0)]
+            # and where the time is between t0 and t0 - dt_max
+            df = sample_df[
+                (sample_df["source_name"] == source_name)
+                & (sample_df["time"] <= t0)
+                & (t0 - sample_df["time"] < self.dt_max)
+            ]
             if self.select_most_recent:
                 # Sort by descending time so that the first row is the closest to t0
                 df = df.sort_values("time", ascending=False)
             else:
                 # Shuffle the rows so that the first row is random
                 df = df.sample(frac=1)
-            # Check that there is at least one element available for this source,
-            # and that the time delta is within the acceptable range
-            if len(df) > 0 and t0 - df["time"].iloc[0] < self.dt_max:
+            # Check that there is at least one element available for this source
+            if len(df) > 0:
                 time = df["time"].iloc[0]
                 dt = t0 - time
                 DT = torch.tensor(
@@ -255,9 +293,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                         )  # (n_data_vars, n_context_vars)
                         CT = torch.tensor(CT.flatten(), dtype=torch.float32)
                     # Load the variables in the order specified in the source
-                    V = np.stack(
-                        [load_nc_with_nan(ds[var]) for var in source.data_vars], axis=0
-                    )
+                    V = np.stack([load_nc_with_nan(ds[var]) for var in source.data_vars], axis=0)
                     V = torch.tensor(V, dtype=torch.float32)
                     # Normalize the context and values tensors
                     CT, V = self.normalize(V, source, CT)
