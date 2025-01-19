@@ -319,9 +319,9 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         values,
         source,
         context=None,
-        dvar=None,
         denormalize=False,
         batched=False,
+        dist_to_center=False,
         device=None,
     ):
         """Normalizes the context and values tensors associated with a given
@@ -333,12 +333,13 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                 of the source.
             context (torch.Tensor, optiona): tensor of shape (n_context_vars,)
                 containing the context variables. If None, the context is not normalized.
-            dvar (str, optional): Name of a specific variable (ie channel) within
-                the source to normalize.
             denormalize (bool, optional): If True, denormalize the context and values tensors
                 instead of normalizing them.
             batched (bool, optional): If True, the values tensor is expected to have
                 shape (B, C, ...), where B is the batch size.
+            dist_to_center (bool, optional): expects the values tensor to have C + 1 channels,
+                where C is the number of data variables in the source, and the additional
+                channel is the distance to the center of the storm. 
             device (torch.device, optional): Device to use for the normalization.
         Returns:
             normalized_context (torch.Tensor): normalized context.
@@ -357,9 +358,8 @@ class MultiSourceDataset(torch.utils.data.Dataset):
             # of the context variables for each data variable. Thus we need to load
             # the means and stds for each context variable and repeat them for each
             # data variable.
-            if dvar is None:
-                context_means = np.repeat(context_means, self._get_n_data_variables(source_name))
-                context_stds = np.repeat(context_stds, self._get_n_data_variables(source_name))
+            context_means = np.repeat(context_means, self._get_n_data_variables(source_name))
+            context_stds = np.repeat(context_stds, self._get_n_data_variables(source_name))
             context_means = torch.tensor(context_means, dtype=context.dtype)
             context_stds = torch.tensor(context_stds, dtype=context.dtype)
             if device is not None:
@@ -373,22 +373,22 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         else:
             normalized_context = None
 
-        # Values normalization. The process depends on whether we're yielding
-        # multi-channel sources or not.
-        if dvar is None:
-            data_means = np.array(
-                [self.data_means[source_name][var] for var in source.data_vars]
-            ).reshape(
-                -1, *(1 for _ in (values.shape[1:] if not batched else values.shape[2:]))
-            )  # (C, 1, ...) like values
-            data_stds = np.array(
-                [self.data_stds[source_name][var] for var in source.data_vars]
-            ).reshape(-1, *(1 for _ in (values.shape[1:] if not batched else values.shape[2:])))
-        else:
-            data_means = self.data_means[source_name][dvar]  # scalar value
-            data_stds = self.data_stds[source_name][dvar]  # scalar value
+        # Values normalization.
+        data_vars = source.data_vars
+        if dist_to_center:
+            data_vars = data_vars + ["dist_to_center"]
+
+        data_means = np.array(
+            [self.data_means[source_name][var] for var in data_vars]
+        ).reshape(
+            -1, *(1 for _ in (values.shape[1:] if not batched else values.shape[2:]))
+        )  # (C, 1, ...) like values
+        data_stds = np.array(
+            [self.data_stds[source_name][var] for var in data_vars]
+        ).reshape(-1, *(1 for _ in (values.shape[1:] if not batched else values.shape[2:])))
         data_means = torch.tensor(data_means, dtype=values.dtype)
         data_stds = torch.tensor(data_stds, dtype=values.dtype)
+
         if device is not None:
             data_means = data_means.to(device)
             data_stds = data_stds.to(device)

@@ -61,7 +61,11 @@ class MultiSourceWriter(BasePredictionWriter):
                 if self.dataset is not None:
                     device = data["values"].device
                     _, targets = self.dataset.normalize(
-                        data["values"], source_name, denormalize=True, batched=True, device=device
+                        data["values"],
+                        source_name,
+                        denormalize=True,
+                        batched=True,
+                        device=device,
                     )
                     if source_name in pred:
                         _, pred[source_name] = self.dataset.normalize(
@@ -69,6 +73,7 @@ class MultiSourceWriter(BasePredictionWriter):
                             source_name,
                             denormalize=True,
                             batched=True,
+                            dist_to_center=pl_module.predict_dist_to_center,
                             device=device,
                         )
                 # WRITING TARGETS

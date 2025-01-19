@@ -43,6 +43,7 @@ class Source:
         self.data_vars = data_vars
         self.context_vars = context_vars
         self.input_only_vars = input_only_vars
+        self.output_vars = [var for var in data_vars if var not in input_only_vars]
         # Make sure the input-only variables are in the data variables
         for var in self.input_only_vars:
             if var not in self.data_vars:
