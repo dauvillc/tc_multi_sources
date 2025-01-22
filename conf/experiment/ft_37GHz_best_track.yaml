@@ -1,0 +1,22 @@
+# @package _global_
+defaults:
+  - override /paths: jz
+  - override /sources: 37GHz_best_track
+  - override /lightning_module: mae
+  - override /lr_scheduler: cosine_warmup_150epochs.yaml
+
+wandb:
+  name: FT_37GHzBT
+  group: FT_37GHz_best_track
+
+dataset:
+  train:
+    dt_max: 6
+    min_available_sources: 2
+
+# Modifications that should be made to specific fields in the
+# pre-training config
+change:
+  lightning_module:
+    # To only train the model to predict the best track data
+    train_only_on_sources: ['tc_primed_storm_metadata']

@@ -33,8 +33,6 @@ tc_primed:
     SSMIS_F19:
       S2:
         variables: ['TB_37.0H']
-  infrared:
-    variables: ['IRWIN']
   storm_metadata:
     variables: ['intensity', 'central_min_pressure', 'storm_speed']
 

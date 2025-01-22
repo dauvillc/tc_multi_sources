@@ -1,6 +1,7 @@
 import lightning.pytorch as pl
 import hydra
 import multi_sources
+import torch
 from hydra.utils import get_class, instantiate
 from pathlib import Path
 from lightning.pytorch.loggers import WandbLogger
@@ -18,6 +19,14 @@ def main(cfg: DictConfig):
     OmegaConf.register_new_resolver("nan", lambda: float("nan"))
     cfg = OmegaConf.to_object(cfg)
     resume_run_id = cfg["resume_run_id"] if "resume_run_id" in cfg else None
+    # If a run is resuming, the resume_mode must be set to either 'resume' or 'fine_tune'
+    if resume_run_id and (
+        "resume_mode" not in cfg or cfg["resume_mode"] not in ["resume", "fine_tune"]
+    ):
+        raise ValueError(
+            "If resume_run_id is set, resume_mode must be set to either"
+            " 'resume' or 'fine_tune' with +resume_mode=..."
+        )
     # Create a random id for the run if it is not resuming
     run_id = get_random_code() if not resume_run_id else resume_run_id
     print("Run ID:", run_id)
@@ -27,17 +36,12 @@ def main(cfg: DictConfig):
         exp_cfg, checkpoint_path = load_experiment_cfg_from_checkpoint(
             cfg["paths"]["checkpoints"], resume_run_id
         )
-        # For fields that define the experiment, use the values from the checkpoint:
-        # - For the dataset, everything except the dataset_dir should come from the checkpoint.
-        cfg["model"] = exp_cfg["model"]
-        for split, split_cfg in cfg["dataset"].items():
-            for key in split_cfg.keys():
-                if key != "dataset_dir":
-                    split_cfg[key] = exp_cfg["dataset"][split][key]
-        # The lightning module parameters should come from the checkpoint
+        # For some fields, we'll use the values from the checkpoint
+        # - The model architecture and lightning module parameters
         cfg["lightning_module"] = exp_cfg["lightning_module"]
+        cfg["model"] = exp_cfg["model"]
         # The user can change fields from the checkpoint by setting them under the "change"
-        # key (e.g. +change.lightning_module.masking_ratio=0.75)
+        # key (e.g. +change.lightning_module.only_train_on_sources=...)
         if "change" in cfg:
             changed_cfg = cfg.pop("change")
             cfg = update(cfg, changed_cfg)
@@ -48,7 +52,10 @@ def main(cfg: DictConfig):
     # Create the training dataset and dataloader
     train_dataset = hydra.utils.instantiate(cfg["dataset"]["train"])
     train_dataloader = DataLoader(
-        train_dataset, **cfg["dataloader"], shuffle=True, collate_fn=multi_source_collate_fn,
+        train_dataset,
+        **cfg["dataloader"],
+        shuffle=True,
+        collate_fn=multi_source_collate_fn,
         drop_last=True,
     )
     # Create the validation dataset and dataloader
@@ -66,21 +73,25 @@ def main(cfg: DictConfig):
     # Create the backbone
     backbone = instantiate(cfg["model"]["backbone"])
     # Create the lightning module
+    pl_module = instantiate(
+        cfg["lightning_module"],
+        train_dataset.sources,
+        backbone,
+        cfg,
+    )
     if resume_run_id:
-        lightning_module_class = get_class(cfg["lightning_module"]["_target_"])
-        pl_module = lightning_module_class.load_from_checkpoint(
-            checkpoint_path,
-            sources=train_dataset.sources,
-            backbone=backbone,
-            cfg=cfg,
-        )
-    else:
-        pl_module = instantiate(
-            cfg["lightning_module"],
-            train_dataset.sources,
-            backbone,
-            cfg,
-        )
+        # The following snippet loads the weights of the checkpoint into the new
+        # lightning module, but allowing new weights that are not in the checkpoint.
+        # https://discuss.pytorch.org/t/how-to-load-part-of-pre-trained-model/1113/39
+        ckpt = torch.load(checkpoint_path, map_location="cpu")
+        former_dict = ckpt["state_dict"]
+        new_dict = pl_module.state_dict()
+        # add to the former dict the weights that were added in the new dict.
+        for k, v in new_dict.items():
+            if k not in former_dict:
+                former_dict[k] = v
+        # 3. load the former state dict that now contains all the weights.
+        pl_module.load_state_dict(former_dict)
 
     # Create the logs directory if it does not exist
     Path(cfg["paths"]["wandb_logs"]).mkdir(parents=True, exist_ok=True)
@@ -120,7 +131,7 @@ def main(cfg: DictConfig):
         **cfg["trainer"],
     )
     # Train the model
-    if resume_run_id:
+    if resume_run_id and cfg["resume_mode"] == "resume":
         trainer.fit(pl_module, train_dataloader, val_dataloader, ckpt_path=checkpoint_path)
     else:
         trainer.fit(pl_module, train_dataloader, val_dataloader)

@@ -52,6 +52,7 @@ class MultisourceMAE(pl.LightningModule):
         adamw_kwargs,
         lr_scheduler_kwargs,
         loss_max_distance_from_center,
+        freeze_backbone=False,
         train_only_on_sources=[],
         exclude_sources_from_training=[],
         normalize_coords_across_sources=False,
@@ -73,6 +74,8 @@ class MultisourceMAE(pl.LightningModule):
             loss_max_distance_from_center (int or None): If specified, only pixels within this
                 distance from the center of the storm (in km) will be considered
                 in the loss computation.
+            freeze_backbone (bool): If True, freezes the backbone and only trains the embedding
+                and output projection layers.
             train_only_on_sources (list of str): If not empty, list of sources to train on
                 exclusively. This means that at each training step, only those sources can
                 be masked and then backpropagated on.
@@ -95,12 +98,13 @@ class MultisourceMAE(pl.LightningModule):
         self.n_sources_to_mask = n_sources_to_mask
         self.patch_size = patch_size
         self.values_dim = values_dim
-        self.coords_dim = coords_dim  # Changed from self.coordinates_dim
+        self.coords_dim = coords_dim
         self.lr_scheduler_kwargs = lr_scheduler_kwargs
         self.adamw_kwargs = adamw_kwargs
         self.predict_dist_to_center = predict_dist_to_center
         self.metrics = metrics
         self.loss_max_distance_from_center = loss_max_distance_from_center
+        self.freeze_backbone = freeze_backbone
         self.train_only_on_sources = train_only_on_sources
         self.exclude_sources_from_training = exclude_sources_from_training
         self.normalize_coords_across_sources = normalize_coords_across_sources
@@ -169,6 +173,10 @@ class MultisourceMAE(pl.LightningModule):
 
         # learnable [MASK] token
         self.mask_token = nn.Parameter(torch.randn(1, 1, self.values_dim))
+
+        # Optionally freeze the backbone
+        if self.freeze_backbone:
+            self.backbone.requires_grad_(False)
 
     def preproc_input(self, x):
         # Normalize the coordinates across sources to make them relative instead of absolute
@@ -468,14 +476,18 @@ class MultisourceMAE(pl.LightningModule):
         annealing schedule.
         """
         decay = self.adamw_kwargs.pop("weight_decay", 0.0)
+        params = {k: v for k, v in self.named_parameters() if v.requires_grad}
+        # Apply weight decay only to the weights that are not in the normalization layers
         decay_params = {
-            k: True for k, v in self.named_parameters() if "weight" in k and "norm" not in k
+            k for k, _ in params.items() if "weight" in k and "norm" not in k
         }
         optimizer = torch.optim.AdamW(
             [
-                {"params": [v for k, v in self.named_parameters() if k in decay_params]},
+                # Parameters without decay
+                {"params": [v for k, v in params.items() if k not in decay_params]},
+                # Parameters with decay
                 {
-                    "params": [v for k, v in self.named_parameters() if k not in decay_params],
+                    "params": [v for k, v in params.items() if k in decay_params],
                     "weight_decay": decay,
                 },
             ],

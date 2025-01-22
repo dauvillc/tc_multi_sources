@@ -164,7 +164,7 @@ class SourcetypeProjection0d(nn.Module):
         self.norm = nn.LayerNorm(latent_dim)
         self.linear = nn.Linear(latent_dim, channels)
 
-    def forward(self, x):
+    def forward(self, x, **kwargs):
         x = self.norm(x[:, 0])  # (B, D)
         x = self.linear(x)      # (B, C)
         return x

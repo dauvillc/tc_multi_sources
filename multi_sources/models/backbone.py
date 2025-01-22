@@ -85,10 +85,10 @@ class AdapativeConditionalNormalization(nn.Module):
         super().__init__()
         self.module = module
         self.input_norm = nn.LayerNorm(input_dim)
-        self.cond_norm = nn.Sequential(nn.SiLU(), nn.Linear(cond_dim, input_dim * 3))
+        self.cond_proj = nn.Sequential(nn.SiLU(), nn.Linear(cond_dim, input_dim * 3))
         # Initialize the weights of the conditional normalization to zero (no effect)
-        nn.init.zeros_(self.cond_norm[1].weight)
-        nn.init.zeros_(self.cond_norm[1].bias)
+        nn.init.zeros_(self.cond_proj[1].weight)
+        nn.init.zeros_(self.cond_proj[1].bias)
 
     def forward(self, data, *args, **kwargs):
         """Args:
@@ -105,7 +105,7 @@ class AdapativeConditionalNormalization(nn.Module):
         for source_name, source_data in data.items():
             skip, cond = source_data["embedded_values"], source_data["embedded_coords"]
             x = self.input_norm(skip)
-            shift, scale, gate = self.cond_norm(cond).chunk(3, dim=-1)
+            shift, scale, gate = self.cond_proj(cond).chunk(3, dim=-1)
             x = x * (scale + 1) + shift
             # Save the module's input for that source
             source_data["embedded_values"] = x
