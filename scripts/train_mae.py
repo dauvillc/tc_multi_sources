@@ -27,8 +27,10 @@ def main(cfg: DictConfig):
             "If resume_run_id is set, resume_mode must be set to either"
             " 'resume' or 'fine_tune' with +resume_mode=..."
         )
-    # Create a random id for the run if it is not resuming
-    run_id = get_random_code() if not resume_run_id else resume_run_id
+    # Create a random id for the run
+    run_id = get_random_code()
+    if resume_run_id:
+        run_id = resume_run_id + '-' + run_id
     print("Run ID:", run_id)
 
     # If resuming, load the experiment configuration from the checkpoint
@@ -103,8 +105,7 @@ def main(cfg: DictConfig):
             save_dir=cfg["paths"]["wandb_logs"],
             log_model=False,
             config=cfg,
-            id=resume_run_id,
-            resume="must",
+            id=resume_run_id
         )
     else:
         logger = WandbLogger(
