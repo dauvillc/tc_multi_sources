@@ -30,7 +30,7 @@ def main(cfg: DictConfig):
     # Create a random id for the run
     run_id = get_random_code()
     if resume_run_id:
-        run_id = resume_run_id + '-' + run_id
+        run_id = resume_run_id + "-" + run_id
     print("Run ID:", run_id)
 
     # If resuming, load the experiment configuration from the checkpoint
@@ -98,24 +98,14 @@ def main(cfg: DictConfig):
     # Create the logs directory if it does not exist
     Path(cfg["paths"]["wandb_logs"]).mkdir(parents=True, exist_ok=True)
     # Create the logger
-    if resume_run_id:
-        logger = WandbLogger(
-            **cfg["wandb"],
-            dir=cfg["paths"]["wandb_logs"],
-            save_dir=cfg["paths"]["wandb_logs"],
-            log_model=False,
-            config=cfg,
-            id=resume_run_id
-        )
-    else:
-        logger = WandbLogger(
-            **cfg["wandb"],
-            log_model=False,
-            config=cfg,
-            id=run_id,
-            dir=cfg["paths"]["wandb_logs"],
-            save_dir=cfg["paths"]["wandb_logs"],
-        )
+    logger = WandbLogger(
+        **cfg["wandb"],
+        log_model=False,
+        config=cfg,
+        id=run_id,
+        dir=cfg["paths"]["wandb_logs"],
+        save_dir=cfg["paths"]["wandb_logs"],
+    )
     # Model checkpoint
     checkpoint_callback = ModelCheckpoint(
         monitor="val_loss",
