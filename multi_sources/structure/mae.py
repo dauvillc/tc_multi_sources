@@ -243,9 +243,13 @@ class MultisourceMAE(pl.LightningModule):
             # Save the layout of the tokens for the output projection. For example
             # a tokens_shape of (3, 2) means 3 tokens in the first dimension and 2 in the second.
             # That info is lost in the embedded sequences as they are flattened.
-            tokens_shape = tuple(
-                int(np.ceil(s / self.patch_size)) for s in data["values"].shape[-2:]
-            )
+            if len(data["values"].shape) > 2:
+                tokens_shape = tuple(
+                    int(np.ceil(s / self.patch_size)) for s in data["values"].shape[2:]
+                )
+            else:
+                # For 0D sources, the tokens shape is (1,)
+                tokens_shape = (1,)
 
             output[source] = {
                 "tokens_shape": tokens_shape,

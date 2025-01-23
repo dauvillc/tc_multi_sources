@@ -9,18 +9,18 @@ class FeedForward(nn.Module):
         self,
         values_dim,
         coords_dim,
-        inner_dim,
         dropout=0.0,
         act_layer=nn.GELU,
-        inner_ratio=2,
+        inner_ratio=4,
         **kwargs
     ):
         super().__init__()
+        inner_dim = values_dim * inner_ratio
         self.net = nn.Sequential(
-            nn.Linear(values_dim, inner_dim * inner_ratio),
+            nn.Linear(values_dim, inner_dim),
             act_layer(),
             nn.Dropout(dropout),
-            nn.Linear(inner_dim * inner_ratio, values_dim),
+            nn.Linear(inner_dim, values_dim),
             nn.Dropout(dropout),
         )
 

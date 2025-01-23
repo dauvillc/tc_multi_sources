@@ -207,7 +207,8 @@ class MultisourcesAnchoredTemporalAttention(nn.Module):
 # -vision-transformer-using-shifted-91cbf6abc678
 class SeparateWindowedValuesCoordinatesAttention(nn.Module):
     """Attention block that computes the attention over each source independently,
-    using a spatial window over the tokens as in the Swin Transformer."""
+    using a spatial window over the tokens as in the Swin Transformer.
+    For 0D sources, does nothing."""
 
     def __init__(
         self,
@@ -271,6 +272,10 @@ class SeparateWindowedValuesCoordinatesAttention(nn.Module):
         """
         outputs = {}
         for source_name, source_inputs in x.items():
+            # If the source isn't 2D, skip the spatial attention
+            if len(source_inputs["tokens_shape"]) != 2:
+                outputs[source_name] = self.output_proj(source_inputs["embedded_values"])
+                continue
             # Apply the linear transformations to the values and coordinates
             v = self.values_qkv(source_inputs["embedded_values"])
             c = self.coords_qkv(source_inputs["embedded_coords"])

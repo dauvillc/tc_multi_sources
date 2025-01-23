@@ -2,9 +2,9 @@ dropout: 0.0
 values_dim: 256
 coords_dim: 256
 backbone:
-  _target_: multi_sources.models.general_backbone.MultisourceGeneralBackbone
-  values_dim: ${lightning_module.coords_dim}
-  coords_dim: ${lightning_module.values_dim}
+  _target_: multi_sources.models.backbone.MultisourceGeneralBackbone
+  values_dim: ${lightning_module.values_dim}
+  coords_dim: ${lightning_module.coords_dim}
   n_blocks: 12
   layers:
     cross_attention:
@@ -27,5 +27,5 @@ backbone:
       layer_class:
         _target_: hydra.utils.get_class
         path: multi_sources.models.small_layers.FeedForward
-      inner_dim: 256
+      inner_ratio: 4
       dropout: ${model.dropout}

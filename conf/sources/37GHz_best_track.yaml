@@ -34,5 +34,5 @@ tc_primed:
       S2:
         variables: ['TB_37.0H']
   storm_metadata:
-    variables: ['intensity', 'central_min_pressure', 'storm_speed']
+    variables: ['intensity']
 
