@@ -1,0 +1,21 @@
+# @package _global_
+defaults:
+  - override /paths: jz
+  - override /sources: 37GHz_best_track
+  - override /lightning_module: mae
+  - override /lr_scheduler: cosine_warmup_100epochs.yaml
+
+wandb:
+  name: BT_estim_from37GHz
+  group: estim_best_track_from_37GHz
+
+dataset:
+  train:
+    dt_max: 6
+    min_available_sources: 2
+
+lightning_module:
+    # To only train the model to predict the best track data
+    train_only_on_sources: ['tc_primed_storm_metadata']
+    predict_dist_to_center: false
+    loss_max_distance_from_center: null
