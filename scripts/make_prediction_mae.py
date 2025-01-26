@@ -30,8 +30,11 @@ def main(cfg: DictConfig):
     pl.seed_everything(exp_cfg["seed"], workers=True)
 
     # Create the validation dataset and dataloader
+    split = "val"
+    if "split" in cfg and cfg["split"] is not None:
+        split = cfg["split"]
     val_dataset = hydra.utils.instantiate(
-        exp_cfg["dataset"]["val"],
+        exp_cfg["dataset"][split],
     )
     val_dataloader = DataLoader(
         val_dataset, **exp_cfg["dataloader"], shuffle=False, collate_fn=multi_source_collate_fn
