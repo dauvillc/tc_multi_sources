@@ -303,11 +303,17 @@ def main(cfg):
         ifovs = yaml.safe_load(f)
     # Path to where the prepared dataset will be stored (as netCDF files)
     dest_path = Path(cfg["paths"]["preprocessed_dataset"]) / "prepared"
+    # Optionally: if process_only is a str, only process sources that contain that string.
+    process_only = cfg.get("process_only", None)
 
     # Retrieve the list of files from the TC-Primed dataset, excluding environmental sources
     sources, source_files, source_groups = list_tc_primed_sources(
         tc_primed_path, source_type="satellite"
     )
+    if process_only is not None:
+        sources = [source for source in sources if process_only in source]
+        source_files = {source: source_files[source] for source in sources}
+        source_groups = {source: source_groups[source] for source in sources}
 
     # Initialize metadata for all sources first
     metadata_dict = initialize_all_sources_metadata(
