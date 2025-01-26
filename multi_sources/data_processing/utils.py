@@ -70,39 +70,42 @@ def read_variables_dict(variables_dict):
     return {key[1:]: value for key, value in result.items()}
 
 
-def _is_source_available(ref_obs, sid_mask, source_mask, time_arr, source_name, dt_max):
+def _is_source_available(ref_obs, sid_mask, source_mask, time_arr, source_name, dt_max, lead_time):
     """Given a row in the metadata df which defines a sample (reference
     observation) and a source, returns 1 if the source is present in the
     sample and 0 otherwise."""
     t0 = ref_obs["time"]
     sid = ref_obs["sid"]
-    # Compute the oldest time an observation can have to respect the time delta constraint.
-    min_t = t0 - dt_max
+    # Compute the allowed time window
+    min_t = t0 - lead_time - dt_max
+    max_t = t0 - lead_time
     # Isolate the times of observations corresponding to the correct sid and source
     times = time_arr[sid_mask[sid] & source_mask]
     # Check for times that respect the time delta constraint
-    return int(((times <= t0) & (times > min_t)).any())
+    return int(((times > min_t) & (times <= max_t)).any())
 
 
-def _source_availability(df, sid_mask, source_mask, time_arr, source_name, dt_max):
+def _source_availability(df, sid_mask, source_mask, time_arr, source_name, dt_max, lead_time):
     """Returns a series S with one row per sample,
     such that S[i] is 1 if source_name is available at sample i and 0 otherwise."""
     return df.apply(
         _is_source_available,
-        args=(sid_mask, source_mask, time_arr, source_name, dt_max),
+        args=(sid_mask, source_mask, time_arr, source_name, dt_max, lead_time),
         axis="columns",
     ).to_numpy()
 
 
-def compute_sources_availability(df, dt_max, num_workers=0):
+def compute_sources_availability(df, dt_max, lead_time, num_workers=0):
     """Given a DataFrame whose rows correspond to samples from varying sources,
     computes which sources are available for each sample.
     For a sample (s0, sid0, t0), a source s1 is considered available if there is
-    at least one sample (s1, sid0, t1) such that t0 - dt_max <= t1 <= t0.
+    at least one sample (s1, sid0, t1) such that t0 - lt - dt_max < t1 <= t0 - lt.
     Args:
         df (pd.DataFrame): DataFrame including at least the columns 'source_name',
             'sid' and 'time'.
         dt_max (pd.Timedelta): Time window to consider sources as available.
+        lead_time (pd.Timedelta): Lead time to consider when computing the
+            availability of sources.
         num_workers (int, optional): Number of workers to use for parallelization.
 
     Returns:
@@ -133,13 +136,14 @@ def compute_sources_availability(df, dt_max, num_workers=0):
                     time_arr,
                     source,
                     dt_max,
+                    lead_time=lead_time,
                 )
             for source, future in futures.items():
                 result[source] = future.result()
     else:
         for source in df["source_name"].unique():
             result[source] = _source_availability(
-                df, sid_mask, source_mask[source], time_arr, source, dt_max
+                df, sid_mask, source_mask[source], time_arr, source, dt_max, lead_time=lead_time
             )
     return pd.DataFrame(result)
 
