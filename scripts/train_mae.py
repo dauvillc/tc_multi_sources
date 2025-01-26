@@ -8,8 +8,8 @@ from lightning.pytorch.loggers import WandbLogger
 from lightning.pytorch.callbacks import ModelCheckpoint, LearningRateMonitor
 from torch.utils.data import DataLoader
 from omegaconf import DictConfig, OmegaConf
+from utils.utils import get_random_code
 from utils.checkpoints import load_experiment_cfg_from_checkpoint
-from utils.utils import update, get_random_code
 from multi_sources.data_processing.collate_fn import multi_source_collate_fn
 
 
@@ -31,22 +31,10 @@ def main(cfg: DictConfig):
     run_id = get_random_code()
     if resume_run_id:
         run_id = resume_run_id + "-" + run_id
-    print("Run ID:", run_id)
-
-    # If resuming, load the experiment configuration from the checkpoint
-    if resume_run_id:
-        exp_cfg, checkpoint_path = load_experiment_cfg_from_checkpoint(
+        _, checkpoint_path = load_experiment_cfg_from_checkpoint(
             cfg["paths"]["checkpoints"], resume_run_id
         )
-        # For some fields, we'll use the values from the checkpoint
-        # - The model architecture and lightning module parameters
-        cfg["lightning_module"] = exp_cfg["lightning_module"]
-        cfg["model"] = exp_cfg["model"]
-        # The user can change fields from the checkpoint by setting them under the "change"
-        # key (e.g. +change.lightning_module.only_train_on_sources=...)
-        if "change" in cfg:
-            changed_cfg = cfg.pop("change")
-            cfg = update(cfg, changed_cfg)
+    print("Run ID:", run_id)
 
     # Seed everything
     pl.seed_everything(cfg["seed"], workers=True)
