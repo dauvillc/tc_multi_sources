@@ -52,11 +52,11 @@ class MultisourceMAE(pl.LightningModule):
         adamw_kwargs,
         lr_scheduler_kwargs,
         loss_max_distance_from_center,
-        freeze_backbone=False,
         train_only_on_sources=[],
         exclude_sources_from_training=[],
+        fine_tune=None,
         normalize_coords_across_sources=False,
-        predict_dist_to_center=True,
+        predict_dist_to_center=False,
         metrics={},
     ):
         """
@@ -74,14 +74,16 @@ class MultisourceMAE(pl.LightningModule):
             loss_max_distance_from_center (int or None): If specified, only pixels within this
                 distance from the center of the storm (in km) will be considered
                 in the loss computation.
-            freeze_backbone (bool): If True, freezes the backbone and only trains the embedding
-                and output projection layers.
             train_only_on_sources (list of str): If not empty, list of sources to train on
                 exclusively. This means that at each training step, only those sources can
                 be masked and then backpropagated on.
             exclude_sources_from_training (list of str): If not empty, list of sources to exclude
                 from training. This means that at each training step, those sources will not be
                 masked and the model will not backpropagate on them.
+            fine_tune (None or str): If not None, name of a source to fine-tune on. The backbone
+                as well as the embedding and output layers of all other sources will be frozen.
+                Moreover, the module will only train on the fine-tuned source. This argument
+                overrides train_only_on_sources and exclude_sources_from_training. 
             normalize_coords_across_sources (bool): If True, the coordinates of each source
                 will be normalized across all sources in the batch so that the minimum
                 latitude and longitude in each example is 0 and maximum is 1.
@@ -104,10 +106,21 @@ class MultisourceMAE(pl.LightningModule):
         self.predict_dist_to_center = predict_dist_to_center
         self.metrics = metrics
         self.loss_max_distance_from_center = loss_max_distance_from_center
-        self.freeze_backbone = freeze_backbone
-        self.train_only_on_sources = train_only_on_sources
-        self.exclude_sources_from_training = exclude_sources_from_training
         self.normalize_coords_across_sources = normalize_coords_across_sources
+        self.fine_tune = fine_tune
+        if fine_tune:
+            if fine_tune not in self.source_names:
+                raise ValueError(
+                    f"Source {fine_tune} is not in the list of sources to fine-tune on."
+                )
+            self.train_only_on_sources = [fine_tune]
+            self.exclude_sources_from_training = [
+                source for source in self.source_names if source != fine_tune
+            ]
+        else: 
+            self.train_only_on_sources = train_only_on_sources
+            self.exclude_sources_from_training = exclude_sources_from_training
+        # Save the configuration so that it can be loaded from the checkpoints
         self.cfg = cfg
         self.save_hyperparameters(ignore=["backbone", "metrics"])
 
@@ -173,10 +186,6 @@ class MultisourceMAE(pl.LightningModule):
 
         # learnable [MASK] token
         self.mask_token = nn.Parameter(torch.randn(1, 1, self.values_dim))
-
-        # Optionally freeze the backbone
-        if self.freeze_backbone:
-            self.backbone.requires_grad_(False)
 
     def preproc_input(self, x):
         # Normalize the coordinates across sources to make them relative instead of absolute
@@ -481,6 +490,16 @@ class MultisourceMAE(pl.LightningModule):
         """
         decay = self.adamw_kwargs.pop("weight_decay", 0.0)
         params = {k: v for k, v in self.named_parameters() if v.requires_grad}
+        # If fine-tuning, we'll only optimize the embedding layers and the output projection layers
+        # associated with the fine-tuned source's type.
+        if self.fine_tune:
+            fine_tuned_type = self.source_to_type[self.fine_tune]
+            params = {
+                k: v
+                for k, v in params.items()
+                if f"sourcetype_embeddings.{fine_tuned_type}" in k
+                or f"sourcetype_output_projs.{fine_tuned_type}" in k
+            }
         # Apply weight decay only to the weights that are not in the normalization layers
         decay_params = {
             k for k, _ in params.items() if "weight" in k and "norm" not in k

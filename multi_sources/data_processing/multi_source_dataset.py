@@ -45,6 +45,8 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         min_available_sources=2,
         num_workers=0,
         select_most_recent=False,
+        forecasting_lead_time=None,
+        forecasting_source=None,
         include_seasons=None,
         exclude_seasons=None,
         randomly_drop_sources={},
@@ -77,10 +79,19 @@ class MultiSourceDataset(torch.utils.data.Dataset):
             dt_max (int): The maximum time delta between the elements returned for each source,
                 in hours.
             min_available_sources (int): The minimum number of sources that must be available
-                for a sample to be included in the dataset.
+                for a sample to be included in the dataset. Does NOT include the forecasting source
+                if it is enabled.
             num_workers (int): If > 1, number of workers to use for parallel loading of the data.
             select_most_recent (bool): If True, selects the most recent element for each source
                 when multiple elements are available. If False, selects a random element.
+            forecasting_lead_time (int): If not None, the lead time to use for forecasting.
+                Must be used in conjunction with forecasting_source. If enabled, the forecast
+                source will always be the reference source; the time window for the other sources
+                will be (t0 - lead_time - dt_max, t0 - lead_time), i.e. the other sources will be
+                in a window of duration dt_max, ending at t0 - lead_time.
+            forecasting_source (str): If not None, the name of the source to use for forecasting.
+                Must be used in conjunction with forecasting_lead_time. If enabled, the forecast
+                source will always be the reference source.
             include_seasons (list of int): The years to include in the dataset.
                 If None, all years are included.
             exclude_seasons (list of int): The years to exclude from the dataset.
@@ -104,6 +115,14 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         self.randomly_drop_sources = randomly_drop_sources
         self.data_augmentation = data_augmentation
         self.rng = np.random.default_rng(seed)
+
+        if forecasting_lead_time is not None:
+            if forecasting_source is None:
+                raise ValueError("forecasting_lead_time must be used with forecasting_source.")
+            self.forecasting_lead_time = pd.Timedelta(forecasting_lead_time, unit="h")
+        else:
+            self.forecasting_lead_time = pd.Timedelta(0, unit="h")
+        self.forecasting_source = forecasting_source
 
         print(f"{split}: Browsing requested sources and loading metadata...")
         # Load and merge individual source metadata files
@@ -160,16 +179,26 @@ class MultiSourceDataset(torch.utils.data.Dataset):
             self.df = self.df[~self.df["season"].isin(exclude_seasons)]
         if len(self.df) == 0:
             raise ValueError("No elements available for the selected sources and seasons.")
+        
+        # Filter out the rows where the data_path is not valid
+        print("Filtering out rows with invalid data paths...")
+        self.df = self.df[self.df["data_path"].apply(lambda x: Path(x).exists())]
+        self.df = self.df.reset_index(drop=True)
 
         # ========================================================================================
+        # BUILDING THE REFERENCE DATAFRAME
         # We'll now filter the samples to only keep the ones where at least min_available_sources
         # sources are available.
         # - We'll compute a dataframe D of shape (n_samples, n_sources) such that
         # D[i, s] = 1 if source i is available for sample s, and 0 otherwise.
         print(f"{split}: Computing sources availability...")
         available_sources = compute_sources_availability(
-            self.df, self.dt_max, num_workers=num_workers
+            self.df, self.dt_max, lead_time=self.forecasting_lead_time, num_workers=num_workers
         )
+        # If forecasting a source, don't include it in the available sources, since it won't
+        # be taken from the time window (but from t0 directly).
+        if forecasting_source is not None:
+            available_sources = available_sources.drop(columns=[forecasting_source])
         # - From this, we can filter the samples to only keep the ones where at least
         # min_available_sources sources are available.
         available_sources_count = available_sources.sum(axis=1)
@@ -178,9 +207,19 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         # - self.reference_df is a subset of self.df containing every (sid, time) pair
         #   that defines a sample for which at least min_available_sources sources are available.
         mask = available_sources_count >= min_available_sources
-        self.reference_df = self.df[mask][["sid", "time"]]
+        self.reference_df = self.df[mask][["sid", "time", "source_name"]]
         self.reference_df["n_available_sources"] = available_sources_count[mask]
-        self.reference_df = self.reference_df.drop_duplicates().reset_index(drop=True)
+
+        # Optional: if we're forecasting a precise source, we'll only keep this source's
+        # sample as reference samples.
+        if forecasting_source is not None:
+            self.reference_df = self.reference_df[
+                self.reference_df["source_name"] == forecasting_source
+            ]
+
+        # Finally, avoid duplicated samples if two observations are at the exact same time
+        self.reference_df = self.reference_df.drop_duplicates(["sid", "time"])
+        self.reference_df = self.reference_df.reset_index(drop=True)
 
         # ========================================================================================
         # Pre-computation to speed up the data loading
@@ -241,23 +280,33 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                     # Skip the source
                     continue
 
-            # Isolate the rows of sample_df corresponding to the right source
-            # and where the time is between t0 and t0 - dt_max
-            df = sample_df[
-                (sample_df["source_name"] == source_name)
-                & (sample_df["time"] <= t0)
-                & (t0 - sample_df["time"] < self.dt_max)
-            ]
+            # If forecast source: it is the reference element, so its time
+            # must be exactly t0
+            if source_name == self.forecasting_source:
+                df = sample_df[
+                    (sample_df["source_name"] == source_name) & (sample_df["time"] == t0)
+                ]
+            else:
+                # Isolate the rows of sample_df corresponding to the right source
+                # and where the time is within the time window
+                min_t = t0 - self.forecasting_lead_time - self.dt_max
+                max_t = t0 - self.forecasting_lead_time
+                df = sample_df[
+                    (sample_df["source_name"] == source_name)
+                    & (sample_df["time"] <= max_t)
+                    & (sample_df["time"] > min_t)
+                ]
+
             if self.select_most_recent:
                 # Sort by descending time so that the first row is the closest to t0
                 df = df.sort_values("time", ascending=False)
             else:
                 # Shuffle the rows so that the first row is random
                 df = df.sample(frac=1)
-            # Check that there is at least one element available for this source
+            # Check if there is at least one element available for this source
             if len(df) > 0:
                 time = df["time"].iloc[0]
-                dt = t0 - time
+                dt = t0 - self.forecasting_lead_time - time
                 DT = torch.tensor(
                     dt.total_seconds() / self.dt_max.total_seconds(),
                     dtype=torch.float32,
@@ -339,7 +388,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                 shape (B, C, ...), where B is the batch size.
             dist_to_center (bool, optional): expects the values tensor to have C + 1 channels,
                 where C is the number of data variables in the source, and the additional
-                channel is the distance to the center of the storm. 
+                channel is the distance to the center of the storm.
             device (torch.device, optional): Device to use for the normalization.
         Returns:
             normalized_context (torch.Tensor): normalized context.
@@ -378,14 +427,12 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         if dist_to_center:
             data_vars = data_vars + ["dist_to_center"]
 
-        data_means = np.array(
-            [self.data_means[source_name][var] for var in data_vars]
-        ).reshape(
+        data_means = np.array([self.data_means[source_name][var] for var in data_vars]).reshape(
             -1, *(1 for _ in (values.shape[1:] if not batched else values.shape[2:]))
         )  # (C, 1, ...) like values
-        data_stds = np.array(
-            [self.data_stds[source_name][var] for var in data_vars]
-        ).reshape(-1, *(1 for _ in (values.shape[1:] if not batched else values.shape[2:])))
+        data_stds = np.array([self.data_stds[source_name][var] for var in data_vars]).reshape(
+            -1, *(1 for _ in (values.shape[1:] if not batched else values.shape[2:]))
+        )
         data_means = torch.tensor(data_means, dtype=values.dtype)
         data_stds = torch.tensor(data_stds, dtype=values.dtype)
 
