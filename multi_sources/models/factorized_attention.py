@@ -65,40 +65,37 @@ class MultisourcesAnchoredCrossAttention(nn.Module):
         #   attention masks if provided);
         # - Save the indices of the anchor tokens;
         anchor_values, anchor_coords, anchor_masks = {}, {}, {}
-        anchor_indices = {}
+        anchor_indices, n_anchors_list = {}, []
         for source_name, source_inputs in inputs.items():
             _, n = source_inputs["embedded_values"].shape[:2]
+            # Don't take more anchor points than the number of tokens
+            n_anchor_points = min(self.num_anchor_points, n)
             indices = (
-                torch.linspace(0, n - 1, self.num_anchor_points)
+                torch.linspace(0, n - 1, n_anchor_points)
                 .long()
                 .to(source_inputs["embedded_values"].device)
             )
             anchor_values[source_name] = source_inputs["embedded_values"][:, indices]
             anchor_coords[source_name] = source_inputs["embedded_coords"][:, indices]
-            if attention_mask is not None:
-                anchor_masks[source_name] = attention_mask[source_name][:, indices]
             anchor_indices[source_name] = indices
+            n_anchors_list.append(n_anchor_points)
         # Concatenate the anchor tokens from all sources;
         anchor_values = torch.cat([anchor_values[source_name] for source_name in inputs], dim=1)
         anchor_coords = torch.cat([anchor_coords[source_name] for source_name in inputs], dim=1)
-        if attention_mask is not None:
-            anchor_masks = torch.cat([anchor_masks[source_name] for source_name in inputs], dim=1)
-        else:
-            anchor_masks = None
         # Compute the attention across the anchor tokens;
-        anchor_values = self.attention(anchor_values, anchor_coords, anchor_masks)
+        anchor_values = self.attention(anchor_values, anchor_coords)
         # Split back the sequence of anchor tokens to the sources;
-        anchor_values = torch.split(anchor_values, self.num_anchor_points, dim=1)
+        anchor_values = torch.split(anchor_values, n_anchors_list, dim=1)
         # Split the updated anchor tokens back to the sources and sum them to the original tokens;
         outputs = {}
         for i, (source_name, source_inputs) in enumerate(inputs.items()):
             indices = anchor_indices[source_name]
-            outputs[source_name] = source_inputs["embedded_values"].clone()
-            bs, _, values_dim = outputs[source_name].shape
-            outputs[source_name].scatter_(
+            bs, _, values_dim = source_inputs["embedded_values"].shape
+            outputs[source_name] = torch.scatter(
+                source_inputs["embedded_values"],
                 1,
                 indices.view(1, -1, 1).expand(bs, -1, values_dim),
-                anchor_values[i] + outputs[source_name][:, indices],
+                anchor_values[i] + source_inputs["embedded_values"][:, indices],
             )
 
         return outputs
@@ -274,7 +271,7 @@ class SeparateWindowedValuesCoordinatesAttention(nn.Module):
         for source_name, source_inputs in x.items():
             # If the source isn't 2D, skip the spatial attention
             if len(source_inputs["tokens_shape"]) != 2:
-                outputs[source_name] = self.output_proj(source_inputs["embedded_values"])
+                outputs[source_name] = source_inputs["embedded_values"]
                 continue
             # Apply the linear transformations to the values and coordinates
             v = self.values_qkv(source_inputs["embedded_values"])
