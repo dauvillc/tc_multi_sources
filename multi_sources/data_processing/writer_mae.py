@@ -86,23 +86,29 @@ class MultiSourceWriter(BasePredictionWriter):
                 # The dimensions of the Datasets we'll create depend on the
                 # dimensionality of the source.
                 if len(targets.shape) == 4:  # 2d sources -> (B, C, H, W)
-                    dims = ("samples", "channels", "H", "W")
-                    coord_dims = ("samples", "H", "W")
+                    dims = ("samples", "H", "W")
                 elif len(targets.shape) == 2:  # 0d sources -> (B, C)
-                    dims = ("samples", "channels")
-                    coord_dims = ("samples",)
+                    dims = "samples"
+                # Fetch the names of the variables in the source
+                source_obj = pl_module.sources[source_name]
+                input_var_names = [v for v in source_obj.data_vars]
+                output_var_names = [v for v in source_obj.output_vars]
+                if pl_module.predict_dist_to_center:
+                    output_var_names += ["dist_to_center"]
                 # Create xarray Dataset for targets
                 targets_ds = xr.Dataset(
-                    {
-                        "targets": (dims, targets),
-                    },
+                    {var: (dims, targets[:, i]) for i, var in enumerate(input_var_names)},
                     coords={
                         "samples": np.arange(targets.shape[0]),
-                        "lat": (coord_dims, latlon[:, 0]),
-                        "lon": (coord_dims, latlon[:, 1]),
+                        "lat": (dims, latlon[:, 0]),
+                        "lon": (dims, latlon[:, 1]),
                         "dt": (("samples"), dt),
                     },
                 )
+                # If also predicting the distance to the center, add it to the Dataset
+                if pl_module.predict_dist_to_center:
+                    dist_to_center = data["dist_to_center"].detach().cpu().numpy()
+                    targets_ds["dist_to_center"] = (dims, dist_to_center)
                 targets_ds.to_netcdf(target_dir / f"{batch_idx}.nc")
 
                 # WRITING PREDICTIONS
@@ -115,12 +121,12 @@ class MultiSourceWriter(BasePredictionWriter):
                     # Create xarray Dataset for outputs
                     outputs_ds = xr.Dataset(
                         {
-                            "outputs": (dims, outputs),
+                            var: (dims, outputs[:, i]) for i, var in enumerate(output_var_names)
                         },
                         coords={
                             "samples": np.arange(outputs.shape[0]),
-                            "lat": (coord_dims, latlon[:, 0]),
-                            "lon": (coord_dims, latlon[:, 1]),
+                            "lat": (dims, latlon[:, 0]),
+                            "lon": (dims, latlon[:, 1]),
                             "dt": (("samples"), dt),
                         },
                     )

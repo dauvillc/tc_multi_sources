@@ -128,12 +128,14 @@ def display_batch(batch_info, batch_idx, targets, preds, results_dir):
                 axes[i, 0].set_title(f"{source} - dt={strfdelta(dt, '%D d%H h:%M min')}")
                 # Check the spatial shape of the sample. If it is an image (2d shape),
                 # display it.
+                all_channels = list(target_ds.data_vars.keys())
                 sample_shape = sample_info["spatial_shape"].values[0]
                 if len(sample_shape) == 2:
+                    channel = all_channels[1]
                     target_sample = target_ds.isel(samples=idx)
                     lat = target_sample["lat"].values
                     lon = target_sample["lon"].values
-                    target = target_sample["targets"].values[0]  # Display the first channel
+                    target = target_sample[channel].values  # Display the first channel
                     axes[i, 0].imshow(target, cmap="viridis")
 
                     # Set axis ticks and labels
@@ -144,7 +146,7 @@ def display_batch(batch_info, batch_idx, targets, preds, results_dir):
                     # but not masked).
                     if pred_ds is not None and sample_info["avail"].item() == 0:
                         pred_sample = pred_ds.isel(samples=idx)
-                        pred = pred_sample["outputs"].values[0]  # first channel
+                        pred = pred_sample[channel].values  # first channel
 
                         axes[i, 1].imshow(pred, cmap="viridis")
                         set_axis_ticks(axes[i, 1], lat, lon)
@@ -153,16 +155,18 @@ def display_batch(batch_info, batch_idx, targets, preds, results_dir):
                 else:
                     # For scalar data, just display the target and prediction values
                     # as text.
-                    target = target_ds.isel(samples=idx)["targets"].values  # (channels,)
-                    for j, value in enumerate(target):
-                        axes[i, 0].text(0.5, 0.5 - 0.1 * j, f"Channel {j}: {value}", ha="center")
+                    target = target_ds.isel(samples=idx)
+                    for j, channel in enumerate(all_channels):
+                        value = target[channel].values.item()
+                        axes[i, 0].text(0.5, 0.5 - 0.1 * j, f"{channel}: {value}", ha="center")
                     # Display the prediction if available
                     if pred_ds is not None and sample_info["avail"].item() == 0:
                         axes[i, 1].set_title(f"pred. - dt={strfdelta(dt, '%D days %H:%M')}")
-                        pred = pred_ds.isel(samples=idx)["outputs"].values
-                        for j, value in enumerate(pred):
+                        pred = pred_ds.isel(samples=idx)
+                        for j, channel in enumerate(all_channels):
+                            value = pred[channel].values.item()
                             axes[i, 1].text(
-                                0.5, 0.5 - 0.1 * j, f"Channel {j}: {value}", ha="center"
+                                0.5, 0.5 - 0.1 * j, f"{channel}: {value}", ha="center"
                             )
             else:
                 axes[i, 0].set_title(f"{source} not available")
