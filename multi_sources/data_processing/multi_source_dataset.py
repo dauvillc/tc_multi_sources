@@ -258,23 +258,13 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         sid, t0 = sample["sid"], sample["time"]
         # Isolate the rows of self.df corresponding to the sample sid
         sample_df = self.sid_to_df[sid]
-        # Will count the number of sources available for the sample
-        n_sources_available = sample["n_available_sources"]
         # For each source, try to load the element at the given time
         output = {}
-        # If we're randomly dropping sources, shuffle the sources so that
-        # the probability of being dropped is uniform (as dropping source A
-        # may prevent source B from being dropped).
-        iterator = self.sources
-        if self.randomly_drop_sources:
-            iterator = [self.sources[i] for i in self.rng.permutation(len(self.sources))]
-        for source in iterator:  # Source objects
+        for source in self.sources:
             source_name = source.name
             source_type = source.type
             # Random dropping: check if the source should be dropped
-            if (source_name in self.randomly_drop_sources) and (
-                n_sources_available > self.min_available_sources
-            ):
+            if source_name in self.randomly_drop_sources:
                 p = self.randomly_drop_sources[source_name]
                 if np.random.rand() < p:
                     # Skip the source
@@ -361,6 +351,12 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         if isinstance(self.data_augmentation, MultisourceDataAugmentation):
             output = self.data_augmentation(output)
 
+        if len(output) <= 1:
+            raise ValueError(
+                f"Sample {sid} at time {t0} has only {len(output)} sources available."
+                " Check the parameters of the experiment; random sources dropping might"
+                " make leave only 1 or 0 source available. "
+            )
         return output
 
     def normalize(
