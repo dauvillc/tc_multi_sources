@@ -131,7 +131,7 @@ def display_batch(batch_info, batch_idx, targets, preds, results_dir):
                 all_channels = list(target_ds.data_vars.keys())
                 sample_shape = sample_info["spatial_shape"].values[0]
                 if len(sample_shape) == 2:
-                    channel = all_channels[1]
+                    channel = all_channels[0]
                     target_sample = target_ds.isel(samples=idx)
                     lat = target_sample["lat"].values
                     lon = target_sample["lon"].values

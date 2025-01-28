@@ -6,17 +6,14 @@ defaults:
   - override /lr_scheduler: cosine_warmup_100epochs.yaml
 
 wandb:
-  name: BT_estim_from37GHz
-  group: estim_best_track_from_37GHz
+  name: 37GHzBT
+  group: 37GHz_and_best_track
 
 dataset:
   train:
-    dt_max: 6
+    dt_max: 30
     min_available_sources: 2
     mask_spatial_coords: tc_primed_storm_metadata
 
 lightning_module:
-    # To only train the model to predict the best track data
-    train_only_on_sources: ['tc_primed_storm_metadata']
     predict_dist_to_center: false
-    loss_max_distance_from_center: null

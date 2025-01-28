@@ -1,20 +1,23 @@
 # @package _global_
 defaults:
   - override /paths: jz
-  - override /sources: 37GHz_best_track
+  - override /sources: all_sources_37GHz_best_track
   - override /lightning_module: mae
   - override /lr_scheduler: cosine_warmup_100epochs.yaml
 
 wandb:
-  name: BTfrom37GHz
-  group: best_track_from_37GHz
+  name: BTfromAll
+  group: best_track_from_all
 
 dataset:
   train:
     dt_max: 6
-    min_available_sources: 1
+    min_available_sources: 3  # ERA5, Infrared and at least 1 pmw source.
     forecasting_lead_time: 24
     forecasting_source: tc_primed_storm_metadata
+    randomly_drop_sources:
+      tc_primed_era5: 0.5
+      tc_primed_infrared: 0.5
     mask_spatial_coords: tc_primed_storm_metadata
   val:
     forecasting_lead_time: 24

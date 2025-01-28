@@ -166,5 +166,5 @@ class SourcetypeProjection0d(nn.Module):
 
     def forward(self, x, **kwargs):
         x = self.norm(x[:, 0])  # (B, D)
-        x = self.linear(x)      # (B, C)
+        x = self.linear(x)  # (B, C)
         return x

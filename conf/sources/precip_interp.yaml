@@ -1,13 +1,36 @@
 tc_primed:
-  GMI_GPM:
-    S1:
-      variables: ['TB_36.64H', 'TB_36.64V', 'TB_89.0H', 'TB_89.0V']
-    KuGMI:
-      variables: ['nearSurfPrecipTotRate', 'nearSurfPrecipTotRateSigma']
-  TMI_TRMM:
-    S2:
-      variables: ['TB_37.0H', 'TB_37.0V']
-    S3:
-      variables: ['TB_85.5V', 'TB_85.5H']
-    KuTMI:
-      variables: ['nearSurfPrecipTotRate', 'nearSurfPrecipTotRateSigma']
+  pmw:
+    AMSR2_GCOMW1:
+      S4:
+        variables: ['TB_36.5H']
+    SSMI_F11:
+      S1:
+        variables: ['TB_37.0H']
+    SSMI_F13:
+      S1:
+        variables: ['TB_37.0H']
+    SSMI_F14:
+      S1:
+        variables: ['TB_37.0H']
+    SSMI_F15:
+      S1:
+        variables: ['TB_37.0H']
+    SSMIS_F16:
+      S2:
+        variables: ['TB_37.0H']
+    SSMIS_F17:
+      S2:
+        variables: ['TB_37.0H']
+    SSMIS_F18:
+      S2:
+        variables: ['TB_37.0H']
+    SSMIS_F19:
+      S2:
+        variables: ['TB_37.0H']
+  radar:
+    GMI_GPM:
+      KuGMI:
+        variables: ['nearSurfPrecipTotRate']
+    TMI_TRMM:
+      KuTMI:
+        variables: ['nearSurfPrecipTotRate']

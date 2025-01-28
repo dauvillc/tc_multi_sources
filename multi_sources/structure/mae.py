@@ -18,7 +18,10 @@ from multi_sources.models.embedding_layers import (
     CoordinatesEmbedding0d,
     SourceSpecificEmbedding0d,
 )
-from multi_sources.models.output_layers import SourcetypeProjection0d, SourcetypeProjection2d
+from multi_sources.models.output_layers import (
+    SourcetypeProjection0d,
+    SourcetypeProjection2d,
+)
 
 
 class MultisourceMAE(pl.LightningModule):
@@ -81,9 +84,9 @@ class MultisourceMAE(pl.LightningModule):
                 from training. This means that at each training step, those sources will not be
                 masked and the model will not backpropagate on them.
             fine_tune (None or str): If not None, name of a source to fine-tune on. The backbone
-                as well as the embedding and output layers of all other sources will be frozen.
-                Moreover, the module will only train on the fine-tuned source. This argument
-                overrides train_only_on_sources and exclude_sources_from_training. 
+                and embedding and output layers of the other sources will be frozen.
+                If fine_tune is not None, it overrides
+                train_only_on_sources and exclude_sources_from_training.
             normalize_coords_across_sources (bool): If True, the coordinates of each source
                 will be normalized across all sources in the batch so that the minimum
                 latitude and longitude in each example is 0 and maximum is 1.
@@ -117,7 +120,7 @@ class MultisourceMAE(pl.LightningModule):
             self.exclude_sources_from_training = [
                 source for source in self.source_names if source != fine_tune
             ]
-        else: 
+        else:
             self.train_only_on_sources = train_only_on_sources
             self.exclude_sources_from_training = exclude_sources_from_training
         # Save the configuration so that it can be loaded from the checkpoints
@@ -266,6 +269,7 @@ class MultisourceMAE(pl.LightningModule):
                 "embedded_values": v,
                 "embedded_coords": c,
             }
+
         return output
 
     def mask(self, x):
@@ -354,7 +358,7 @@ class MultisourceMAE(pl.LightningModule):
         # Run the transformer backbone
         pred = self.backbone(x)
 
-        # Output projections
+        # No need to project the other sources if we're fine-tuning
         for source, v in pred.items():
             # Project from latent values space to output space using the output layer
             # corresponding to the source type
@@ -373,9 +377,9 @@ class MultisourceMAE(pl.LightningModule):
         """Defines a training or validation step for the model."""
         batch = self.preproc_input(batch)
         batch_size = batch[list(batch.keys())[0]]["values"].shape[0]
+
         pred, avail_tensors = self.forward(batch)
 
-        # Pass preprocessed batch to loss calculation
         losses = self.loss_fn(pred, batch, avail_tensors)
         # If len(losses) == 0, i.e. for all masked sources the tokens were missing,
         # raise an error.
@@ -383,6 +387,7 @@ class MultisourceMAE(pl.LightningModule):
             raise ValueError("No tokens to compute the loss on")
         # Compute the total loss
         loss = sum(losses.values()) / len(losses)
+
         self.log(
             f"{train_or_val}_loss",
             loss,
@@ -489,21 +494,30 @@ class MultisourceMAE(pl.LightningModule):
         annealing schedule.
         """
         decay = self.adamw_kwargs.pop("weight_decay", 0.0)
-        params = {k: v for k, v in self.named_parameters() if v.requires_grad}
-        # If fine-tuning, we'll only optimize the embedding layers and the output projection layers
-        # associated with the fine-tuned source's type.
+
+        # If fine-tuning, only keep the parameters of the embedding and output layers
+        # of the source to fine-tune on
         if self.fine_tune:
-            fine_tuned_type = self.source_to_type[self.fine_tune]
-            params = {
-                k: v
-                for k, v in params.items()
-                if f"sourcetype_embeddings.{fine_tuned_type}" in k
-                or f"sourcetype_output_projs.{fine_tuned_type}" in k
-            }
+            ft_source = self.sources[self.fine_tune]
+            # Which coordinates embeddings to keep depends on the dimensionality of the source
+            if ft_source.dim == 2:
+                coords_emb = self.sourcetype_coords_embeddings[ft_source.type]
+            else:
+                coords_emb = self.sourcetype_coords_embeddings[ft_source.type]
+            # Which values embedding and output projection to keep depends on the source type
+            ft_source_type = self.source_to_type[self.fine_tune]
+            values_emb = self.sourcetype_embeddings[ft_source_type]
+            output_proj = self.sourcetype_output_projs[ft_source_type]
+            params = dict(
+                **{"values_emb." + k: v for k, v in values_emb.named_parameters()},
+                **{"coords_emb." + k: v for k, v in coords_emb.named_parameters()},
+                **{"output_proj." + k: v for k, v in output_proj.named_parameters()},
+            )
+        else:
+            params = {k: v for k, v in self.named_parameters() if v.requires_grad}
+
         # Apply weight decay only to the weights that are not in the normalization layers
-        decay_params = {
-            k for k, _ in params.items() if "weight" in k and "norm" not in k
-        }
+        decay_params = {k for k, _ in params.items() if "weight" in k and "norm" not in k}
         optimizer = torch.optim.AdamW(
             [
                 # Parameters without decay
