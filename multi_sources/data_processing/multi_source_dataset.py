@@ -50,6 +50,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         include_seasons=None,
         exclude_seasons=None,
         randomly_drop_sources={},
+        mask_spatial_coords=[],
         data_augmentation=None,
         seed=42,
     ):
@@ -100,6 +101,8 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                 where p is the probability of dropping the source from the sample when
                 it is available. A source cannot be dropped if it would result in a sample
                 with less than min_available_sources sources.
+            mask_spatial_coords (list of str): If not None, names of sources whose spatial
+                coordinates will be masked (set to zeros).
             data_augmentation (None or MultiSourceDataAugmentation): If not None, instance
                 of MultiSourceDataAugmentation to apply to the data.
             seed (int): The seed to use for the random number generator.
@@ -113,6 +116,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         self.select_most_recent = select_most_recent
         self.min_available_sources = min_available_sources
         self.randomly_drop_sources = randomly_drop_sources
+        self.mask_spatial_coords = mask_spatial_coords
         self.data_augmentation = data_augmentation
         self.rng = np.random.default_rng(seed)
 
@@ -314,6 +318,11 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                     # Load the land mask and distance to the center of the storm
                     LM = torch.tensor(load_nc_with_nan(ds["land_mask"]), dtype=torch.float32)
                     D = torch.tensor(load_nc_with_nan(ds["dist_to_center"]), dtype=torch.float32)
+                    # If the spatial coordinates should be masked, set them to zeros
+                    if source_name in self.mask_spatial_coords:
+                        C = torch.zeros_like(C)
+                        LM = torch.zeros_like(LM)
+                        D = torch.zeros_like(D)
 
                     if len(source.context_vars) == 0:
                         CT = None

@@ -18,6 +18,9 @@ train:
   randomly_drop_sources: {}
   # By default, don't select the most recent sources
   select_most_recent: false
+  # Whether to mask the spatial coordinates of the sources
+  mask_spatial_coords: []
+  # Data augmentation to apply
   data_augmentation: ${data_augmentation}
 
 # Validation dataset
@@ -33,4 +36,5 @@ val:
   num_workers: ${dataset.train.num_workers}
   randomly_drop_sources: ${dataset.train.randomly_drop_sources}
   select_most_recent: ${dataset.train.select_most_recent}
+  mask_spatial_coords: ${dataset.train.mask_spatial_coords}
   data_augmentation: null
