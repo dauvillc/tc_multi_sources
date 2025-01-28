@@ -176,6 +176,8 @@ def process_storm_file(file, dest_dir, source_name, data_vars, storm_vars, conte
                     "central_min_pressure": storm_meta["central_min_pressure"][time_idx].item(),
                     "storm_heading": storm_meta["storm_heading"][time_idx].item(),
                     "storm_speed": storm_meta["storm_speed"][time_idx].item(),
+                    "center_latitude": storm_lat,
+                    "center_longitude": storm_lon,
                     "time": time,
                     "latitude": storm_lat,
                     "longitude": storm_lon,
