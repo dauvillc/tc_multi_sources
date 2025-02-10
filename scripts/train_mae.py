@@ -18,6 +18,7 @@ def main(cfg: DictConfig):
     OmegaConf.register_new_resolver("eval", eval)
     OmegaConf.register_new_resolver("nan", lambda: float("nan"))
     cfg = OmegaConf.to_object(cfg)
+    
     resume_run_id = cfg["resume_run_id"] if "resume_run_id" in cfg else None
     # If a run is resuming, the resume_mode must be set to either 'resume' or 'fine_tune'
     if resume_run_id and (
@@ -75,6 +76,15 @@ def main(cfg: DictConfig):
         # https://discuss.pytorch.org/t/how-to-load-part-of-pre-trained-model/1113/39
         ckpt = torch.load(checkpoint_path, map_location="cpu")
         former_dict = ckpt["state_dict"]
+        # The user can add "+reset_output_layers=true" to the command line to reset the
+        # output layers of the model. In this case, the output layers are not loaded from
+        # the checkpoint.
+        if "reset_output_layers" in cfg and cfg["reset_output_layers"]:
+            former_dict = {
+                k: v
+                for k, v in former_dict.items()
+                if "output_proj" not in k
+            }
         new_dict = pl_module.state_dict()
         # add to the former dict the weights that were added in the new dict.
         for k, v in new_dict.items():
