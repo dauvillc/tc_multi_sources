@@ -6,10 +6,12 @@ for a given source.
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import seaborn as sns
 from string import Template
 from concurrent.futures import ProcessPoolExecutor
 from tqdm import tqdm
 from multi_sources.eval.abstract_evaluation_metric import AbstractMultisourceEvaluationMetric
+import matplotlib.gridspec as gridspec
 
 
 # A little code snippet from Shawn Chin & Peter Mortensen
@@ -23,6 +25,7 @@ def strfdelta(tdelta, fmt):
     d = {"D": tdelta.days}
     d["H"], rem = divmod(tdelta.seconds, 3600)
     d["M"], d["S"] = divmod(rem, 60)
+    d["H"], d["M"], d["S"] = f'{d["H"]:02d}', f'{d["M"]:02d}', f'{d["S"]:02d}'
     t = DeltaTemplate(fmt)
     return t.substitute(**d)
 
@@ -57,6 +60,7 @@ class VisualEvaluation(AbstractMultisourceEvaluationMetric):
                 source_name, avail, batch_idx, index_in_batch, dt.
             **kwargs: Additional keyword arguments.
         """
+        sns.set_context("paper")
         # Browse the batch indices in the DataFrame
         unique_batch_indices = info_df["batch_idx"].unique()
         # If eval_fraction < 1.0, select a random subset of the batch indices
@@ -108,72 +112,111 @@ def display_batch(batch_info, batch_idx, targets, preds, results_dir):
         results_dir (Path): Directory where the results will be saved.
     """
     sources = batch_info["source_name"].unique()
-    S = len(sources)
     # For each sample, create a figure with the targets and predictions
     batch_indices = batch_info["index_in_batch"].unique()
     for idx in batch_indices:
-        # Create a figure with two columns (target and prediction) and S rows
-        fig, axes = plt.subplots(nrows=S, ncols=2, figsize=(10, 5 * S))
-        fig.suptitle(
-            f"Left: Targets - Right: Predictions - batch_idx={batch_idx}, idx={idx}", y=1.05
-        )
-        for i, source in enumerate(sources):
-            target_ds = targets[source]
-            pred_ds = preds[source]
-            if target_ds is not None:
-                sample_info = batch_info[
-                    (batch_info["source_name"] == source) & (batch_info["index_in_batch"] == idx)
-                ]
-                dt = pd.to_timedelta(sample_info["dt"].values[0])
-                axes[i, 0].set_title(f"{source} - dt={strfdelta(dt, '%D d%H h:%M min')}")
-                # Check the spatial shape of the sample. If it is an image (2d shape),
-                # display it.
-                all_channels = list(target_ds.data_vars.keys())
-                sample_shape = sample_info["spatial_shape"].values[0]
-                if len(sample_shape) == 2:
-                    channel = all_channels[0]
-                    target_sample = target_ds.isel(samples=idx)
-                    lat = target_sample["lat"].values
-                    lon = target_sample["lon"].values
-                    target = target_sample[channel].values  # Display the first channel
-                    axes[i, 0].imshow(target, cmap="viridis")
+        sample_df = batch_info[batch_info["index_in_batch"] == idx]
+        # For each source, select only the targets and predictions for the sample
+        sample_targets = {source: targets[source].isel(samples=idx) for source in sources}
+        sample_preds = {source: preds[source].isel(samples=idx) for source in sources}
+        plot_sample(sample_df, sample_targets, sample_preds, results_dir, batch_idx, idx)
 
-                    # Set axis ticks and labels
-                    set_axis_ticks(axes[i, 0], lat, lon)
 
-                    # The model only made a prediction when the sample was masked,
-                    # which corresponds to avail=0 (-1 for unavailable and 1 for available
-                    # but not masked).
-                    if pred_ds is not None and sample_info["avail"].item() == 0:
-                        pred_sample = pred_ds.isel(samples=idx)
-                        pred = pred_sample[channel].values  # first channel
+def plot_sample(sample_df, targets, preds, results_dir, batch_idx, sample_idx):
+    """Displays in a figure with a single row. From left to right: available sources,
+    masked source target, and prediction."""
+    # Retrieve the list of all sources that are available and not masked
+    avail_sources = sample_df[sample_df["avail"] == 1]["source_name"].unique().tolist()
+    # Retrieve the source that is masked
+    masked_source = sample_df[sample_df["avail"] == 0]["source_name"].values[0]
 
-                        axes[i, 1].imshow(pred, cmap="viridis")
-                        set_axis_ticks(axes[i, 1], lat, lon)
-                    else:
-                        axes[i, 1].set_title(f"Prediction not available")
-                else:
-                    # For scalar data, just display the target and prediction values
-                    # as text.
-                    target = target_ds.isel(samples=idx)
-                    for j, channel in enumerate(all_channels):
-                        value = target[channel].values.item()
-                        axes[i, 0].text(0.5, 0.5 - 0.1 * j, f"{channel}: {value}", ha="center")
-                    # Display the prediction if available
-                    if pred_ds is not None and sample_info["avail"].item() == 0:
-                        axes[i, 1].set_title(f"pred. - dt={strfdelta(dt, '%D days %H:%M')}")
-                        pred = pred_ds.isel(samples=idx)
-                        for j, channel in enumerate(all_channels):
-                            value = pred[channel].values.item()
-                            axes[i, 1].text(
-                                0.5, 0.5 - 0.1 * j, f"{channel}: {value}", ha="center"
-                            )
-            else:
-                axes[i, 0].set_title(f"{source} not available")
-            # Save the figure
-        plt.tight_layout()
-        plt.savefig(results_dir / f"{batch_idx}_{idx}.png")
-        plt.close(fig)
+    # Sort sources by decreasing dt
+    source_dt = {row["source_name"]: row["dt"] for _, row in sample_df.iterrows()}
+    avail_sources.sort(key=lambda x: source_dt[x], reverse=True)
+
+    # Calculate total number of plots needed
+    num_avail = len(avail_sources)
+    total_cols = num_avail + 2  # available sources + masked target + prediction
+
+    # Create figure with custom gridspec
+    fig = plt.figure(figsize=(3 * total_cols + 1, 3.5))  # Slightly taller to accommodate labels
+    gs = gridspec.GridSpec(1, total_cols + 1, wspace=0.4)
+    # Adjust the subplot parameters to give specified padding
+    plt.subplots_adjust(top=0.75, bottom=0.15)  # Increased top margin for labels
+
+    # Add section labels - adjust the x-position for "Available sources" to center it over its columns
+    fig.text(
+        num_avail / (2 * total_cols),
+        0.92,  # Changed from 0.9 to 0.92
+        "Available sources",
+        fontsize=14,
+        weight="bold",
+        ha="center",
+    )
+    fig.text(
+        (total_cols - 0.15) / (total_cols + 1),
+        0.92,  # Changed from 0.9 to 0.92
+        "Target / Prediction",
+        fontsize=14,
+        weight="bold",
+        ha="center",
+    )
+
+    # Plot available sources
+    for i, source in enumerate(avail_sources):
+        ax = fig.add_subplot(gs[0, i])
+        target_ds = targets[source]
+        first_channel = list(target_ds.data_vars.keys())[0]
+        target = target_ds[first_channel].values
+        dt = sample_df[sample_df["source_name"] == source]["dt"].iloc[0]
+        ax.imshow(target, cmap="viridis")
+
+        displayed_name = " ".join(source.split("_")[3:5])
+        displayed_name += " - " + first_channel
+        title = f"{displayed_name}\n$\delta_t=${strfdelta(dt, '%H:%M:%S')}"
+        ax.set_title(title)
+        set_axis_ticks(ax, target_ds.lat.values, target_ds.lon.values)
+
+    # Add vertical separator line
+    fig.add_subplot(gs[0, num_avail])
+    plt.axvline(x=0, color="black", linestyle="-", linewidth=2)
+    plt.axis("off")
+
+    # Get target and prediction data for masked source
+    target_ds = targets[masked_source]
+    first_channel = list(target_ds.data_vars.keys())[0]
+    target = target_ds[first_channel].values
+    pred_ds = preds[masked_source]
+    pred = pred_ds[first_channel].values
+    
+    # Calculate shared min/max values
+    vmin = min(target.min(), pred.min())
+    vmax = max(target.max(), pred.max())
+
+    # Plot masked source target
+    ax = fig.add_subplot(gs[0, -2])
+    dt = sample_df[sample_df["source_name"] == masked_source]["dt"].iloc[0]
+    ax.imshow(target, cmap="viridis", vmin=vmin, vmax=vmax)
+
+    displayed_name = " ".join(masked_source.split("_")[3:5])
+    displayed_name += " - " + first_channel
+    title = f"{displayed_name}\n$\delta_t=${strfdelta(dt, '%H:%M:%S')}\n(MASKED)"
+    ax.set_title(title)
+    set_axis_ticks(ax, target_ds.lat.values, target_ds.lon.values)
+
+    # Plot prediction
+    ax = fig.add_subplot(gs[0, -1])
+    title_suffix = "\nPrediction"
+
+    ax.imshow(pred, cmap="viridis", vmin=vmin, vmax=vmax)
+    title = f"{displayed_name}\n$\delta_t=${strfdelta(dt, '%H:%M:%S')}{title_suffix}"
+    ax.set_title(title)
+    set_axis_ticks(ax, pred_ds.lat.values, pred_ds.lon.values)
+
+    # Save the figure
+    plt.tight_layout(h_pad=0.2, w_pad=0.4)  # Add specific padding parameters
+    fig.savefig(results_dir / f"{batch_idx}_{sample_idx}.png", bbox_inches="tight")
+    plt.close(fig)
 
 
 def set_axis_ticks(ax, lat, lon):
