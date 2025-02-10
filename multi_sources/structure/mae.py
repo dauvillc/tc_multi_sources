@@ -367,7 +367,7 @@ class MultisourceMAE(pl.LightningModule):
             )
         # For 2D sources, remove the padding
         for source, spatial_shape in spatial_shapes.items():
-            pred[source] = pred[source][:, :, : spatial_shape[0], : spatial_shape[1]]
+            pred[source] = pred[source][..., : spatial_shape[0], : spatial_shape[1]]
 
         # Compute availability tensors just before returning
         avail_tensors = {source: data["avail"] for source, data in x.items()}
@@ -422,23 +422,25 @@ class MultisourceMAE(pl.LightningModule):
         """
         losses = {}
         for source, true_data in y_true.items():
-            B = true_data["values"].shape[0]  # Batch size
+            true_values = true_data["values"]
+            pred_values = y_pred[source]
+            B = true_values.shape[0]  # Batch size
             # If also predicting the distance to the center, concatenate it to the true values
             # after normalizing it. We can normalize by dividing by the max distance, which will
             # make the distance values between 0 and 1.
             if self.predict_dist_to_center:
                 normalized_dist = true_data["dist_to_center"] / self.loss_max_distance_from_center
-                true_data["values"] = torch.cat(
-                    [true_data["values"], normalized_dist.unsqueeze(1)], dim=1
+                true_values = torch.cat(
+                    [true_values, normalized_dist.unsqueeze(1)], dim=1
                 )
             # Retrieve the mask of the output-enabled variables for the source,
             # and exclude them from the predictions and true values.
             output_vars = self.sources[source].get_output_variables_mask()  # (C,)
             if self.predict_dist_to_center:
                 output_vars = output_vars + [True]  # Add the distance to the center
-            output_vars = torch.tensor(output_vars, device=true_data["values"].device)
-            true_data["values"] = true_data["values"][:, output_vars]
-            y_pred[source] = y_pred[source][:, output_vars]
+            output_vars = torch.tensor(output_vars, device=true_values.device)
+            true_values = true_values[:, output_vars]
+            pred_values = pred_values[:, output_vars]
             # We'll compute a mask M on the tokens of the source of shape (B, C, ...)
             # such that M[b, ...] = True if and only if the following conditions are met:
             # - The source was masked for the sample b (avail_tensors[b] == 0);
@@ -454,14 +456,13 @@ class MultisourceMAE(pl.LightningModule):
                 dist = true_data["dist_to_center"]
                 mask = mask & (dist <= self.loss_max_distance_from_center)
             # Expand the mask to the number of channels in the source
-            mask = mask.unsqueeze(1).expand_as(true_data["values"])  # (B, C, ...)
-            # Compute the loss on the elements for which the loss maks is True
-            true_values = true_data["values"][mask]
-            pred_values = y_pred[source][mask]
+            mask = mask.unsqueeze(1).expand_as(true_values)  # (B, C, ...)
+            true_values = true_values[mask]
+            pred_values = pred_values[mask]
             if true_values.numel() == 0:
-                # If there are no tokens to compute the loss on, skip this source
                 continue
-            losses[source] = nn.functional.mse_loss(pred_values, true_values)
+            loss = nn.functional.mse_loss(pred_values, true_values)
+            losses[source] = loss
         return losses
 
     def training_step(self, batch, batch_idx):
@@ -496,7 +497,7 @@ class MultisourceMAE(pl.LightningModule):
         decay = self.adamw_kwargs.pop("weight_decay", 0.0)
 
         # If fine-tuning, only keep the parameters of the embedding and output layers
-        # of the source to fine-tune on
+        # of the source to fine-tune on, and the last block of the backbone.
         if self.fine_tune:
             ft_source = self.sources[self.fine_tune]
             # Which coordinates embeddings to keep depends on the dimensionality of the source
