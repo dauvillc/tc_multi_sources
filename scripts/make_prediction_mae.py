@@ -25,14 +25,17 @@ def main(cfg: DictConfig):
     # experiment
     exp_cfg["dataloader"].update(cfg["dataloader"])
     exp_cfg["paths"].update(cfg["paths"])
-    exp_cfg["dataset"]["val"]["dataset_dir"] = cfg["paths"]["preprocessed_dataset"]
+    split = "val"
+    if "split" in cfg and cfg["split"] is not None:
+        split = cfg["split"]
+    if split == "test" and "test" not in exp_cfg["dataset"]:
+        exp_cfg["dataset"]["test"] = exp_cfg["dataset"]["val"]
+        exp_cfg['dataset']["test"]["split"] = "test"
+    exp_cfg["dataset"][split]["dataset_dir"] = cfg["paths"]["preprocessed_dataset"]
     # Seed everything with the seed used in the experiment
     pl.seed_everything(exp_cfg["seed"], workers=True)
 
     # Create the validation dataset and dataloader
-    split = "val"
-    if "split" in cfg and cfg["split"] is not None:
-        split = cfg["split"]
     val_dataset = hydra.utils.instantiate(
         exp_cfg["dataset"][split],
     )
