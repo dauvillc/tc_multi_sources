@@ -3,6 +3,7 @@
 import torch.nn as nn
 from multi_sources.models.icnr import ICNR
 from multi_sources.models.conv import ResNet
+from einops.layers.torch import Rearrange
 
 
 class SourceSpecificProjection2d(nn.Module):
@@ -94,15 +95,8 @@ class SourcetypeProjection2d(nn.Module):
             self.conv.weight, initializer=nn.init.kaiming_normal_, upscale_factor=patch_size
         )
         self.conv.weight.data.copy_(weight)
-        # Final Conv2d to reduce the artifacts
-        self.final_conv = nn.Conv2d(
-            in_channels=channels,
-            out_channels=channels,
-            kernel_size=3,
-            stride=1,
-            padding=1,
-            bias=False,
-        )
+        # Final conv layer
+        self.final_conv = ResNet(channels, 64, n_blocks=2)
 
     def forward(self, x, tokens_shape):
         """
@@ -119,6 +113,8 @@ class SourcetypeProjection2d(nn.Module):
         x = self.conv(x)
         x = self.pixel_shuffle(x)  # (B, C, H, W)
         x = self.final_conv(x)
+        if hasattr(self, "rearrange"):
+            x = self.rearrange(x)
         return x
 
 
