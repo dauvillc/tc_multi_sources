@@ -38,3 +38,19 @@ val:
   select_most_recent: ${dataset.train.select_most_recent}
   mask_spatial_coords: ${dataset.train.mask_spatial_coords}
   data_augmentation: null
+
+# Test dataset
+test:
+  _target_: multi_sources.data_processing.multi_source_dataset.MultiSourceDataset
+  dataset_dir: ${paths.preprocessed_dataset}
+  split: test
+  included_variables_dict:
+    _target_: multi_sources.data_processing.utils.read_variables_dict
+    variables_dict: ${sources}
+  dt_max: ${dataset.train.dt_max}
+  min_available_sources: ${dataset.train.min_available_sources}
+  num_workers: ${dataset.train.num_workers}
+  randomly_drop_sources: ${dataset.train.randomly_drop_sources}
+  select_most_recent: ${dataset.train.select_most_recent}
+  mask_spatial_coords: ${dataset.train.mask_spatial_coords}
+  data_augmentation: null
