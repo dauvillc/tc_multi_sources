@@ -73,6 +73,7 @@ def main(cfg):
     use_fraction = cfg["norm_constants_fraction"]
     min_files = cfg["norm_constants_min_samples"]
     max_mem_per_worker = cfg["max_mem_per_worker"]
+    process_only = cfg.get("process_only", [])
     # Path to the preprocessed dataset directory
     preprocessed_dir = Path(cfg["paths"]["preprocessed_dataset"])
     # Path to the regridded dataset
@@ -96,6 +97,9 @@ def main(cfg):
     # The prepared data directory contains one sub-directory per source.
     source_dirs = [d for d in regridded_dir.iterdir() if d.is_dir()]
     for source_dir in tqdm(source_dirs, desc="Processing sources"):
+        if process_only and source_dir.name not in process_only:
+            print("Skipping source ", source_dir.name)
+            continue
         print("Processing source ", source_dir.name)
         source_name = source_dir.name
         process_source(

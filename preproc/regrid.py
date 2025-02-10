@@ -245,7 +245,7 @@ def main(cfg):
     num_workers = 0 if "num_workers" not in cfg else cfg["num_workers"]
     use_cache = False if "use_cache" not in cfg else cfg["use_cache"]
     no_regrid = cfg.get("no_regrid", [])  # Get the no_regrid list from config
-    process_only = cfg.get("process_only", None)  # Get the process_only source name
+    process_only = cfg.get("process_only", [])  # Get the process_only source name
     ignore_source = cfg.get("ignore_source", [])  # Get the ignore_source list from config
 
     # Path to the preprocessed dataset directory.
@@ -258,7 +258,7 @@ def main(cfg):
     sources_metadata = {}
     source_dirs = [d for d in prepared_dir.iterdir() if d.is_dir()]
     if process_only:
-        source_dirs = [d for d in source_dirs if d.name == process_only]
+        source_dirs = [d for d in source_dirs if any([p in d.name for p in process_only])]
         if not source_dirs:
             raise ValueError(f"Source {process_only} not found in {prepared_dir}")
 
