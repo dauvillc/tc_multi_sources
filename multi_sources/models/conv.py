@@ -18,8 +18,8 @@ class ResNet(nn.Module):
         self.input_channels = channels
         # Create an input convolutional layer to match the number of channels
         self.input_layer = nn.Sequential(
+            nn.BatchNorm2d(channels),
             nn.Conv2d(channels, inner_channels, kernel_size, padding=kernel_size // 2),
-            nn.BatchNorm2d(inner_channels),
         )
         self.layers = nn.ModuleList([])
         for i in range(n_blocks):
@@ -30,7 +30,6 @@ class ResNet(nn.Module):
                         inner_channels, inner_channels, kernel_size, padding=kernel_size // 2
                     ),
                     nn.GELU(),
-                    nn.BatchNorm2d(inner_channels),
                     nn.Conv2d(
                         inner_channels, inner_channels, kernel_size, padding=kernel_size // 2
                     ),
