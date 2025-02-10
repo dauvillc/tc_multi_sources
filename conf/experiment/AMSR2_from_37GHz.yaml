@@ -1,20 +1,20 @@
 # @package _global_
 defaults:
   - override /paths: jz
-  - override /dataloader: jz
   - override /sources: sat_interp_37GHz_improved
   - override /lightning_module: mae
   - override /lr_scheduler: cosine_warmup_100epochs.yaml
 
 wandb:
-  name: sat_interp_37GHz_improved
-  group: 37GHz_improved
+  name: AMSR2_from_37GHz
+  group: AMSR2_from_37GHz
 
 dataset:
   train:
-    dt_max: 6
+    dt_max: 0.1
     min_available_sources: 2
 
-model:
-  backbone:
-    _target_: multi_sources.models.backbone.MultisourceGeneralBackbone
+lightning_module:
+    # To only train the model to predict the best track data
+    train_only_on_sources: ['tc_primed_pmw_AMSR2_GCOMW1_S4']
+    predict_dist_to_center: true
