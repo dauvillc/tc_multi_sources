@@ -46,6 +46,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         num_workers=0,
         select_most_recent=False,
         forecasting_lead_time=None,
+        forecasting_sources=None,
         forecasting_source=None,
         include_seasons=None,
         exclude_seasons=None,
@@ -86,13 +87,14 @@ class MultiSourceDataset(torch.utils.data.Dataset):
             select_most_recent (bool): If True, selects the most recent element for each source
                 when multiple elements are available. If False, selects a random element.
             forecasting_lead_time (int): If not None, the lead time to use for forecasting.
-                Must be used in conjunction with forecasting_source. If enabled, the forecast
-                source will always be the reference source; the time window for the other sources
+                Must be used in conjunction with forecasting_sources. If enabled, the reference
+                source will always be one of the forecast source.
+                The time window for the other sources
                 will be (t0 - lead_time - dt_max, t0 - lead_time), i.e. the other sources will be
                 in a window of duration dt_max, ending at t0 - lead_time.
-            forecasting_source (str): If not None, the name of the source to use for forecasting.
-                Must be used in conjunction with forecasting_lead_time. If enabled, the forecast
-                source will always be the reference source.
+            forecasting_sources (list of str): If not None, the name of the sources to use
+                for forecasting.
+                Must be used in conjunction with forecasting_lead_time.
             include_seasons (list of int): The years to include in the dataset.
                 If None, all years are included.
             exclude_seasons (list of int): The years to exclude from the dataset.
@@ -119,14 +121,6 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         self.mask_spatial_coords = mask_spatial_coords
         self.data_augmentation = data_augmentation
         self.rng = np.random.default_rng(seed)
-
-        if forecasting_lead_time is not None:
-            if forecasting_source is None:
-                raise ValueError("forecasting_lead_time must be used with forecasting_source.")
-            self.forecasting_lead_time = pd.Timedelta(forecasting_lead_time, unit="h")
-        else:
-            self.forecasting_lead_time = pd.Timedelta(0, unit="h")
-        self.forecasting_source = forecasting_source
 
         print(f"{split}: Browsing requested sources and loading metadata...")
         # Load and merge individual source metadata files
@@ -183,11 +177,22 @@ class MultiSourceDataset(torch.utils.data.Dataset):
             self.df = self.df[~self.df["season"].isin(exclude_seasons)]
         if len(self.df) == 0:
             raise ValueError("No elements available for the selected sources and seasons.")
-        
+
         # Filter out the rows where the data_path is not valid
         print("Filtering out rows with invalid data paths...")
         self.df = self.df[self.df["data_path"].apply(lambda x: Path(x).exists())]
         self.df = self.df.reset_index(drop=True)
+
+        if forecasting_lead_time is not None:
+            if forecasting_source is not None:
+                forecasting_sources = [forecasting_source]
+            if forecasting_sources is None:
+                raise ValueError("forecasting_lead_time must be used with forecasting_sources.")
+            self.forecasting_lead_time = pd.Timedelta(forecasting_lead_time, unit="h")
+            self.forecasting_sources = [s for s in forecasting_sources if s in source_names]
+        else:
+            self.forecasting_lead_time = pd.Timedelta(0, unit="h")
+            self.forecasting_sources = None
 
         # ========================================================================================
         # BUILDING THE REFERENCE DATAFRAME
@@ -199,10 +204,10 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         available_sources = compute_sources_availability(
             self.df, self.dt_max, lead_time=self.forecasting_lead_time, num_workers=num_workers
         )
-        # If forecasting a source, don't include it in the available sources, since it won't
-        # be taken from the time window (but from t0 directly).
-        if forecasting_source is not None:
-            available_sources = available_sources.drop(columns=[forecasting_source])
+        # If forecasting, don't include the forecast in the available sources, since they
+        # won't be included in the samples.
+        if self.forecasting_sources is not None:
+            available_sources = available_sources.drop(columns=self.forecasting_sources)
         # - From this, we can filter the samples to only keep the ones where at least
         # min_available_sources sources are available.
         available_sources_count = available_sources.sum(axis=1)
@@ -214,11 +219,10 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         self.reference_df = self.df[mask][["sid", "time", "source_name"]]
         self.reference_df["n_available_sources"] = available_sources_count[mask]
 
-        # Optional: if we're forecasting a precise source, we'll only keep this source's
-        # sample as reference samples.
-        if forecasting_source is not None:
+        # If forecasting, only use the forecasting sources as references
+        if self.forecasting_sources is not None:
             self.reference_df = self.reference_df[
-                self.reference_df["source_name"] == forecasting_source
+                self.reference_df["source_name"].isin(self.forecasting_sources)
             ]
 
         # Finally, avoid duplicated samples if two observations are at the exact same time
@@ -274,12 +278,19 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                     # Skip the source
                     continue
 
-            # If forecast source: it is the reference element, so its time
-            # must be exactly t0
-            if source_name == self.forecasting_source:
-                df = sample_df[
-                    (sample_df["source_name"] == source_name) & (sample_df["time"] == t0)
-                ]
+            # If forecast source: if it is the reference source, include it;
+            # otherwise, skip it.
+            if self.forecasting_sources is not None and source_name in self.forecasting_sources:
+                if source_name == sample["source_name"]:
+                    # Isolate the rows of sample_df corresponding to the right source
+                    # and where the time is within the time window
+                    min_t = t0 - self.dt_max
+                    max_t = t0
+                    df = sample_df[
+                        (sample_df["source_name"] == source_name) & (sample_df["time"] == t0)
+                    ]
+                else:
+                    continue
             else:
                 # Isolate the rows of sample_df corresponding to the right source
                 # and where the time is within the time window
