@@ -1,4 +1,4 @@
-_target_: multi_sources.structure.mae.MultisourceMAE
+_target_: multi_sources.structure.deterministic.Multisourcedeterministic
 patch_size: 16
 values_dim: ${model.values_dim}
 coords_dim: ${model.coords_dim}

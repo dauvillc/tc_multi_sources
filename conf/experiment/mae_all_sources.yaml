@@ -2,7 +2,7 @@
 defaults:
   - override /paths: jz
   - override /sources: all_sources
-  - override /lightning_module: mae
+  - override /lightning_module: deterministic
   - override /lr_scheduler: cosine_warmup_50epochs.yaml
 
 wandb:

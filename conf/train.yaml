@@ -5,7 +5,7 @@ defaults:
   - dataset: default
   - data_augmentation: none
   - dataloader: jz
-  - lightning_module: mae
+  - lightning_module: deterministic
   - model: ???
   - trainer: ???
   - lr_scheduler: cosine_warmup_50epochs

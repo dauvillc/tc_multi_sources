@@ -3,7 +3,7 @@ defaults:
   - override /paths: jz
   - override /dataloader: jz
   - override /sources: sat_interp_37GHz_improved
-  - override /lightning_module: mae
+  - override /lightning_module: deterministic
   - override /lr_scheduler: finetune
 
 wandb:
