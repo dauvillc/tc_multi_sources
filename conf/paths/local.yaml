@@ -6,6 +6,8 @@ preprocessed_dataset: "/home/cdauvill/scratch/data/multi_sources/preprocessed/"
 checkpoints: "/home/cdauvill/scratch/checkpoints/"
 # Weights and Biases logs
 wandb_logs: "/home/cdauvill/scratch/"
+# Validation directory
+validation: "/home/cdauvill/scratch/data/multi_sources/validation"
 # Predictions directory
 predictions: "/home/cdauvill/scratch/data/multi_sources/predictions"
 # Results (including visualisation of predictions and targets)

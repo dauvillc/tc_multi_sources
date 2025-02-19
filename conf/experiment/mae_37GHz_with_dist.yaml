@@ -2,13 +2,13 @@
 defaults:
   - override /paths: jz
   - override /dataloader: jz
-  - override /sources: sat_interp_37GHz_improved
+  - override /sources: sat_interp_37GHz
   - override /lightning_module: deterministic
   - override /lr_scheduler: cosine_warmup_150epochs.yaml
 
 wandb:
-  name: sat_interp_37GHz_improved
-  group: 37GHz_improved
+  name: sat_interp_37GHz_with_dist
+  group: 37GHz_with_dist
 
 dataset:
   train:

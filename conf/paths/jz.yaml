@@ -6,6 +6,7 @@ preprocessed_dataset: ${oc.env:NEWSCRATCH}/data/multi_sources/preprocessed/
 checkpoints: ${oc.env:NEWSCRATCH}/checkpoints/
 
 wandb_logs: ${oc.env:NEWSCRATCH}
+validation: ${oc.env:NEWSCRATCH}/data/multi_sources/validation
 predictions: ${oc.env:NEWSCRATCH}/data/multi_sources/predictions
 results: ${oc.env:NEWSCRATCH}/data/multi_sources/results
 

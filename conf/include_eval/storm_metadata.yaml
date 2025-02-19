@@ -1,0 +1,5 @@
+storm_metadata:
+  _target_: multi_sources.eval.scalar_evaluation.ScalarEvaluation
+  source_name: tc_primed_storm_metadata
+  var_names: ['intensity', 'min. SLP', 'heading']
+  var_units: ['knots', 'hPa', 'degrees']
