@@ -60,6 +60,9 @@ def main(cfg: DictConfig):
     )
     print("Train dataset size:", len(train_dataset))
     print("Validation dataset size:", len(val_dataset))
+    # Create the validation directory if it does not exist
+    val_dir = Path(cfg["paths"]["validation"]) / run_id
+    val_dir.mkdir(parents=True, exist_ok=True)
 
     # Create the backbone
     backbone = instantiate(cfg["model"]["backbone"])
@@ -69,6 +72,7 @@ def main(cfg: DictConfig):
         train_dataset.sources,
         backbone,
         cfg,
+        validation_dir=val_dir,
     )
     if resume_run_id:
         # The following snippet loads the weights of the checkpoint into the new
