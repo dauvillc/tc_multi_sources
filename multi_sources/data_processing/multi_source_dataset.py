@@ -178,11 +178,6 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         if len(self.df) == 0:
             raise ValueError("No elements available for the selected sources and seasons.")
 
-        # Filter out the rows where the data_path is not valid
-        print("Filtering out rows with invalid data paths...")
-        self.df = self.df[self.df["data_path"].apply(lambda x: Path(x).exists())]
-        self.df = self.df.reset_index(drop=True)
-
         if forecasting_lead_time is not None:
             if forecasting_source is not None:
                 forecasting_sources = [forecasting_source]
