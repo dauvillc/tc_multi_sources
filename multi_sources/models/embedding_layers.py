@@ -102,11 +102,6 @@ class CoordinatesEmbedding2d(nn.Module):
             self.diffusion_t_embedding = nn.Linear(1, emb_dim)
         if n_context_vars > 0:
             self.context_embedding = nn.Linear(n_context_vars, emb_dim)
-        self.ff = nn.Sequential(
-            nn.Linear(emb_dim, emb_dim * mlp_ratio),
-            nn.GELU(),
-            nn.Linear(emb_dim * mlp_ratio, emb_dim),
-        )
         self.norm = nn.LayerNorm(emb_dim)
 
     def forward(self, data):
@@ -142,7 +137,6 @@ class CoordinatesEmbedding2d(nn.Module):
             embedded_context = self.context_embedding(context_vars)
             embedded_coords += embedded_context.unsqueeze(1)
 
-        embedded_coords = self.ff(embedded_coords) + embedded_coords
         embedded_coords = self.norm(embedded_coords)
         return embedded_coords
 
@@ -161,18 +155,24 @@ class SourcetypeEmbedding2d(nn.Module):
     All sources in a given type must have the same channels, in the same order.
     """
 
-    def __init__(self, channels, patch_size, values_dim):
+    def __init__(self, channels, patch_size, values_dim, use_diffusion_t=True):
         """Args:
         channels (int): The number of channels in the source, not counting
             the availability mask.
         patch_size (int): The size of the patches to be embedded.
         values_dim (int): The dimension of the embedding space for the values.
+        use_diffusion_t (bool): Whether the layer will also receive the diffusion
+            timestep as input.
         """
         super().__init__()
         self.patch_size = patch_size
+        self.use_diffusion_t = use_diffusion_t
+        channels += 1  # Add an additional channel for the availability mask
+        if use_diffusion_t:
+            channels += 1  # Add an additional channel for the diffusion timestep
         # Values embedding: embeds the pixels using a strided convolution
         self.values_embedding = ConvPatchEmbedding2d(
-            channels + 1, patch_size, values_dim, norm=False
+            channels, patch_size, values_dim, norm=False
         )
         self.norm = nn.LayerNorm(values_dim)
 
@@ -182,6 +182,9 @@ class SourcetypeEmbedding2d(nn.Module):
                 keys:
                 * 'values': torch.Tensor of shape (B, C, H, W) containing the pixels of the source.
                 * 'avail_mask': torch.Tensor of shape (B, H, W) containing the availability mask.
+                * If use_diffusion_t is True:
+                    * 'diffusion_t': torch.Tensor of shape (B,) containing the diffusion
+                        timestep.
         Returns:
             embedded_values: torch.Tensor of shape (B, num_patches, values_dim).
         """
@@ -192,6 +195,10 @@ class SourcetypeEmbedding2d(nn.Module):
             values = data["values"]
             avail_mask = data["avail_mask"].unsqueeze(1)
             values = torch.cat([values, avail_mask], dim=1)
+            if self.use_diffusion_t:
+                diffusion_t = data["diffusion_t"].view(-1, 1, 1, 1)
+                diffusion_t = diffusion_t.expand(-1, 1, values.size(2), values.size(3))
+                values = torch.cat([values, diffusion_t], dim=1)
             embedded_values = self.values_embedding(values)
             embedded_values = self.norm(embedded_values)
         return embedded_values

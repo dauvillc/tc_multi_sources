@@ -172,6 +172,7 @@ class MultisourceFlowMatchingReconstructor(pl.LightningModule):
         # to help the model distinguish between the masked and unmasked tokens.
         # Flow matching ingredients
         self.fm_path = CondOTProbPath()
+        self.cnt = 0
 
     def preproc_input(self, x):
         # Normalize the coordinates across sources to make them relative instead of absolute
@@ -191,9 +192,8 @@ class MultisourceFlowMatchingReconstructor(pl.LightningModule):
             # /!\ The availability mask is different from the avail flag. The avail flag
             # is a single value for the whole source, which is -1 if the source is missing,
             # and 1 if it's available. The availability mask gives the availability of each
-            # point in the source. Thus, if the avail flag is -1, the availability mask is
-            # a tensor of zeros of the same shape as the source.
-            am = (~torch.isnan(v)[:, 0]).float()  # (B, H, W)
+            # point in the source: 1 if the point is available, 0 if it's masked, -1 if missing.
+            am = (~torch.isnan(v)[:, 0]).float() * 2 - 1 # (B, H, W)
             # Don't modify the tensors in-place, as we need to keep the NaN values
             # for the loss computation
             dt = torch.nan_to_num(data["dt"], nan=-1.0)
@@ -321,10 +321,11 @@ class MultisourceFlowMatchingReconstructor(pl.LightningModule):
             # Set the avail flag to 0 where the source should be masked
             avail_flag = masked_data["avail"]
             avail_flag[masked_sources_matrix[:, i]] = 0
-            # The sources should be noised either if they are masked or missing
-            should_noise = avail_flag <= 0
+            # The sources should be noised if they are masked.
+            should_noise = avail_flag == 0
             if pure_noise:
                 t = torch.zeros(batch_size, device=device)  # Means x_t = x_0
+                t += 0.1
             else:
                 # Sample the diffusion timesteps (different for each sample in the batch)
                 # as the sigmoid of a standard gaussian (as in Stable Diffusion 3).
@@ -335,13 +336,14 @@ class MultisourceFlowMatchingReconstructor(pl.LightningModule):
             path_sample = self.fm_path.sample(t=t, x_0=noise, x_1=data["values"].detach().clone())
             noised_values = path_sample.x_t.detach().clone()
             masked_data["values"][should_noise] = noised_values[should_noise]
-            # Set the availability mask to zero
+            # Set the availability mask to 0 everywhere for noised sources.
             # (!= from the avail flag, it's a mask of same shape
-            # as the values, which indicates at each point whether the data is missing)
             masked_data["avail_mask"][should_noise] = 0
-            # Save the diffusion timesteps at which the source was masked. For unmasked sources,
-            # the diffusion step is set to -1.
-            masked_data["diffusion_t"] = torch.where(should_noise, t, -torch.ones_like(t))
+            # Save the diffusion timesteps at which the source was masked. For unnoised sources,
+            # the diffusion step is set to 1, since the step t=1 means no noise is left.
+            masked_data["diffusion_t"] = torch.where(should_noise, t, torch.ones_like(t))
+            # For sources that are fully unavailable, set the diffusion timestep to -1
+            masked_data['diffusion_t'][masked_data['avail'] == -1] = -1
             path_samples[source] = path_sample
             masked_x[source] = masked_data
         return masked_x, path_samples
@@ -435,7 +437,7 @@ class MultisourceFlowMatchingReconstructor(pl.LightningModule):
             pred_s = pred_s[:, output_vars]
             target_s = path_samples[source].dx_t[:, output_vars]
             # debug: imshow x_t, the pred and the target
-            # if self.cnt != 0 and self.cnt % 2000 == 0:
+            # if self.cnt != 0 and self.cnt % 10000 == 0:
             #     for i in range(pred_s.shape[0]):
             #         if avail_flag[source][i] == 0:
             #             fig = plt.figure()
@@ -492,11 +494,9 @@ class MultisourceFlowMatchingReconstructor(pl.LightningModule):
             batch_t = {
                 source: {k: v for k, v in data.items()} for source, data in masked_batch.items()
             }
-            # Update the values and diffusion timesteps of the sources that are solved. This
-            # means that the values of sources where avail == 1 never change throughout the
-            # solving process.
+            # Update the values and diffusion timesteps of the sources that are solved.
             for source, x_ts in x_t.items():
-                is_solved = batch_t[source]["avail"] <= 0
+                is_solved = batch_t[source]["avail"] == 0
                 batch_t[source]["values"][is_solved] = x_ts[is_solved]
                 batch_t[source]["diffusion_t"][is_solved] = t
             # Run the model
@@ -504,11 +504,11 @@ class MultisourceFlowMatchingReconstructor(pl.LightningModule):
             # Where the sources are not being solved, we'll set the velocity field to zero,
             # so that those examples don't change in the solution.
             for source in vf:
-                vf[source][batch_t[source]["avail"] > 0] = 0
+                vf[source][batch_t[source]["avail"] != 0] = 0
             return vf
 
         # Solve the ODE
-        time_grid = torch.linspace(0, 1, self.n_sampling_diffusion_steps)
+        time_grid = torch.linspace(0.1, 1, self.n_sampling_diffusion_steps)
         solver = MultisourceEulerODESolver(vf_func)
         sol = solver.solve(x_0, time_grid)
 
@@ -516,16 +516,26 @@ class MultisourceFlowMatchingReconstructor(pl.LightningModule):
 
     def training_step(self, batch, batch_idx):
         batch = self.preproc_input(batch)
+        self.last_training_batch = batch
         return self.mask_and_loss_step(batch, batch_idx, "train")
+
+    def on_train_epoch_end(self): 
+        with torch.no_grad():
+            if self.validation_dir is not None:
+                # Sample the model for each source in the batch
+                time_grid, sol = self.sample(self.last_training_batch)
+                # Create a visualization in HTML for each source and save it
+                fig = display_solution_html(self.last_training_batch, sol, time_grid)
+                fig.write_html(self.validation_dir / f"sample.html")
 
     def validation_step(self, batch, batch_idx):
         batch = self.preproc_input(batch)
-        if self.validation_dir is not None and batch_idx % 5 == 0:
-            # Sample the model for each source in the batch
-            time_grid, sol = self.sample(batch)
-            # Create a visualization in HTML for each source and save it
-            fig = display_solution_html(batch, sol, time_grid)
-            fig.write_html(self.validation_dir / f"sample_{batch_idx}.html")
+        # if self.validation_dir is not None and batch_idx % 3 == 0:
+        #     # Sample the model for each source in the batch
+        #     time_grid, sol = self.sample(batch)
+        #     # Create a visualization in HTML for each source and save it
+        #     fig = display_solution_html(batch, sol, time_grid)
+        #     fig.write_html(self.validation_dir / f"sample_{batch_idx}.html")
         return self.mask_and_loss_step(batch, batch_idx, "val")
 
     def predict_step(self, batch, batch_idx):
