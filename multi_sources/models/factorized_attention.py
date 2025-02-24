@@ -6,6 +6,7 @@ import torch.nn.functional as F
 import numpy as np
 from einops import rearrange
 from multi_sources.models.attention import ValuesCoordinatesAttentionInternal
+from multi_sources.models.small_layers import RMSNorm
 
 
 class MultisourcesAnchoredCrossAttention(nn.Module):
@@ -101,104 +102,6 @@ class MultisourcesAnchoredCrossAttention(nn.Module):
         return outputs
 
 
-class MultisourcesAnchoredTemporalAttention(nn.Module):
-    """Computes attention across the sources using an anchor points system.
-    K evenly spaced anchor tokens are gathered from each source. The ith anchor token
-    of every source is concatenated into a single sequence, forming K sequences. The
-    attention is computed separately for each of these sequences, and the updated tokens
-    are then summed back to the original tokens of each source.
-    """
-
-    def __init__(
-        self, values_dim, coords_dim, inner_dim, num_anchor_points, num_heads=8, dropout=0.0
-    ):
-        """
-        Args:
-            values_dim (int): Embedding dimension of the values.
-            coords_dim (int): Embedding dimension of the coordinates.
-            inner_dim (int): Inner dimension of the attention block.
-            num_anchor_points (int): Number of anchor points.
-            num_heads (int): Number of heads in the attention block.
-            dropout (float): Dropout rate.
-        """
-        super().__init__()
-        self.values_dim = values_dim
-        self.coords_dim = coords_dim
-        self.inner_dim = inner_dim
-        self.num_anchor_points = num_anchor_points
-        self.num_heads = num_heads
-        self.dropout = dropout
-
-        self.attention = ValuesCoordinatesAttentionInternal(
-            values_dim, coords_dim, inner_dim, num_heads, dropout
-        )
-
-    def forward(self, inputs, attention_mask=None):
-        """
-        Args:
-            inputs (dict of str: dict of str: tensor): Dictionary of inputs, such that
-                inputs[source_name] contains the keys "embedded_coords"
-                and "embedded_values".
-            attention_mask (dict of str: tensor): Dictionary of attention masks for each source,
-                such that attention_mask[source_name] has shape (b, n).
-
-        Returns:
-            dict of str: tensor: Dictionary of outputs, such that
-                outputs[source_name] contains the predicted values of the tokens.
-        """
-        # For each source:
-        # - Read the length of that source's sequence;
-        # - Gather the anchor tokens from the values and coordinates (and
-        #   attention masks if provided);
-        # - Save the indices of the anchor tokens;
-        anchor_values, anchor_coords, anchor_masks = {}, {}, {}
-        anchor_indices = {}
-        for source_name, source_inputs in inputs.items():
-            _, n = source_inputs["embedded_values"].shape[:2]
-            indices = (
-                torch.linspace(0, n - 1, self.num_anchor_points)
-                .long()
-                .to(source_inputs["embedded_values"].device)
-            )
-            anchor_values[source_name] = source_inputs["embedded_values"][:, indices]
-            anchor_coords[source_name] = source_inputs["embedded_coords"][:, indices]
-            if attention_mask is not None:
-                anchor_masks[source_name] = attention_mask[source_name][:, indices]
-            anchor_indices[source_name] = indices
-        # Stack the anchor tokens from all sources; then split them into K sequences
-        # of anchor tokens.
-        anchor_values = torch.stack(
-            [anchor_values[source_name] for source_name in inputs], dim=1
-        )  # (b, S, K, d)
-        anchor_values = rearrange(anchor_values, "b S K d -> (b K) S d")
-        anchor_coords = torch.stack([anchor_coords[source_name] for source_name in inputs], dim=1)
-        anchor_coords = rearrange(anchor_coords, "b S K d -> (b K) S d")
-        if attention_mask is not None:
-            anchor_masks = torch.stack(
-                [anchor_masks[source_name] for source_name in inputs], dim=1
-            )
-            anchor_masks = rearrange(anchor_masks, "b S K -> (b K) S")
-        else:
-            anchor_masks = None
-        # Compute the attention across the anchor tokens;
-        out = self.attention(anchor_values, anchor_coords, anchor_masks)
-        # Split back the sequences of anchor tokens to the sources;
-        out = rearrange(out, "(b K) S d -> b K S d", K=self.num_anchor_points)
-        out = torch.split(out, 1, dim=2)  # Tuple of S tensors of shape (b, K, 1, d)
-        # Sum the output to the original tokens of each source;
-        outputs = {}
-        for i, (source_name, source_inputs) in enumerate(inputs.items()):
-            indices = anchor_indices[source_name]
-            outputs[source_name] = source_inputs["embedded_values"].clone()
-            bs, _, values_dim = outputs[source_name].shape
-            outputs[source_name].scatter_(
-                1,
-                indices.view(1, -1, 1).expand(bs, -1, values_dim),
-                out[i].squeeze(2) + outputs[source_name][:, indices],
-            )
-        return outputs
-
-
 # Adapted from
 # https://medium.com/thedeephub/building-swin-transformer-from-scratch-using-pytorch-hierarchical
 # -vision-transformer-using-shifted-91cbf6abc678
@@ -243,8 +146,10 @@ class SeparateWindowedValuesCoordinatesAttention(nn.Module):
         if block_idx is not None:  # Override the shifted argument if block_idx is specified
             self.shifted = bool(block_idx % 2)
 
-        self.values_qkv = nn.Linear(values_dim, inner_dim * 3)
-        self.coords_qkv = nn.Linear(coords_dim, inner_dim * 2)  # No values for the coordinates
+        self.values_qkv = nn.Sequential(nn.Linear(values_dim, inner_dim * 3),
+                                        RMSNorm(inner_dim * 3))
+        self.coords_qk = nn.Sequential(nn.Linear(coords_dim, inner_dim * 2),
+                                        RMSNorm(inner_dim * 2))
         self.dropout = nn.Dropout(dropout)
 
         self.pos_embeddings = nn.Parameter(torch.randn(window_size * 2 - 1, window_size * 2 - 1))
@@ -275,7 +180,7 @@ class SeparateWindowedValuesCoordinatesAttention(nn.Module):
                 continue
             # Apply the linear transformations to the values and coordinates
             v = self.values_qkv(source_inputs["embedded_values"])
-            c = self.coords_qkv(source_inputs["embedded_coords"])
+            c = self.coords_qk(source_inputs["embedded_coords"])
             # Reshape to the original spatial layout of the tokens
             h, w = source_inputs["tokens_shape"]
             v = rearrange(v, "b (h w) (d k) -> b h w d k", h=h, w=w, k=3, d=self.values_dim)

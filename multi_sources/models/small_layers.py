@@ -93,29 +93,48 @@ class SwiGLU(nn.Module):
         return outputs
 
 
-class SPADE(nn.Module):
-    """Spatially Adaptive Normalization (SPADE) layer - Park et al. (2019)."""
+# Copyright (c) Meta Platforms, Inc. and affiliates.
+# All rights reserved.
+#
+# This source code is licensed under the BSD-style license found in the
+# LICENSE file in the root directory of this source tree.
 
-    def __init__(self, feature_size, style_size):
-        """Args:
-        feature_size (int): Number of features in the input tensor.
-        style_size (int): Number of features in the style tensor.
+import torch
+
+from torch import nn
+
+
+# Taken from torchtune
+class RMSNorm(nn.Module):
+    """
+    Implements Root Mean Square Normalization introduced in
+    https://arxiv.org/abs/1910.07467.
+
+    Reference implementation (used for correctness verification)
+    can be found here:
+    https://github.com/facebookresearch/llama/blob/main/llama/model.py
+
+    Args:
+        dim (int): embedding size
+        eps (float): small value to avoid division by zero. Default: 1e-6
+    """
+
+    def __init__(self, dim: int, eps: float = 1e-6) -> None:
+        super().__init__()
+        self.eps = eps
+        self.scale = nn.Parameter(torch.ones(dim))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
-        super(SPADE, self).__init__()
-        self.norm = nn.BatchNorm2d(feature_size, affine=False)
-        self.conv = nn.Sequential(
-            spectral_norm(nn.Conv2d(style_size, 128, 3, 1, 1)), nn.ReLU(inplace=True)
-        )
-        self.conv_gamma = spectral_norm(nn.Conv2d(128, feature_size, 3, 1, 1))
-        self.conv_beta = spectral_norm(nn.Conv2d(128, feature_size, 3, 1, 1))
+        Args:
+            x (torch.Tensor): input tensor to normalize
 
-    def forward(self, x, s):
-        """Args:
-            x (torch.Tensor): Input tensor of shape (B, C, H, W).
-            s (torch.Tensor): Style tensor of shape (B, C, H, W).
         Returns:
-            torch.Tensor: Normalized tensor of shape (B, C, H, W).
+            torch.Tensor: The normalized and scaled tensor having the same shape as ``x``.
         """
-        s = F.interpolate(s, size=(x.size(2), x.size(3)), mode="nearest")
-        s = self.conv(s)
-        return self.norm(x) * self.conv_gamma(s) + self.conv_beta(s)
+        # computation is in fp32
+        x_fp32 = x.float()
+        x_normed = (
+            x_fp32 * torch.rsqrt(x_fp32.pow(2).mean(-1, keepdim=True) + self.eps)
+        ).type_as(x)
+        return x_normed * self.scale
