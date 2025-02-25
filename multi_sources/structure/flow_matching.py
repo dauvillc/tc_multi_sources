@@ -519,12 +519,14 @@ class MultisourceFlowMatchingReconstructor(pl.LightningModule):
 
     def validation_step(self, batch, batch_idx):
         batch = self.preproc_input(batch)
-        if self.validation_dir is not None and batch_idx % 10 == 0:
+        if self.validation_dir is not None and batch_idx % 5 == 0:
             # Sample the model for each source in the batch
             time_grid, sol = self.sample(batch)
-            # Create a visualization in HTML for each sample in the batch
+            # Create a visualization in HTML for 4 evenly spaced samples in the batch
             batch_size = next(iter(batch.values()))["values"].shape[0]
-            for i in range(batch_size):
+            # Calculate indices for 4 evenly spaced samples
+            sample_indices = np.linspace(0, batch_size - 1, 4, dtype=int)
+            for i in sample_indices:
                 fig = display_solution_html(batch, sol, time_grid, sample_index=i)
                 fig.write_html(self.validation_dir / f"sample_{batch_idx}_{i}.html")
         return self.mask_and_loss_step(batch, batch_idx, "val")
