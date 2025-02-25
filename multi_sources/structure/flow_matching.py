@@ -143,21 +143,18 @@ class MultisourceFlowMatchingReconstructor(pl.LightningModule):
                         source.n_context_variables(),
                     )
                     self.sourcetype_output_projs[source.type] = SourcetypeProjection2d(
-                        n_output_channels,
-                        self.patch_size,
-                        values_dim,
+                        self.values_dim, self.coords_dim, n_output_channels, self.patch_size
                     )
                 elif source.dim == 0:
                     self.sourcetype_embeddings[source.type] = SourceSpecificEmbedding0d(
                         source.n_data_variables(),
                         values_dim,
                     )
-                    self.sourcetype_output_projs[source.type] = SourcetypeProjection0d(
-                        n_output_channels,
-                        values_dim,
-                    )
                     self.sourcetype_coords_embeddings[source.type] = CoordinatesEmbedding0d(
                         coords_dim,
+                    )
+                    self.sourcetype_output_projs[source.type] = SourcetypeProjection0d(
+                        self.values_dim, self.coords_dim, n_output_channels
                     )
             else:
                 # Check that the number of context variables is the same for all sources
@@ -193,7 +190,7 @@ class MultisourceFlowMatchingReconstructor(pl.LightningModule):
             # is a single value for the whole source, which is -1 if the source is missing,
             # and 1 if it's available. The availability mask gives the availability of each
             # point in the source: 1 if the point is available, 0 if it's masked, -1 if missing.
-            am = (~torch.isnan(v)[:, 0]).float() * 2 - 1 # (B, H, W)
+            am = (~torch.isnan(v)[:, 0]).float() * 2 - 1  # (B, H, W)
             # Don't modify the tensors in-place, as we need to keep the NaN values
             # for the loss computation
             dt = torch.nan_to_num(data["dt"], nan=-1.0)
@@ -342,7 +339,7 @@ class MultisourceFlowMatchingReconstructor(pl.LightningModule):
             # the diffusion step is set to 1, since the step t=1 means no noise is left.
             masked_data["diffusion_t"] = torch.where(should_noise, t, torch.ones_like(t))
             # For sources that are fully unavailable, set the diffusion timestep to -1
-            masked_data['diffusion_t'][masked_data['avail'] == -1] = -1
+            masked_data["diffusion_t"][masked_data["avail"] == -1] = -1
             path_samples[source] = path_sample
             masked_x[source] = masked_data
         return masked_x, path_samples
@@ -369,10 +366,12 @@ class MultisourceFlowMatchingReconstructor(pl.LightningModule):
 
         # No need to project the other sources if we're fine-tuning
         for source, v in pred.items():
+            # Embedded coords for the final modulation
+            c = x[source]["embedded_coords"]
             # Project from latent values space to output space using the output layer
             # corresponding to the source type
             pred[source] = self.sourcetype_output_projs[self.source_to_type[source]](
-                v, tokens_shape=x[source]["tokens_shape"]
+                v, c, tokens_shape=x[source]["tokens_shape"]
             )
         # For 2D sources, remove the padding
         for source, spatial_shape in spatial_shapes.items():
