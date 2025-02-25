@@ -3,6 +3,7 @@ from plotly.subplots import make_subplots
 import matplotlib.pyplot as plt
 import numpy as np
 from pathlib import Path
+from string import Template
 
 
 def display_solution_html(batch, sol, time_grid):
@@ -17,14 +18,21 @@ def display_solution_html(batch, sol, time_grid):
     Returns:
         plotly.graph_objects.Figure: Interactive figure with slider
     """
-    # Number of time steps and sources
+    # Number of time steps
     T = len(time_grid)
-    n_sources = len(batch)
+    
+    # Filter out unavailable sources
+    available_sources = {
+        name: data for name, data in batch.items() 
+        if data['avail'][0].item() != -1  # Check first batch item
+    }
+    n_sources = len(available_sources)
 
     subplot_titles = []
-    for source in batch.keys():
-        subplot_titles.append(f"{source} Prediction")
-        subplot_titles.append(f"{source} Ground Truth")
+    for source in available_sources.keys():
+        dt = batch[source]['dt'][0].item()  # Get dt for first batch item
+        subplot_titles.append(f"{source} (dt={dt:.3f}) Prediction")
+        subplot_titles.append(f"{source} (dt={dt:.3f}) Ground Truth")
     
     # Create figure with subplots
     fig = make_subplots(
@@ -39,14 +47,13 @@ def display_solution_html(batch, sol, time_grid):
     frames = []
     for t in range(T):
         frame_data = []
-        for i, (source_name, source_data) in enumerate(batch.items(), start=1):
+        for i, (source_name, source_data) in enumerate(available_sources.items(), start=1):
             # Get prediction and ground truth
-            pred = sol[source_name][t, 0, 0].detach().cpu().numpy()  # First batch and channel
-            true = source_data['values'][0, 0].detach().cpu().numpy()  # First batch and channel
+            pred = sol[source_name][t, 0, 0].detach().cpu().numpy()
+            true = source_data['values'][0, 0].detach().cpu().numpy()
             
             # For 2D sources
             if len(pred.shape) == 2:
-                # Add heatmap trace for prediction
                 frame_data.append(go.Heatmap(
                     z=pred,
                     showscale=False,
@@ -54,7 +61,6 @@ def display_solution_html(batch, sol, time_grid):
                     xaxis=f"x{2*i-1}",
                     yaxis=f"y{2*i-1}"
                 ))
-                # Add heatmap trace for ground truth
                 frame_data.append(go.Heatmap(
                     z=true,
                     showscale=False,
@@ -64,14 +70,12 @@ def display_solution_html(batch, sol, time_grid):
                 ))
             # For 0D sources
             else:
-                # Add bar trace for prediction
                 frame_data.append(go.Bar(
                     y=pred,
                     showlegend=False,
                     xaxis=f"x{2*i-1}",
                     yaxis=f"y{2*i-1}"
                 ))
-                # Add bar trace for ground truth
                 frame_data.append(go.Bar(
                     y=true,
                     showlegend=False,
@@ -85,7 +89,7 @@ def display_solution_html(batch, sol, time_grid):
         ))
     
     # Add the initial data to the figure
-    for i, (source_name, source_data) in enumerate(batch.items(), start=1):
+    for i, (source_name, source_data) in enumerate(available_sources.items(), start=1):
         pred_init = sol[source_name][0, 0, 0].detach().cpu().numpy()
         true = source_data['values'][0, 0].detach().cpu().numpy()
         
