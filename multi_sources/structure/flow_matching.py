@@ -325,10 +325,9 @@ class MultisourceFlowMatchingReconstructor(pl.LightningModule):
             should_noise = avail_flag == 0
             if pure_noise:
                 t = torch.zeros(batch_size, device=device)  # Means x_t = x_0
-                t += 0.1
             else:
-                # Sample the diffusion timesteps (different for each sample in the batch)
-                # as the sigmoid of a standard gaussian (as in Stable Diffusion 3).
+                # Sigmoid of a standard gaussian to favor intermediate timesteps,
+                # following Stable Diffusion 3.
                 t = torch.normal(mean=0, std=1, size=(batch_size,), device=device).sigmoid()
             # Generate random noise with the same shape as the values
             noise = torch.randn_like(masked_data["values"])
@@ -338,7 +337,7 @@ class MultisourceFlowMatchingReconstructor(pl.LightningModule):
             masked_data["values"][should_noise] = noised_values[should_noise]
             # Set the availability mask to 0 everywhere for noised sources.
             # (!= from the avail flag, it's a mask of same shape
-            masked_data["avail_mask"][should_noise] = 0
+            masked_data["avail_mask"][should_noise] = -1
             # Save the diffusion timesteps at which the source was masked. For unnoised sources,
             # the diffusion step is set to 1, since the step t=1 means no noise is left.
             masked_data["diffusion_t"] = torch.where(should_noise, t, torch.ones_like(t))
@@ -508,7 +507,7 @@ class MultisourceFlowMatchingReconstructor(pl.LightningModule):
             return vf
 
         # Solve the ODE
-        time_grid = torch.linspace(0.1, 1, self.n_sampling_diffusion_steps)
+        time_grid = torch.linspace(0, 1, self.n_sampling_diffusion_steps)
         solver = MultisourceEulerODESolver(vf_func)
         sol = solver.solve(x_0, time_grid)
 
@@ -530,12 +529,12 @@ class MultisourceFlowMatchingReconstructor(pl.LightningModule):
 
     def validation_step(self, batch, batch_idx):
         batch = self.preproc_input(batch)
-        # if self.validation_dir is not None and batch_idx % 3 == 0:
-        #     # Sample the model for each source in the batch
-        #     time_grid, sol = self.sample(batch)
-        #     # Create a visualization in HTML for each source and save it
-        #     fig = display_solution_html(batch, sol, time_grid)
-        #     fig.write_html(self.validation_dir / f"sample_{batch_idx}.html")
+        if self.validation_dir is not None and batch_idx % 5 == 0:
+            # Sample the model for each source in the batch
+            time_grid, sol = self.sample(batch)
+            # Create a visualization in HTML for each source and save it
+            fig = display_solution_html(batch, sol, time_grid)
+            fig.write_html(self.validation_dir / f"sample_{batch_idx}.html")
         return self.mask_and_loss_step(batch, batch_idx, "val")
 
     def predict_step(self, batch, batch_idx):
