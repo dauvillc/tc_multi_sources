@@ -515,26 +515,18 @@ class MultisourceFlowMatchingReconstructor(pl.LightningModule):
 
     def training_step(self, batch, batch_idx):
         batch = self.preproc_input(batch)
-        self.last_training_batch = batch
         return self.mask_and_loss_step(batch, batch_idx, "train")
-
-    def on_train_epoch_end(self): 
-        with torch.no_grad():
-            if self.validation_dir is not None:
-                # Sample the model for each source in the batch
-                time_grid, sol = self.sample(self.last_training_batch)
-                # Create a visualization in HTML for each source and save it
-                fig = display_solution_html(self.last_training_batch, sol, time_grid)
-                fig.write_html(self.validation_dir / f"sample.html")
 
     def validation_step(self, batch, batch_idx):
         batch = self.preproc_input(batch)
-        if self.validation_dir is not None and batch_idx % 5 == 0:
+        if self.validation_dir is not None and batch_idx % 10 == 0:
             # Sample the model for each source in the batch
             time_grid, sol = self.sample(batch)
-            # Create a visualization in HTML for each source and save it
-            fig = display_solution_html(batch, sol, time_grid)
-            fig.write_html(self.validation_dir / f"sample_{batch_idx}.html")
+            # Create a visualization in HTML for each sample in the batch
+            batch_size = next(iter(batch.values()))["values"].shape[0]
+            for i in range(batch_size):
+                fig = display_solution_html(batch, sol, time_grid, sample_index=i)
+                fig.write_html(self.validation_dir / f"sample_{batch_idx}_{i}.html")
         return self.mask_and_loss_step(batch, batch_idx, "val")
 
     def predict_step(self, batch, batch_idx):

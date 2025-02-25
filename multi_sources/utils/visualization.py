@@ -6,7 +6,7 @@ from pathlib import Path
 from string import Template
 
 
-def display_solution_html(batch, sol, time_grid):
+def display_solution_html(batch, sol, time_grid, sample_index=0):
     """Display the solution and groundtruth of the flow matching process using plotly.
 
     Args:
@@ -14,6 +14,7 @@ def display_solution_html(batch, sol, time_grid):
         sol (dict of str to torch.Tensor): The solution of the flow matching process,
             as a dict mapping source names to tensors of shape (T, B, C, ...).
         time_grid (torch.Tensor): Time points of shape (T,)
+        sample_index (int, optional): Index of the sample to display. Defaults to 0.
 
     Returns:
         plotly.graph_objects.Figure: Interactive figure with slider
@@ -24,13 +25,13 @@ def display_solution_html(batch, sol, time_grid):
     # Filter out unavailable sources
     available_sources = {
         name: data for name, data in batch.items() 
-        if data['avail'][0].item() != -1  # Check first batch item
+        if data['avail'][sample_index].item() != -1  # Use sample_index
     }
     n_sources = len(available_sources)
 
     subplot_titles = []
     for source in available_sources.keys():
-        dt = batch[source]['dt'][0].item()  # Get dt for first batch item
+        dt = batch[source]['dt'][sample_index].item()  # Use sample_index
         subplot_titles.append(f"{source} (dt={dt:.3f}) Prediction")
         subplot_titles.append(f"{source} (dt={dt:.3f}) Ground Truth")
     
@@ -49,8 +50,8 @@ def display_solution_html(batch, sol, time_grid):
         frame_data = []
         for i, (source_name, source_data) in enumerate(available_sources.items(), start=1):
             # Get prediction and ground truth
-            pred = sol[source_name][t, 0, 0].detach().cpu().numpy()
-            true = source_data['values'][0, 0].detach().cpu().numpy()
+            pred = sol[source_name][t, sample_index, 0].detach().cpu().numpy()  # Use sample_index
+            true = source_data['values'][sample_index, 0].detach().cpu().numpy()  # Use sample_index
             
             # For 2D sources
             if len(pred.shape) == 2:
@@ -90,8 +91,8 @@ def display_solution_html(batch, sol, time_grid):
     
     # Add the initial data to the figure
     for i, (source_name, source_data) in enumerate(available_sources.items(), start=1):
-        pred_init = sol[source_name][0, 0, 0].detach().cpu().numpy()
-        true = source_data['values'][0, 0].detach().cpu().numpy()
+        pred_init = sol[source_name][0, sample_index, 0].detach().cpu().numpy()  # Use sample_index
+        true = source_data['values'][sample_index, 0].detach().cpu().numpy()  # Use sample_index
         
         if len(pred_init.shape) == 2:
             fig.add_trace(
