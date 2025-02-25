@@ -57,7 +57,6 @@ class ValuesCoordinatesAttentionInternal(nn.Module):
 
     def __init__(self, values_dim, coords_dim, inner_dim, num_heads=8, dropout=0.0):
         super().__init__()
-        assert inner_dim % num_heads == 0
         self.num_heads = num_heads
 
         self.values_to_qkv = nn.Sequential(

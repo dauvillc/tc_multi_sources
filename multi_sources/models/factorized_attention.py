@@ -20,7 +20,7 @@ class MultisourcesAnchoredCrossAttention(nn.Module):
         self,
         values_dim,
         coords_dim,
-        inner_dim,
+        inner_ratio,
         num_anchor_points,
         num_heads=8,
         dropout=0.0,
@@ -30,7 +30,7 @@ class MultisourcesAnchoredCrossAttention(nn.Module):
         Args:
             values_dim (int): Embedding dimension of the values.
             coords_dim (int): Embedding dimension of the coordinates.
-            inner_dim (int): Inner dimension of the attention block.
+            inner_ratio (float): Ratio of the inner dimension to the values dimension.
             num_anchor_points (int): Number of anchor points.
             num_heads (int): Number of heads in the attention block.
             dropout (float): Dropout rate.
@@ -38,13 +38,13 @@ class MultisourcesAnchoredCrossAttention(nn.Module):
         super().__init__()
         self.values_dim = values_dim
         self.coords_dim = coords_dim
-        self.inner_dim = inner_dim
+        self.inner_dim = inner_ratio * values_dim
         self.num_anchor_points = num_anchor_points
         self.num_heads = num_heads
         self.dropout = dropout
 
         self.attention = ValuesCoordinatesAttentionInternal(
-            values_dim, coords_dim, inner_dim, num_heads, dropout
+            values_dim, coords_dim, self.inner_dim, num_heads, dropout
         )
 
     def forward(self, inputs, attention_mask=None):
@@ -114,7 +114,7 @@ class SeparateWindowedValuesCoordinatesAttention(nn.Module):
         self,
         values_dim,
         coords_dim,
-        inner_dim,
+        inner_ratio,
         num_heads=8,
         dropout=0.0,
         window_size=8,
@@ -126,7 +126,7 @@ class SeparateWindowedValuesCoordinatesAttention(nn.Module):
         Args:
             values_dim (int): Embedding dimension of the values.
             coords_dim (int): Embedding dimension of the coordinates.
-            inner_dim (int): Inner dimension of the attention block.
+            inner_ratio (float): Ratio of the inner dimension to the values dimension.
             num_heads (int): Number of heads in the attention block.
             dropout (float): Dropout rate.
             window_size (int): Number of tokens included in each window.
@@ -138,18 +138,20 @@ class SeparateWindowedValuesCoordinatesAttention(nn.Module):
         super().__init__()
         self.values_dim = values_dim
         self.coords_dim = coords_dim
-        self.inner_dim = inner_dim
-        self.head_dim = inner_dim // num_heads
+        self.inner_dim = inner_ratio * values_dim
+        self.head_dim = self.inner_dim // num_heads
         self.num_heads = num_heads
         self.window_size = window_size
         self.shifted = shifted
         if block_idx is not None:  # Override the shifted argument if block_idx is specified
             self.shifted = bool(block_idx % 2)
 
-        self.values_qkv = nn.Sequential(nn.Linear(values_dim, inner_dim * 3),
-                                        RMSNorm(inner_dim * 3))
-        self.coords_qk = nn.Sequential(nn.Linear(coords_dim, inner_dim * 2),
-                                        RMSNorm(inner_dim * 2))
+        self.values_qkv = nn.Sequential(
+            nn.Linear(values_dim, self.inner_dim * 3), RMSNorm(self.inner_dim * 3)
+        )
+        self.coords_qk = nn.Sequential(
+            nn.Linear(coords_dim, self.inner_dim * 2), RMSNorm(self.inner_dim * 2)
+        )
         self.dropout = nn.Dropout(dropout)
 
         self.pos_embeddings = nn.Parameter(torch.randn(window_size * 2 - 1, window_size * 2 - 1))
@@ -159,7 +161,9 @@ class SeparateWindowedValuesCoordinatesAttention(nn.Module):
         self.relative_indices = self.indices[None, :, :] - self.indices[:, None, :]
         self.relative_indices += self.window_size - 1
 
-        self.output_proj = nn.Sequential(nn.Linear(inner_dim, values_dim), nn.Dropout(dropout))
+        self.output_proj = nn.Sequential(
+            nn.Linear(self.inner_dim, values_dim), nn.Dropout(dropout)
+        )
 
     def forward(self, x, attention_mask=None):
         """
@@ -183,8 +187,8 @@ class SeparateWindowedValuesCoordinatesAttention(nn.Module):
             c = self.coords_qk(source_inputs["embedded_coords"])
             # Reshape to the original spatial layout of the tokens
             h, w = source_inputs["tokens_shape"]
-            v = rearrange(v, "b (h w) (d k) -> b h w d k", h=h, w=w, k=3, d=self.values_dim)
-            c = rearrange(c, "b (h w) (d k) -> b h w d k", h=h, w=w, k=2, d=self.coords_dim)
+            v = rearrange(v, "b (h w) (d k) -> b h w d k", h=h, w=w, k=3)
+            c = rearrange(c, "b (h w) (d k) -> b h w d k", h=h, w=w, k=2)
             # --> k=3 for queries, keys and values (no values for the coordinates)
             # Pad the values and coordinates so that h and w are multiples of the window size
             pad_h = (self.window_size - h % self.window_size) % self.window_size

@@ -11,7 +11,7 @@ backbone:
       layer_class:
         _target_: hydra.utils.get_class
         path: multi_sources.models.factorized_attention.MultisourcesAnchoredCrossAttention
-      inner_dim: 512
+      inner_ratio: 2
       num_anchor_points: 64
       num_heads: 8
       dropout: ${model.dropout}
@@ -19,7 +19,7 @@ backbone:
       layer_class:
         _target_: hydra.utils.get_class
         path: multi_sources.models.factorized_attention.SeparateWindowedValuesCoordinatesAttention
-      inner_dim: 512
+      inner_ratio: 2
       window_size: 7
       num_heads: 8
       dropout: ${model.dropout}
