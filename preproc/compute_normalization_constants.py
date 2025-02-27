@@ -3,48 +3,68 @@ import numpy as np
 import pandas as pd
 import json
 import xarray as xr
-import dask
 from netCDF4 import Dataset
 from omegaconf import OmegaConf
 from tqdm import tqdm
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 from collections import defaultdict
-from dask.distributed import Client
 
 
-def process_source(train_metadata, source_name, constants_dir, use_fraction, min_files):
+def process_sample(sample_path):
+    """Given a path to a netCDF file, computes the mean and std of all variables
+    in the Dataset."""
+    with Dataset(sample_path, "r") as ds:
+        means = {var: np.mean(ds[var][:]) for var in ds.variables}
+        stds = {var: np.std(ds[var][:]) for var in ds.variables}
+    return means, stds
+
+
+def process_samples_chunk(paths):
+    """Process multiple samples and aggregate their statistics."""
+    means_dict, stds_dict = defaultdict(list), defaultdict(list)
+    for path in paths:
+        means, stds = process_sample(path)
+        for var, mean in means.items():
+            means_dict[var].append(mean)
+        for var, std in stds.items():
+            stds_dict[var].append(std)
+    return means_dict, stds_dict
+
+
+def process_source(
+    train_metadata, source_name, constants_dir, use_fraction, min_files, num_workers
+):
     """
     Computes the normalization constants for all samples in a source.
     """
     # Filter the metadata to keep only the samples from the source.
     train_metadata = train_metadata[train_metadata["source_name"] == source_name]
-    data_paths = [sample["data_path"] for _, sample in train_metadata.iterrows()]
-    new_len = max(int(len(data_paths) * use_fraction), min_files)
-    data_paths = np.random.choice(
-        data_paths, size=min(new_len, len(data_paths)), replace=False
-    ).tolist()
-    # Concatenate the data from all samples, ignoring the coordinates as we won't
-    # be computing the normalization constants for them here.
-    ds = xr.open_mfdataset(
-        data_paths,
-        combine="nested",
-        concat_dim="sample",
-        parallel=True,
-        coords="minimal",
-        compat="override",
-        autoclose=True,
-    )
-    ds = ds.drop_vars(["land_mask", "latitude", "longitude"], errors="ignore")
-    if "time" in ds.data_vars:
-        ds = ds.drop_vars("time", errors="ignore")
-    # Compute the mean and std of the data.
-    means = ds.mean(skipna=True).compute()
-    stds = ds.std(skipna=True).compute()
-    means_dict = {var: float(means[var].values) for var in ds.data_vars}
-    stds_dict = {var: float(stds[var].values) for var in ds.data_vars}
-    ds.close()
+    # Select a fraction of the samples to compute the normalization constants.
+    data_paths = train_metadata.sample(frac=use_fraction)["data_path"].values
 
+    if num_workers > 1:
+        # Split the data paths into chunks to be processed by different workers.
+        chunks = np.array_split(data_paths, num_workers)
+        with ProcessPoolExecutor(max_workers=num_workers) as executor:
+            futures = executor.map(process_samples_chunk, chunks)
+            chunk_results = list(tqdm(futures, total=len(chunks), desc=f"Processing {source_name}"))
+        
+        # Merge results from all chunks
+        means_dict, stds_dict = defaultdict(list), defaultdict(list)
+        for chunk_means, chunk_stds in chunk_results:
+            for var, means in chunk_means.items():
+                means_dict[var].extend(means)
+            for var, stds in chunk_stds.items():
+                stds_dict[var].extend(stds)
+    else:
+        means_dict, stds_dict = process_samples_chunk(data_paths)
+
+    # Compute the final means and stds.
+    means_dict = {var: str(np.mean(means)) for var, means in means_dict.items()}
+    stds_dict = {var: str(np.mean(stds)) for var, stds in stds_dict.items()}
+
+    # Save the means and stds in two JSON files.
     constants_dir.mkdir(parents=True, exist_ok=True)
     with open(constants_dir / "data_means.json", "w") as f:
         json.dump(means_dict, f)
@@ -83,14 +103,6 @@ def main(cfg):
     # Load the metadata for the training samples.
     samples_metadata = pd.read_json(preprocessed_dir / "train.json", orient="records", lines=True)
 
-    # Create the dask client
-    client = Client(
-        n_workers=max(num_workers, 1),
-        threads_per_worker=1,
-        memory_limit=max_mem_per_worker,
-        processes=True,
-    )
-
     # Load the metadata for all sources
     source_metadata = load_merged_metadata(regridded_dir)
 
@@ -103,7 +115,12 @@ def main(cfg):
         print("Processing source ", source_dir.name)
         source_name = source_dir.name
         process_source(
-            samples_metadata, source_name, constants_dir / source_name, use_fraction, min_files
+            samples_metadata,
+            source_name,
+            constants_dir / source_name,
+            use_fraction,
+            min_files,
+            num_workers,
         )
 
     # We know need to compute the normalization constants for the context variables.
@@ -133,8 +150,6 @@ def main(cfg):
     # Save the means and stds in two JSON files.
     json.dump(means, open(constants_dir / "context_means.json", "w"))
     json.dump(stds, open(constants_dir / "context_stds.json", "w"))
-
-    client.close()
 
 
 if __name__ == "__main__":
