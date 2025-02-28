@@ -11,25 +11,28 @@ from pathlib import Path
 from collections import defaultdict
 
 
-def process_sample(sample_path):
-    """Given a path to a netCDF file, computes the mean and std of all variables
-    in the Dataset."""
-    with Dataset(sample_path, "r") as ds:
-        means = {var: np.mean(ds[var][:]) for var in ds.variables}
-        stds = {var: np.std(ds[var][:]) for var in ds.variables}
-    return means, stds
-
-
 def process_samples_chunk(paths):
-    """Process multiple samples and aggregate their statistics."""
-    means_dict, stds_dict = defaultdict(list), defaultdict(list)
+    """Process a chunk of samples, and computes the mean and M2
+    statistics for each variable."""
+    means_dict, m2_dict = defaultdict(int), defaultdict(int)
+    count_dict = defaultdict(int)
     for path in paths:
-        means, stds = process_sample(path)
-        for var, mean in means.items():
-            means_dict[var].append(mean)
-        for var, std in stds.items():
-            stds_dict[var].append(std)
-    return means_dict, stds_dict
+        with Dataset(path, "r") as ds:
+            for var in ds.variables:
+                if var in ["latitude", "longitude", "time"]:
+                    continue
+                count, mean, m2 = count_dict[var], means_dict[var], m2_dict[var]
+                data = np.ravel(ds[var][:])
+                # If the data contains missing values, the loaded data is a numpy masked array.
+                if type(data) == np.ma.core.MaskedArray:
+                    data = data.compressed()  # Keeps only the valid values.
+                count += len(data)
+                delta = data - mean
+                mean += np.sum(delta / count)
+                delta2 = data - mean
+                m2 += np.sum(delta * delta2)
+                count_dict[var], means_dict[var], m2_dict[var] = count, mean, m2
+    return count_dict, means_dict, m2_dict
 
 
 def process_source(
@@ -48,21 +51,25 @@ def process_source(
         chunks = np.array_split(data_paths, num_workers)
         with ProcessPoolExecutor(max_workers=num_workers) as executor:
             futures = executor.map(process_samples_chunk, chunks)
-            chunk_results = list(tqdm(futures, total=len(chunks), desc=f"Processing {source_name}"))
-        
-        # Merge results from all chunks
-        means_dict, stds_dict = defaultdict(list), defaultdict(list)
-        for chunk_means, chunk_stds in chunk_results:
-            for var, means in chunk_means.items():
-                means_dict[var].extend(means)
-            for var, stds in chunk_stds.items():
-                stds_dict[var].extend(stds)
+            chunk_results = list(
+                tqdm(futures, total=len(chunks), desc=f"Processing {source_name}")
+            )
+        # Aggregate the results from all chunks.
+        means_dict, sq_dict = defaultdict(int), defaultdict(int)
+        count_dict = defaultdict(int)
+        for chunk_count, chunk_mean, chunk_m2 in chunk_results:
+            for var in chunk_count:
+                count, mean, sq = count_dict[var], means_dict[var], sq_dict[var]
+                count += chunk_count[var]
+                delta = chunk_mean[var] - mean
+                mean += delta * chunk_count[var] / count
+                delta2 = chunk_mean[var] - mean
+                sq += chunk_m2[var] + delta * delta2
+                count_dict[var], means_dict[var], sq_dict[var] = count, mean, sq
+        stds_dict = {var: np.sqrt(sq_dict[var] / count_dict[var]) for var in sq_dict}
     else:
-        means_dict, stds_dict = process_samples_chunk(data_paths)
-
-    # Compute the final means and stds.
-    means_dict = {var: str(np.mean(means)) for var, means in means_dict.items()}
-    stds_dict = {var: str(np.mean(stds)) for var, stds in stds_dict.items()}
+        count_dict, means_dict, m2_dict = process_samples_chunk(data_paths)
+        stds_dict = {var: np.sqrt(m2_dict[var] / count_dict[var]) for var in m2_dict}
 
     # Save the means and stds in two JSON files.
     constants_dir.mkdir(parents=True, exist_ok=True)
