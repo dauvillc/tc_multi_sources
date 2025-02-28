@@ -1,7 +1,7 @@
 defaults:
   - paths: local
   - dataset: default
-  - sources: sat_to_ibtracs
+  - sources: sat_interp_37GHz
   - data_augmentation: none
   - _self_
 
