@@ -79,24 +79,24 @@ def initialize_source_metadata(ds, source, dest_dir):
     # For passive microwave data
     if source.startswith("pmw_"):
         data_vars = [var for var in ds.data_vars if var.startswith("TB")]
-        context_vars = ["frequency"]
+        charac_vars = ["frequency"]
     # For radar-radiometer data
     elif source.startswith("radar_"):
         data_vars = ["nearSurfPrecipTotRate", "nearSurfPrecipTotRateSigma"]
-        context_vars = []
+        charac_vars = []
     # For infrared data
     elif source == "infrared":
         data_vars = ["IRWIN"]
-        context_vars = []
+        charac_vars = []
 
-    # Add IFOV values as context variables for satellite data
+    # Add IFOV values as characteristic variables for satellite data
     ifov_vars = [
         "IFOV_nadir_along_track",
         "IFOV_nadir_across_track",
         "IFOV_edge_along_track",
         "IFOV_edge_across_track",
     ]
-    context_vars += ifov_vars
+    charac_vars += ifov_vars
 
     # Create the destination directory and initialize samples metadata file
     dest_dir.mkdir(parents=True, exist_ok=True)
@@ -110,14 +110,14 @@ def initialize_source_metadata(ds, source, dest_dir):
         "source_type": source.split("_")[0] if source != "infrared" else "infrared",
         "dim": 2,
         "data_vars": data_vars,
-        "context_vars": context_vars,
+        "charac_vars": charac_vars,
         "storm_metadata_vars": storm_vars,
         "is_on_regular_grid": source == "infrared",
     }
     with open(dest_dir / "source_metadata.json", "w") as f:
         json.dump(source_metadata, f)
 
-    return data_vars, context_vars, ifov_vars, samples_metadata_path
+    return data_vars, charac_vars, ifov_vars, samples_metadata_path
 
 
 def initialize_all_sources_metadata(sources, source_files, source_groups, dest_path, ifovs):
@@ -139,7 +139,9 @@ def initialize_all_sources_metadata(sources, source_files, source_groups, dest_p
             for group in source_groups[source]:
                 if group in ds.groups:
                     ds = ds[group]
-            ds = xr.open_dataset(NetCDF4DataStore(ds))
+            ds = xr.open_dataset(NetCDF4DataStore(ds), decode_times=False)
+            ds['time'] = pd.to_datetime(ds['time'], origin='unix', unit='s')
+
             if source != "infrared":
                 ds = preprocess_satellite_source(ds)
 
@@ -196,14 +198,16 @@ def process_source(source, source_files, source_groups, dest_dir, ifovs, metadat
                 if group in ds.groups:
                     ds = ds[group]
             # Open the dataset as an xarray Dataset
-            ds = xr.open_dataset(NetCDF4DataStore(ds))
+            ds = xr.open_dataset(NetCDF4DataStore(ds), decode_times=False)
+            ds['time'] = pd.to_datetime(ds['time'], origin='unix', unit='s')
             if source != "infrared":
                 ds = preprocess_satellite_source(ds)
 
             if ds is None:  # If the data is not available, skip this sample
                 continue
 
-            # Check for missing data
+            # Check if any of the data variables are fully missing. If so, discard the
+            # sample. Also keep count of how many samples were discarded, to print at the end.
             found_fully_missing = False
             for var in data_vars:
                 if ds[var].isnull().all():

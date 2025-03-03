@@ -4,7 +4,7 @@ import torch
 import pandas as pd
 import json
 import numpy as np
-from random import shuffle
+from collections import defaultdict
 from netCDF4 import Dataset
 from pathlib import Path
 from multi_sources.data_processing.source import Source
@@ -16,14 +16,13 @@ class MultiSourceDataset(torch.utils.data.Dataset):
     """A dataset that yields elements from multiple sources.
     A sample from the dataset is a dict {source_name: map}, where each map contains the
     following key-value pairs:
-    - "source_type" is a string containing the type of the source.
     - "avail" is a scalar tensor of shape (1,) containing 1 if the element is available
         and -1 otherwise.
     - "dt" is a scalar tensor of shape (1,) containing the time delta between the reference time
         and the element's time, normalized by dt_max.
-    - "context" is a tensor of shape (n_context_vars,) containing the context variables.
-        Each data variable within a source has its own context variables, which are all
-        concatenated into a single tensor to form CT.
+    - "characs" is a tensor of shape (n_charac_vars,) containing the source characteristics.
+        Each data variable within a source has its own charac variables, which are all
+        concatenated into a single tensor.
     - "coords" is a tensor of shape (2, H, W) containing the latitude and longitude at each pixel.
     - "landmask" is a tensor of shape (H, W) containing the land mask.
     - "dist_to_center" is a tensor of shape (H, W) containing the distance
@@ -67,11 +66,10 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                             the samples.
                         - *.nc: netCDF files containing the data for the source.
                 - constants/
-                    - context_means/stds.json: dictionaries containing the means and stds
-                        for the context variables.
                     - source_name/
                         - data_means/stds.json: dictionaries containing the means and stds
                             for the data variables of the source.
+                        - charac_vars_min_max.json: dictionaries {charac_var_name: {min, max}}
             split (str): The split of the dataset to use. Must be one of "train", "val", or "test".
             included_variables_dict (dict): A dictionary
                 {source_name: (list of variables, list of input-only variables)}
@@ -112,7 +110,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
 
         self.dataset_dir = Path(dataset_dir)
         self.constants_dir = self.dataset_dir / "constants"
-        self.processed_dir = self.dataset_dir / "processed"
+        self.processed_dir = self.dataset_dir / "prepared"
         self.split = split
         self.dt_max = pd.Timedelta(dt_max, unit="h")
         self.select_most_recent = select_most_recent
@@ -151,12 +149,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
             self.sources.append(Source(**sources_metadata[source_name]))
             self.sources_dict[source_name] = self.sources[-1]
         # Load the samples metadata based on the split
-        self.df = pd.read_json(
-            self.dataset_dir / f"{split}.json",
-            orient="records",
-            lines=True,
-            convert_dates=["time"],
-        )
+        self.df = pd.read_csv(self.dataset_dir / f"{split}.csv", parse_dates=["time"])
 
         # Filter the dataframe to only keep the rows where source_name is the name of a source
         # in self.sources
@@ -236,16 +229,40 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         # Load the data means and stds
         self.data_means, self.data_stds = {}, {}
         for source in self.sources:
+            # Data vars means and stds
             with open(self.constants_dir / source.name / "data_means.json", "r") as f:
                 self.data_means[source.name] = json.load(f)
             with open(self.constants_dir / source.name / "data_stds.json", "r") as f:
                 self.data_stds[source.name] = json.load(f)
 
-        # Load the context means and stds
-        with open(self.constants_dir / "context_means.json", "r") as f:
-            self.context_means = json.load(f)
-        with open(self.constants_dir / "context_stds.json", "r") as f:
-            self.context_stds = json.load(f)
+        # Characteristic variables: pre-build the tensors of characteristics for each source,
+        # since those do not depend on the sample.
+        self.charac_vars_tensors = {}
+        self.charac_vars_min, self.charac_vars_max = defaultdict(list), defaultdict(list)
+        for source in self.sources:
+            charac_vars = source.get_charac_values()
+            self.charac_vars_tensors[source.name] = torch.tensor(charac_vars, dtype=torch.float32)
+            # Also pre-load the min and max of the charac variables for the source. We'll fill
+            # the self.charac_vars_min and self.charac_vars_max lists with the min and max
+            # of the source's charac variables, in the same order as in the tensors we just built;
+            # this way we can easily normalize the charac variables.
+            with open(self.constants_dir / source.name / "charac_vars_min_max.json", "r") as f:
+                source_characs_min_max = json.load(f)
+            # iter_charac_variables() yields the items in the same order as get_charac_values().
+            for charac_var_name, data_var_name, _ in source.iter_charac_variables():
+                self.charac_vars_min[source.name].append(
+                    source_characs_min_max[charac_var_name]["min"]
+                )
+                self.charac_vars_max[source.name].append(
+                    source_characs_min_max[charac_var_name]["max"]
+                )
+            # convert to tensors
+            self.charac_vars_min[source.name] = torch.tensor(
+                self.charac_vars_min[source.name], dtype=torch.float32
+            )
+            self.charac_vars_max[source.name] = torch.tensor(
+                self.charac_vars_max[source.name], dtype=torch.float32
+            )
 
     def __getitem__(self, idx):
         """Returns the element at the given index.
@@ -265,7 +282,6 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         output = {}
         for source in self.sources:
             source_name = source.name
-            source_type = source.type
             # Random dropping: check if the source should be dropped
             if source_name in self.randomly_drop_sources:
                 p = self.randomly_drop_sources[source_name]
@@ -330,37 +346,24 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                         LM = torch.zeros_like(LM)
                         D = torch.zeros_like(D)
 
-                    if len(source.context_vars) == 0:
-                        CT = None
+                    if source.n_charac_variables() == 0:
+                        CA = None
                     else:
-                        # The context variables can be loaded from the sample dataframe.
-                        context_df = df[source.context_vars].iloc[0]
-                        # context_vars[cvar] is a dict {dvar: value} for each data variable dvar
-                        # of the source. We want to obtain a tensor of shape
-                        # (n_context_vars * n_data_vars,)
-                        CT = np.stack(
-                            [
-                                np.array([context_df[cvar][dvar] for dvar in source.data_vars])
-                                for cvar in source.context_vars
-                            ],
-                            axis=1,
-                        )  # (n_data_vars, n_context_vars)
-                        CT = torch.tensor(CT.flatten(), dtype=torch.float32)
+                        CA = torch.tensor(source.get_charac_values(), dtype=torch.float32)
                     # Load the variables in the order specified in the source
                     V = np.stack([load_nc_with_nan(ds[var]) for var in source.data_vars], axis=0)
                     V = torch.tensor(V, dtype=torch.float32)
                     # Normalize the context and values tensors
-                    CT, V = self.normalize(V, source, CT)
+                    CA, V = self.normalize(V, source, CA)
                     output_entry = {
-                        "source_type": source_type,
                         "dt": DT,
                         "coords": C,
                         "landmask": LM,
                         "dist_to_center": D,
                         "values": V,
                     }
-                    if CT is not None:  # Don't include the context if it's empty
-                        output_entry["context"] = CT
+                    if CA is not None:
+                        output_entry["characs"] = CA
                     output[source_name] = output_entry
         # (Optional) Data augmentation
         if isinstance(self.data_augmentation, MultisourceDataAugmentation):
@@ -378,7 +381,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         self,
         values,
         source,
-        context=None,
+        characs=None,
         denormalize=False,
         batched=False,
         dist_to_center=False,
@@ -391,8 +394,8 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                 or (1, ...) if dvar is specified, where ... are the spatial dimensions.
             source (Source or str): Source object representing the source, or name
                 of the source.
-            context (torch.Tensor, optiona): tensor of shape (n_context_vars,)
-                containing the context variables. If None, the context is not normalized.
+            characs (torch.Tensor, optiona): tensor of shape (n_charac_vars,)
+                containing the characteristic variables.
             denormalize (bool, optional): If True, denormalize the context and values tensors
                 instead of normalizing them.
             batched (bool, optional): If True, the values tensor is expected to have
@@ -402,7 +405,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                 channel is the distance to the center of the storm.
             device (torch.device, optional): Device to use for the normalization.
         Returns:
-            normalized_context (torch.Tensor): normalized context.
+            normalized_characs (torch.Tensor): normalized charac variables.
             normalized_values (torch.Tensor): normalized values.
         """
         if isinstance(source, Source):
@@ -410,30 +413,19 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         else:
             source_name = source
             source = self.sources_dict[source_name]
-        # Context normalization. There can be no context variables.
-        if context is not None:
-            context_means = np.array([self.context_means[cvar] for cvar in source.context_vars])
-            context_stds = np.array([self.context_stds[cvar] for cvar in source.context_vars])
-            # If we're yielding multi-channel sources, then the context tensor is a concatenation
-            # of the context variables for each data variable. Thus we need to load
-            # the means and stds for each context variable and repeat them for each
-            # data variable.
-            context_means = np.repeat(context_means, self._get_n_data_variables(source_name))
-            context_stds = np.repeat(context_stds, self._get_n_data_variables(source_name))
-            context_means = torch.tensor(context_means, dtype=context.dtype)
-            context_stds = torch.tensor(context_stds, dtype=context.dtype)
-            if device is not None:
-                context_means = context_means.to(device)
-                context_stds = context_stds.to(device)
-            # Denormalize or normalize based on the flag
-            if denormalize:
-                normalized_context = context * context_stds + context_means
-            else:
-                normalized_context = (context - context_means) / context_stds
-        else:
-            normalized_context = None
 
-        # Values normalization.
+        # Characteristic variables normalization.
+        if characs is not None:  # Values normalization.
+            characs = characs.to(torch.float32)
+            min, max = self.charac_vars_min[source_name], self.charac_vars_max[source_name]
+            if device is not None:
+                min = min.to(device)
+                max = max.to(device)
+            if denormalize:
+                normalized_characs = characs * (max - min) + min
+            else:
+                normalized_characs = (characs - min) / (max - min)
+
         data_vars = source.data_vars
         if dist_to_center:
             data_vars = data_vars + ["dist_to_center"]
@@ -454,7 +446,8 @@ class MultiSourceDataset(torch.utils.data.Dataset):
             normalized_values = values * data_stds + data_means
         else:
             normalized_values = (values - data_means) / data_stds
-        return normalized_context, normalized_values
+
+        return normalized_characs, normalized_values
 
     def __len__(self):
         return len(self.reference_df)
@@ -466,11 +459,6 @@ class MultiSourceDataset(torch.utils.data.Dataset):
     def _get_n_sources(self):
         """Returns the number of original sources (before splitting the sources)."""
         return len(self.sources)
-
-    def _get_source_shapes(self):
-        """Returns a dict {source_name: (H, W)} containing the shape of the
-        data for each source."""
-        return {source.name: source.shape for source in self.sources}
 
     def _get_n_data_variables(self, source_name=None):
         """Returns either the number of data variables within a source,

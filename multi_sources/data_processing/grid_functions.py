@@ -75,17 +75,16 @@ def reverse_spatially(ds):
     return ds
 
 
-def regrid(ds, target_resolution, target_area):
+def regrid(ds, target_resolution):
     """Regrids the dataset ds to a regular grid with a given target resolution.
-    The resulting area is centered on the original area's central coordinates.
+    The maximum and minimum latitude and longitude values are used to define the
+    target area.
 
     Args:
         ds (xarray.Dataset): Dataset to regrid. Must include the variables 'latitude'
             and 'longitude' and have exactly two dimensions.
         target_resolution (tuple of float): The target resolution in degrees,
             as a tuple (res_lat, res_lon).
-        target_area (tuple of float): Tuple (d_lat, d_lon) representing the size of the
-            target area in degrees.
     """
     # Get the dimensions from the latitude variable
     dims = list(ds.latitude.dims)
@@ -104,6 +103,14 @@ def regrid(ds, target_resolution, target_area):
     # Compute the target area's central coordinates
     central_lat = lat[size_y // 2, size_x // 2]
     central_lon = lon[size_y // 2, size_x // 2]
+    # Compute the target size in pixels
+    min_lat, max_lat = lat.min(), lat.max()
+    min_lon, max_lon = lon.min(), lon.max()
+    target_size = (
+        ceil((max_lat - min_lat) / target_resolution[0]),
+        ceil((max_lon - min_lon) / target_resolution[1]),
+    )
+
     # Define the Mercator projection
     proj_id = "mercator"
     proj_dict = {
@@ -112,12 +119,7 @@ def regrid(ds, target_resolution, target_area):
         "R": EARTH_RADIUS,
         "units": "m",
     }
-    # Compute the target size in pixels
-    target_size = (
-        ceil(target_area[0] / target_resolution[0]),
-        ceil(target_area[1] / target_resolution[1]),
-    )
-    # Define the target area
+    # Define the target area object for pyresample
     target_area = create_area_def(
         proj_id,
         proj_dict,

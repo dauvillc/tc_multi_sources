@@ -4,9 +4,7 @@ defaults:
 
 # Target resolution to which the images will be regridded, in degrees.
 # Give a list [longitude_res, latitude_res]
-target_resolution: [0.15, 0.15]
-# List of sources that should not be regridded
-no_regrid: ["tc_primed_era5"]
+regridding_resolution: [0.15, 0.15]
 # Fraction of the data to use when computing the normalization statistics
 norm_constants_fraction: 1.0
 # Minimum number of data points to use when computing the normalization statistics

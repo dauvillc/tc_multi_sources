@@ -14,15 +14,15 @@ def main(cfg):
     # Path to the preprocessed dataset
     preprocessed_dir = Path(cfg["paths"]["preprocessed_dataset"])
     # Path to the preprocessed dataset
-    regridded_dir = preprocessed_dir / "processed"
+    regridded_dir = preprocessed_dir / "prepared"
 
     # Each subdirectory in the regridded directory corresponds to a source, and contains
-    # a file "samples_metadata.json". We'll load all of these files and assemble them
+    # a file "samples_metadata.csv". We'll load all of these files and assemble them
     # into a single DataFrame, which we'll then split into training, validation, and test sets.
     metadata = []
     for source_dir in tqdm(list(regridded_dir.iterdir()), desc="Loading metadata"):
-        metadata_file = source_dir / "samples_metadata.json"
-        metadata.append(pd.read_json(metadata_file, orient="records", lines=True))
+        metadata_file = source_dir / "samples_metadata.csv"
+        metadata.append(pd.read_csv(metadata_file))
     print("Concatenating metadata")
     metadata = pd.concat(metadata, ignore_index=True)
 
@@ -56,12 +56,15 @@ def main(cfg):
 
     # Save the split metadata to disk as preprocessed_dir/train.json, ...
     print("Saving split metadata")
-    train_file = preprocessed_dir / "train.json"
-    val_file = preprocessed_dir / "val.json"
-    test_file = preprocessed_dir / "test.json"
-    train.to_json(train_file, orient="records", lines=True, default_handler=str)
-    val.to_json(val_file, orient="records", lines=True, default_handler=str)
-    test.to_json(test_file, orient="records", lines=True, default_handler=str)
+    train_file = preprocessed_dir / "train.csv"
+    val_file = preprocessed_dir / "val.csv"
+    test_file = preprocessed_dir / "test.csv"
+    train.to_csv(train_file, index=False)
+    val.to_csv(val_file, index=False)
+    test.to_csv(test_file, index=False)
+    print(f"Training samples: {len(train)}")
+    print(f"Validation samples: {len(val)}")
+    print(f"Test samples: {len(test)}")
 
 
 if __name__ == "__main__":

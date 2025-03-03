@@ -104,11 +104,11 @@ def main(cfg):
     # Path to the preprocessed dataset directory
     preprocessed_dir = Path(cfg["paths"]["preprocessed_dataset"])
     # Path to the regridded dataset
-    regridded_dir = preprocessed_dir / "processed"
+    regridded_dir = preprocessed_dir / "prepared"
     # Path to the constants, where the average areas will be stored.
     constants_dir = preprocessed_dir / "constants"
     # Load the metadata for the training samples.
-    samples_metadata = pd.read_json(preprocessed_dir / "train.json", orient="records", lines=True)
+    samples_metadata = pd.read_csv(preprocessed_dir / "train.csv")
 
     # Load the metadata for all sources
     source_metadata = load_merged_metadata(regridded_dir)
@@ -130,33 +130,42 @@ def main(cfg):
             num_workers,
         )
 
-    # We know need to compute the normalization constants for the context variables.
-    # However, the context variables can be shared across sources (e.g. the observing frequency
-    # or the IFOV). Thus, we'll load all of the context variables across all samples and compute
-    # the normalization constants at once.
-    # sources_metadata[source_name]["context_vars"] contains the context variables for the source.
-    # Retrieve the list of context variables that can be found in at least one source.
-    context_vars = set()
-    for source_name, metadata in source_metadata.items():
-        context_vars.update(metadata["context_vars"])
-    context_vars = list(context_vars)
-    # Isolate the context variables in the samples metadata.
-    context_df = samples_metadata[context_vars]
-    # Now, a cell of context_df is not directly the value of the variable for that sample,
-    # but a dict {channel: value}. We need to explode the DataFrame to get the values.
-    means, stds = {}, {}
-    for cvar in tqdm(context_vars, desc="Computing constants for context variables"):
-        df = context_df[cvar]
-        # Not all samples have a value for this context variable, which
-        # creates NaN values.
-        df = df[~df.isna() & (df != "") & (df != {})]
-        df = df.apply(lambda m: list(m.values())).explode()
-        means[cvar] = df.mean()
-        stds[cvar] = df.std()
+    # We now need to compute the normalization constants for the source characteristics.
+    # Those are variables that describe sources of the same source type. They are defined
+    # for each source in the source metadata, in the "charac_vars" entry. We'll do a min-max
+    # normalization of every charac var across all sources of the same source type,
+    # for each source type.
+    # - Retrieve the source types, and for each type the sources belonging to it.
+    src_types = defaultdict(list)
+    for src_name, src_meta in source_metadata.items():
+        src_types[src_meta["source_type"]].append(src_name)
+    # The charac vars can be found under
+    # source_metadata[src]["charac_var"][charac_var_name][data_var_name] for each data var.
+    # - For each source type, compute the min and max of each charac var across all sources
+    #   of the same type.
+    for src_type, srcs in src_types.items():
+        # Get the charac vars from the first source of the type.
+        charac_vars = source_metadata[srcs[0]]["charac_vars"].keys()
+        min_max = {charac_var: {"min": np.inf, "max": -np.inf} for charac_var in charac_vars}
+        for src in srcs:
+            # Check that all charac vars are present in the source metadata.
+            if set(charac_vars) != set(source_metadata[src]["charac_vars"].keys()):
+                raise ValueError(
+                    f"Charac vars for source {src} are not consistent with other\
+                     sources of the same type."
+                )
+            for charac_var, charac_var_data in source_metadata[src]["charac_vars"].items():
+                for data_var, data in charac_var_data.items():
+                    min_max[charac_var]["min"] = float(
+                        min(min_max[charac_var]["min"], np.min(data))
+                    )
+                    min_max[charac_var]["max"] = float(
+                        max(min_max[charac_var]["max"], np.max(data))
+                    )
+            # Save the min and max for each charac var in that source's constants directory.
+            with open(constants_dir / src /"charac_vars_min_max.json", "w") as f:
+                json.dump(min_max, f)
 
-    # Save the means and stds in two JSON files.
-    json.dump(means, open(constants_dir / "context_means.json", "w"))
-    json.dump(stds, open(constants_dir / "context_stds.json", "w"))
 
 
 if __name__ == "__main__":
