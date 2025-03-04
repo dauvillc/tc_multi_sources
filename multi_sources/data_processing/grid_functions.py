@@ -12,10 +12,12 @@ from pyresample.bilinear import NumpyBilinearResampler
 from pyresample import SwathDefinition
 from pyresample.area_config import create_area_def
 from pyresample.utils import check_and_wrap
+import torch
 
 
 class DisableLogger:
     """Context manager to disable logging temporarily."""
+
     def __enter__(self):
         logging.basicConfig(level=logging.ERROR, force=True)
 
@@ -66,6 +68,35 @@ def pad_dataset(ds, max_size):
     elif pad_pixel < 0:
         ds = ds.isel(pixel=slice(None, max_size[1]))
     return ds
+
+
+def crop_nan_border(src_image, tgt_images):
+    """Computes the smallest rectangle to which a source image can be
+    cropped without losing any non-NaN values; then crops the target images
+    to that rectangle.
+
+    Args:
+        src_image (torch.Tensor): The source image of shape (C, H, W).
+        tgt_images (list of torch.Tensor): Target images of shape (C, H, W) or (H, W).
+
+    Returns:
+        list of torch.Tensor: The cropped target images.
+    """
+    row_full_nan = torch.isnan(src_image).all(dim=(0, 2)).int()
+    col_full_nan = torch.isnan(src_image).all(dim=(0, 1)).int()
+    first_row = torch.argmax(~row_full_nan).item()
+    last_row = row_full_nan.size(0) - torch.argmax(~row_full_nan.flip(dims=[0])).item()
+    first_col = torch.argmax(~col_full_nan).item()
+    last_col = col_full_nan.size(0) - torch.argmax(~col_full_nan.flip(dims=[0])).item()
+
+    tgt_images_cropped = []
+    for tgt_image in tgt_images:
+        if tgt_image.ndim == 3:
+            tgt_image_cropped = tgt_image[:, first_row:last_row, first_col:last_col]
+        else:
+            tgt_image_cropped = tgt_image[first_row:last_row, first_col:last_col]
+        tgt_images_cropped.append(tgt_image_cropped)
+    return tgt_images_cropped
 
 
 def reverse_spatially(ds, dim_x, dim_y):

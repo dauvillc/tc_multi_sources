@@ -7,6 +7,7 @@ import numpy as np
 from collections import defaultdict
 from netCDF4 import Dataset
 from pathlib import Path
+from multi_sources.data_processing.grid_functions import crop_nan_border
 from multi_sources.data_processing.source import Source
 from multi_sources.data_processing.utils import compute_sources_availability, load_nc_with_nan
 from multi_sources.data_processing.data_augmentation import MultisourceDataAugmentation
@@ -331,6 +332,8 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                 # Load the npy file containing the data for the given storm, time, and source
                 filepath = Path(df["data_path"].iloc[0])
                 with Dataset(filepath) as ds:
+
+                    # Coordinates
                     lat = load_nc_with_nan(ds["latitude"])
                     lon = load_nc_with_nan(ds["longitude"])
                     # Make sure the longitude is in the range [-180, 180]
@@ -346,13 +349,23 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                         LM = torch.zeros_like(LM)
                         D = torch.zeros_like(D)
 
+                    # Characterstic variables
                     if source.n_charac_variables() == 0:
                         CA = None
                     else:
                         CA = torch.tensor(source.get_charac_values(), dtype=torch.float32)
+
+                    # Values
                     # Load the variables in the order specified in the source
                     V = np.stack([load_nc_with_nan(ds[var]) for var in source.data_vars], axis=0)
                     V = torch.tensor(V, dtype=torch.float32)
+
+                    # The values can contain borders that are fully NaN (due to the sources
+                    # originally having multiple channels that are not aligned geographically).
+                    # Compute how much we can crop them, and apply that cropping to all spatial
+                    # tensors to keep the spatial alignment.
+                    V, C, LM, D = crop_nan_border(V, [V, C, LM, D])
+
                     # Normalize the characs and values tensors
                     CA, V = self.normalize(V, source, CA)
                     output_entry = {
