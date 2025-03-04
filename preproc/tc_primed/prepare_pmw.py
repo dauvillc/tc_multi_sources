@@ -11,6 +11,7 @@ import pandas as pd
 import xarray as xr
 import json
 import warnings
+from tqdm import tqdm
 from netCDF4 import Dataset
 from xarray.backends import NetCDF4DataStore
 from tqdm import tqdm
@@ -201,10 +202,12 @@ def process_pmw_file(file, source, source_groups, dest_dir, regridding_res):
 
 
 # Helper function to process a chunk of files in parallel.
-def process_chunk(file_list, source, pmw_groups, source_dest_dir, regridding_res):
+def process_chunk(file_list, source, pmw_groups, source_dest_dir, regridding_res, verbose=False):
     local_metadata = []
     discarded = 0
-    for file in file_list:
+
+    iterator = tqdm(file_list, desc="Processing chunk") if verbose else file_list
+    for file in iterator:
         meta = process_pmw_file(file, source, pmw_groups, source_dest_dir, regridding_res)
         if meta is None:
             discarded += 1
@@ -241,7 +244,9 @@ def main(cfg):
             pmw_files = {process_source: pmw_files[process_source]}
             pmw_groups = {process_source: pmw_groups[process_source]}
         else:
-            print(f"Source {process_source} not found in available sources: {list(pmw_files.keys())}")
+            print(
+                f"Source {process_source} not found in available sources: {list(pmw_files.keys())}"
+            )
             return
 
     # Process each PMW source
@@ -272,17 +277,19 @@ def main(cfg):
         if num_workers > 1:
             chunks = np.array_split(pmw_files[source], num_workers)
             with ProcessPoolExecutor(max_workers=num_workers) as executor:
-                futures = [
-                    executor.submit(
-                        process_chunk,
-                        list(chunk),
-                        source,
-                        pmw_groups[source],
-                        source_dest_dir,
-                        regridding_res,
+                futures = []
+                for i, chunk in enumerate(chunks):
+                    futures.append(
+                        executor.submit(
+                            process_chunk,
+                            list(chunk),
+                            source,
+                            pmw_groups[source],
+                            source_dest_dir,
+                            regridding_res,
+                            verbose=(i == 0),
+                        )
                     )
-                    for chunk in chunks
-                ]
                 for future in as_completed(futures):
                     meta_chunk, discarded_chunk = future.result()
                     samples_metadata.extend(meta_chunk)
