@@ -189,8 +189,7 @@ def process_pmw_file(file, source, source_groups, dest_dir, regridding_res):
             ds["dist_to_center"] = (("lat", "lon"), dist_to_center)
 
         except ResamplingError as e:
-            print(f"Resampling error for sample {file}: {e}")
-            return None
+            raise RuntimeError(f"Resampling error for sample {file}: {e}")
 
         # Save processed data in the netCDF format
         new_ds = ds[data_vars + ["latitude", "longitude", "land_mask", "dist_to_center"]]

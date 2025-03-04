@@ -353,7 +353,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                     # Load the variables in the order specified in the source
                     V = np.stack([load_nc_with_nan(ds[var]) for var in source.data_vars], axis=0)
                     V = torch.tensor(V, dtype=torch.float32)
-                    # Normalize the context and values tensors
+                    # Normalize the characs and values tensors
                     CA, V = self.normalize(V, source, CA)
                     output_entry = {
                         "dt": DT,
@@ -387,7 +387,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         dist_to_center=False,
         device=None,
     ):
-        """Normalizes the context and values tensors associated with a given
+        """Normalizes the characs and values tensors associated with a given
         source, and optionally a specific data variable.
         Args:
             values (torch.Tensor): tensor of shape (C, ...) if dvar is None,
@@ -396,7 +396,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                 of the source.
             characs (torch.Tensor, optiona): tensor of shape (n_charac_vars,)
                 containing the characteristic variables.
-            denormalize (bool, optional): If True, denormalize the context and values tensors
+            denormalize (bool, optional): If True, denormalize the characs and values tensors
                 instead of normalizing them.
             batched (bool, optional): If True, the values tensor is expected to have
                 shape (B, C, ...), where B is the batch size.
@@ -467,15 +467,15 @@ class MultiSourceDataset(torch.utils.data.Dataset):
             return self._get_n_data_variables()[source_name]
         return {source.name: source.n_data_variables() for source in self.sources}
 
-    def _get_n_context_variables(self, source_name=None):
-        """Returns either the number of context variables within a source,
-        or a dict {source_name: number of context variables}, before splitting the sources.
+    def _get_n_charac_variables(self, source_name=None):
+        """Returns either the number of charac variables within a source,
+        or a dict {source_name: number of charac variables}, before splitting the sources.
         """
         if source_name is not None:
-            return self._get_n_context_variables()[source_name]
+            return self._get_n_charac_variables()[source_name]
         return {
-            # Each data variable within a source has its own context variables
-            source.name: source.n_context_variables()
+            # Each data variable within a source has its own charac variables
+            source.name: source.n_charac_variables()
             for source in self.sources
         }
 
@@ -487,23 +487,23 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         """Returns the number of sources."""
         return len(self.get_source_names())
 
-    def get_source_types_context_vars(self):
-        """Returns a dict {source_type: context variables}."""
-        # Browse all sources and collect their types and context variables
-        source_types_context_vars = {}
+    def get_source_types_charac_vars(self):
+        """Returns a dict {source_type: charac variables}."""
+        # Browse all sources and collect their types and charac variables
+        source_types_charac_vars = {}
         for source in self.sources:
-            # If the source type has been seen before, make sure the context
+            # If the source type has been seen before, make sure the charac
             # vars were the same. All sources from the same type should have
-            # the same context variables.
-            if source.type in source_types_context_vars:
-                if source.context_vars != source_types_context_vars[source.type]:
+            # the same charac variables.
+            if source.type in source_types_charac_vars:
+                if source.charac_vars != source_types_charac_vars[source.type]:
                     raise ValueError(
-                        f"Sources of type {source.type} have different context variables."
+                        f"Sources of type {source.type} have different charac variables."
                     )
             else:
-                source_types_context_vars[source.type] = source.context_vars
-        return source_types_context_vars
+                source_types_charac_vars[source.type] = source.charac_vars
+        return source_types_charac_vars
 
-    def get_n_context_variables(self):
-        """Returns a dict {source_name: number of context variables}."""
-        return self._get_n_context_variables()
+    def get_n_charac_variables(self):
+        """Returns a dict {source_name: number of charac variables}."""
+        return self._get_n_charac_variables()

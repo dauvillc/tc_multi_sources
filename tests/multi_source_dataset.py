@@ -49,7 +49,6 @@ def main(cfg: DictConfig):
     )
 
     data_means, data_stds = defaultdict(int), defaultdict(int)
-    context_means, context_stds = defaultdict(int), defaultdict(int)
     for i, batch in zip(trange(len(dataloader)), dataloader):
         for source_name, data in batch.items():
             # values

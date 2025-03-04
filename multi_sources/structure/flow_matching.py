@@ -118,16 +118,16 @@ class MultisourceFlowMatchingReconstructor(pl.LightningModule):
         # Embedding and output projection layers
         # An embedding and an output layer for each source type
         # - We need to retrieve the list of each source type from the sources,
-        #   as well as the number of context variables for each source type.
-        self.sourcetypes_context_vars = {}
+        #   as well as the number of characs variables for each source type.
+        self.sourcetypes_characs_vars = {}
         self.sourcetype_embeddings = nn.ModuleDict()
         self.sourcetype_output_projs = nn.ModuleDict()
         self.sourcetype_coords_embeddings = nn.ModuleDict()
         self.source_to_type = {source.name: source.type for source in sources}
         for source in sources:
             # Only create the embedding layer for that source type if it doesn't exist yet
-            if source.type not in self.sourcetypes_context_vars:
-                self.sourcetypes_context_vars[source.type] = source.n_context_variables()
+            if source.type not in self.sourcetypes_characs_vars:
+                self.sourcetypes_characs_vars[source.type] = source.n_charac_variables()
                 n_output_channels = source.n_data_variables()
                 # Create the layers for that source type depending on
                 # its dimensionality
@@ -140,7 +140,7 @@ class MultisourceFlowMatchingReconstructor(pl.LightningModule):
                     self.sourcetype_coords_embeddings[source.type] = CoordinatesEmbedding2d(
                         self.patch_size,
                         coords_dim,
-                        source.n_context_variables(),
+                        source.n_charac_variables(),
                     )
                     self.sourcetype_output_projs[source.type] = SourcetypeProjection2d(
                         self.values_dim, self.coords_dim, n_output_channels, self.patch_size
@@ -157,11 +157,11 @@ class MultisourceFlowMatchingReconstructor(pl.LightningModule):
                         self.values_dim, self.coords_dim, n_output_channels
                     )
             else:
-                # Check that the number of context variables is the same for all sources
+                # Check that the number of characs variables is the same for all sources
                 # of the same type
-                if self.sourcetypes_context_vars[source.type] != source.n_context_variables():
+                if self.sourcetypes_characs_vars[source.type] != source.n_charac_variables():
                     raise ValueError(
-                        f"Number of context variables is not "
+                        f"Number of characs variables is not "
                         "the same for all sources of type {source.type}"
                     )
 
@@ -201,19 +201,18 @@ class MultisourceFlowMatchingReconstructor(pl.LightningModule):
             c = torch.nan_to_num(c, nan=-1)
             # For the distance tensor, fill the nan values with +inf
             d = torch.nan_to_num(d, nan=float("inf"))
-            # Potential context variables
-            if "context" in data:
-                ct = data["context"].float()
-                ct = torch.nan_to_num(ct, nan=0)
+            # Potential characs variables
+            if "characs" in data:
+                ch = data["characs"].float()
+                ch = torch.nan_to_num(ch, nan=0)
 
             # Create two separate dictionaries: one for embedding input, one for loss computation
             embed_input = {
-                "source_type": data["source_type"],
                 "avail": data["avail"],
                 "dt": dt,
                 "coords": c,
                 "values": v,
-                "context": ct if "context" in data else None,
+                "characs": ch if "characs" in data else None,
             }
 
             loss_info = {
