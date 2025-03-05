@@ -109,7 +109,7 @@ def initialize_pmw_metadata(ds, source, ifovs_path, dest_dir):
     return True
 
 
-def process_pmw_file(file, source, source_groups, dest_dir, regridding_res):
+def process_pmw_file(file, source, source_groups, dest_dir, regridding_res, check_exist=False):
     """Processes a single PMW file.
     Args:
         file (str): Path to the PMW file.
@@ -117,6 +117,7 @@ def process_pmw_file(file, source, source_groups, dest_dir, regridding_res):
         source_groups (list): List of groups in the source file.
         dest_dir (Path): Destination directory.
         regridding_res (float): Resolution of the target grid, in degrees.
+        check_exist (bool): Flag to check if the file already exists.
     Returns:
         dict or None: Sample metadata, or None if the sample is discarded.
     """
@@ -161,6 +162,12 @@ def process_pmw_file(file, source, source_groups, dest_dir, regridding_res):
             "basin": basin,
             "dim": 2,  # Spatial dimensionality
         }
+        dest_file = dest_dir / f"{sid}_{time.strftime('%Y%m%dT%H%M%S')}.nc"
+        sample_metadata["data_path"] = dest_file
+
+        # Check if the file already exists. If it does, skip processing.
+        if check_exist and dest_file.exists():
+            return sample_metadata
 
         # Standardize longitude values to [-180, 180]
         ds["longitude"] = (ds["longitude"] + 180) % 360 - 180
@@ -194,21 +201,23 @@ def process_pmw_file(file, source, source_groups, dest_dir, regridding_res):
 
         # Save processed data in the netCDF format
         new_ds = ds[data_vars + ["latitude", "longitude", "land_mask", "dist_to_center"]]
-        dest_file = dest_dir / f"{sid}_{time.strftime('%Y%m%dT%H%M%S')}.nc"
         new_ds.to_netcdf(dest_file)
-        sample_metadata["data_path"] = dest_file
 
         return sample_metadata
 
 
 # Helper function to process a chunk of files in parallel.
-def process_chunk(file_list, source, pmw_groups, source_dest_dir, regridding_res, verbose=False):
+def process_chunk(
+    file_list, source, pmw_groups, source_dest_dir, regridding_res, check_exist, verbose=False
+):
     local_metadata = []
     discarded = 0
 
     iterator = tqdm(file_list, desc="Processing chunk") if verbose else file_list
     for file in iterator:
-        meta = process_pmw_file(file, source, pmw_groups, source_dest_dir, regridding_res)
+        meta = process_pmw_file(
+            file, source, pmw_groups, source_dest_dir, regridding_res, check_exist
+        )
         if meta is None:
             discarded += 1
         else:
@@ -229,6 +238,7 @@ def main(cfg):
     dest_path = Path(cfg["paths"]["preprocessed_dataset"]) / "prepared"
     # Resolution of the target grid, in degrees
     regridding_res = cfg["regridding_resolution"]
+    check_exist = cfg.get("check_exist", False)
 
     # Get PMW sources only
     sources, source_files, source_groups = list_tc_primed_sources(
@@ -287,6 +297,7 @@ def main(cfg):
                             pmw_groups[source],
                             source_dest_dir,
                             regridding_res,
+                            check_exist,
                             verbose=(i == 0),
                         )
                     )
@@ -297,7 +308,7 @@ def main(cfg):
         else:
             for file in tqdm(pmw_files[source], desc=f"Processing {source}"):
                 sample_metadata = process_pmw_file(
-                    file, source, pmw_groups[source], source_dest_dir, regridding_res
+                    file, source, pmw_groups[source], source_dest_dir, regridding_res, check_exist
                 )
                 if sample_metadata is None:
                     discarded += 1
