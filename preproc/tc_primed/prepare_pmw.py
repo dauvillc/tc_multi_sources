@@ -30,6 +30,33 @@ from multi_sources.data_processing.grid_functions import (
 )
 
 
+CROSS_TRACK_INSTRUMENTS = ["AMSU", "ATMS", "MHS"]
+# List of swaths that won't be used in the experiments and should be ignored.
+# Not the full source names, the script will check if the source name contains
+# any of the strings in this list.
+IGNORE = [
+    "GCOMW1_S1",
+    "GCOMW1_S2",
+    "GCOMW1_S3",
+    "AQUA_S1",
+    "AQUA_S2",
+    "AQUA_S3",
+    "ATMS_NPP_S1",
+    "ATMS_NPP_S2",
+    "ATMS_NPP_S4",
+    "GMI_GPM_S2",
+    "F16_S1",
+    "F16_S3",
+    "F17_S1",
+    "17_S3",
+    "F18_S1",
+    "F18_S3",
+    "F19_S1",
+    "F19_S3",
+    "TRMM_S1",
+]
+
+
 def parse_frequency(pm_var_name):
     """Parse frequency from PMW variable name."""
     freq = pm_var_name.split("_")[1]
@@ -174,6 +201,10 @@ def process_pmw_file(file, source, source_groups, dest_dir, regridding_res, chec
 
         # Regrid from satellite geometry to a regular grid
         try:
+            # For cross-track instruments, we'll crop the borders as the pixels
+            # at the edges have an unusable IFOV.
+            if any(instrument in source for instrument in CROSS_TRACK_INSTRUMENTS):
+                ds = ds.isel(pixel=slice(10, -10))
             ds = regrid(ds, regridding_res)
             # Check if any variable is fully null after regridding
             for variable in ds.variables:
@@ -246,6 +277,17 @@ def main(cfg):
     )
     pmw_files = {s: files for s, files in source_files.items() if s.startswith("pmw_")}
     pmw_groups = {s: source_groups[s] for s in pmw_files.keys()}
+
+    # Remove ignored sources
+    for source_name_part in IGNORE:
+        pmw_files = {
+            source: files for source, files in pmw_files.items() if source_name_part not in source
+        }
+        pmw_groups = {
+            source: groups
+            for source, groups in pmw_groups.items()
+            if source_name_part not in source
+        }
 
     # Process only a specific source if provided in cfg
     if "process_only" in cfg:
