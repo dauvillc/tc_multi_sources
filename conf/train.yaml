@@ -5,11 +5,12 @@ defaults:
   - dataset: default
   - data_augmentation: none
   - dataloader: jz
-  - lightning_module: deterministic
+  - lightning_module: flow_matching
   - model: ???
   - trainer: ???
   - lr_scheduler: cosine_warmup_50epochs
   - optimizer: default_adamw
+  - metrics: none
   - _self_
 
 seed: 42

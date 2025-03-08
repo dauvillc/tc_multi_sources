@@ -4,7 +4,8 @@ defaults:
   - override /dataloader: jz
   - override /sources: sat_interp_37GHz
   - override /lightning_module: flow_matching
-  - override /lr_scheduler: cosine_warmup_100epochs.yaml
+  - override /lr_scheduler: cosine_warmup_100epochs
+  - override /metrics: default_fm
 
 wandb:
   name: diff_37GHz

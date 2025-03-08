@@ -7,3 +7,4 @@ n_sampling_diffusion_steps: 25
 lr_scheduler_kwargs: ${lr_scheduler}
 loss_max_distance_from_center: null
 adamw_kwargs: ${optimizer}
+metrics: ${metrics}
