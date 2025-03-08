@@ -1,0 +1,3 @@
+RMSE:
+  _target_: hydra.utils.get_method
+  path: multi_sources.metrics.rmse.multisource_rmse
