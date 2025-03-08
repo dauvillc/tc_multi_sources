@@ -33,6 +33,8 @@ class SourcetypeProjection2d(nn.Module):
             bias=False,
         )
         self.pixel_shuffle = nn.PixelShuffle(patch_size)
+        # Final ResNet to correct the artifacts
+        self.resnet = ResNet(out_channels, 16, 2)
         # Apply the ICNR initialization to the deconvolution, to reduce checkerboard artifacts
         weight = ICNR(
             self.conv.weight, initializer=nn.init.kaiming_normal_, upscale_factor=patch_size
@@ -58,6 +60,8 @@ class SourcetypeProjection2d(nn.Module):
         v = self.pixel_shuffle(v)  # (B, C, H, W)
         if hasattr(self, "rearrange"):
             v = self.rearrange(v)
+        # Correct the artifacts with a ResNet
+        v = self.resnet(v)
         return v
 
 
