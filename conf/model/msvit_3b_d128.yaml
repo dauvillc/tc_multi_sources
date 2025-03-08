@@ -12,7 +12,7 @@ backbone:
         _target_: hydra.utils.get_class
         path: multi_sources.models.factorized_attention.MultisourcesAnchoredCrossAttention
       inner_dim: 128
-      num_anchor_points: 64
+      anchor_points_spacing: 4
       num_heads: 4
       dropout: ${model.dropout}
     spatial_attention:
@@ -20,7 +20,7 @@ backbone:
         _target_: hydra.utils.get_class
         path: multi_sources.models.factorized_attention.SeparateWindowedValuesCoordinatesAttention
       inner_dim: 128
-      window_size: 7
+      window_size: 8
       num_heads: 4
       dropout: ${model.dropout}
     ff1:

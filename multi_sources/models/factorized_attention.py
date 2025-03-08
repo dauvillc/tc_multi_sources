@@ -11,9 +11,10 @@ from multi_sources.models.small_layers import RMSNorm
 
 class MultisourcesAnchoredCrossAttention(nn.Module):
     """Computes attention across the sources using an anchor points system.
-    K evenly spaced anchor tokens are gathered from each source. Those tokens are then
-    concatenated into a single sequence, on which the attention is computed. The updated
-    tokens are then summed back to the original tokens of each source.
+    For each source, a set of anchor points is selected from the values and coordinates.
+    Those tokens are then concatenated into a single sequence,
+    on which the attention is computed. The updated tokens are then summed back
+    to the original tokens of each source.
     """
 
     def __init__(
@@ -21,7 +22,7 @@ class MultisourcesAnchoredCrossAttention(nn.Module):
         values_dim,
         coords_dim,
         inner_ratio,
-        num_anchor_points,
+        anchor_points_spacing,
         num_heads=8,
         dropout=0.0,
         **kwargs
@@ -31,7 +32,8 @@ class MultisourcesAnchoredCrossAttention(nn.Module):
             values_dim (int): Embedding dimension of the values.
             coords_dim (int): Embedding dimension of the coordinates.
             inner_ratio (float): Ratio of the inner dimension to the values dimension.
-            num_anchor_points (int): Number of anchor points.
+            anchor_points_spacing (int): Spacing between the anchor points. For example,
+                3 means that every third token along each axis is selected as an anchor point.
             num_heads (int): Number of heads in the attention block.
             dropout (float): Dropout rate.
         """
@@ -39,7 +41,7 @@ class MultisourcesAnchoredCrossAttention(nn.Module):
         self.values_dim = values_dim
         self.coords_dim = coords_dim
         self.inner_dim = inner_ratio * values_dim
-        self.num_anchor_points = num_anchor_points
+        self.anchor_points_spacing = anchor_points_spacing
         self.num_heads = num_heads
         self.dropout = dropout
 
@@ -51,43 +53,55 @@ class MultisourcesAnchoredCrossAttention(nn.Module):
         """
         Args:
             inputs (dict of str: dict of str: tensor): Dictionary of inputs, such that
-                inputs[source_name] contains the keys "embedded_coords"
-                and "embedded_values".
-            attention_mask (dict of str: tensor): Dictionary of attention masks for each source,
-                such that attention_mask[source_name] has shape (b, n).
+                inputs[source_name] contains the keys "embedded_coords", "embedded_values", and
+                "tokens_shape".
 
         Returns:
             dict of str: tensor: Dictionary of outputs, such that
                 outputs[source_name] contains the predicted values of the tokens.
         """
         # For each source:
-        # - Read the length of that source's sequence;
+        # - Read the length of that source's sequence
         # - Gather the anchor tokens from the values and coordinates (and
-        #   attention masks if provided);
-        # - Save the indices of the anchor tokens;
+        #   attention masks if provided)
+        # - Save the indices of the anchor tokens
         anchor_values, anchor_coords, anchor_masks = {}, {}, {}
         anchor_indices, n_anchors_list = {}, []
         for source_name, source_inputs in inputs.items():
             _, n = source_inputs["embedded_values"].shape[:2]
-            # Don't take more anchor points than the number of tokens
-            n_anchor_points = min(self.num_anchor_points, n)
-            indices = (
-                torch.linspace(0, n - 1, n_anchor_points)
-                .long()
-                .to(source_inputs["embedded_values"].device)
-            )
+            # For 1D sources, simply select the anchor points at regular intervals. 0D sources
+            # are just 1D sources of length 1, so we can handle them here as well.
+            if len(source_inputs["tokens_shape"]) <= 1:
+                n_anchor_points = n // self.anchor_points_spacing
+                indices = torch.linspace(0, n - 1, n_anchor_points).long()
+            # For 2D sources, we want to select the anchor points in a grid pattern.
+            if len(source_inputs["tokens_shape"]) == 2:
+                h, w = source_inputs["tokens_shape"]
+                anchor_cols = torch.arange(0, w, self.anchor_points_spacing)
+                anchor_cols += ((w - 1) % self.anchor_points_spacing) // 2  # Centering
+                anchor_rows = torch.arange(0, h, self.anchor_points_spacing)
+                anchor_rows += ((h - 1) % self.anchor_points_spacing) // 2
+                # We need to gather the indices of the anchor points in the flattened sequence.
+                indices = torch.cartesian_prod(anchor_rows, anchor_cols)
+                indices = indices[:, 0] * w + indices[:, 1]
+                n_anchor_points = len(indices)
+            indices = indices.to(source_inputs["embedded_values"].device)
+
+            # Select the anchor tokens from the values and coordinates based on the indices
             anchor_values[source_name] = source_inputs["embedded_values"][:, indices]
             anchor_coords[source_name] = source_inputs["embedded_coords"][:, indices]
+            # Save the indices and the number of anchor points for later.
             anchor_indices[source_name] = indices
             n_anchors_list.append(n_anchor_points)
-        # Concatenate the anchor tokens from all sources;
+
+        # Concatenate the anchor tokens from all sources
         anchor_values = torch.cat([anchor_values[source_name] for source_name in inputs], dim=1)
         anchor_coords = torch.cat([anchor_coords[source_name] for source_name in inputs], dim=1)
-        # Compute the attention across the anchor tokens;
+        # Compute the attention across the anchor tokens
         anchor_values = self.attention(anchor_values, anchor_coords)
-        # Split back the sequence of anchor tokens to the sources;
+        # Split back the sequence of anchor tokens to the sources
         anchor_values = torch.split(anchor_values, n_anchors_list, dim=1)
-        # Split the updated anchor tokens back to the sources and sum them to the original tokens;
+        # Split the updated anchor tokens back to the sources and sum them to the original tokens
         outputs = {}
         for i, (source_name, source_inputs) in enumerate(inputs.items()):
             indices = anchor_indices[source_name]
