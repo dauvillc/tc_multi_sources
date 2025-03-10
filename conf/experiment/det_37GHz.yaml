@@ -1,0 +1,21 @@
+# @package _global_
+defaults:
+  - override /paths: jz
+  - override /dataloader: jz
+  - override /sources: sat_interp_37GHz
+  - override /lightning_module: deterministic
+  - override /lr_scheduler: cosine_warmup_100epochs
+  - override /metrics: default_fm
+
+wandb:
+  name: det_37GHz
+  group: det_37GHz
+
+dataset:
+  train:
+    dt_max: 6
+    min_available_sources: 2
+
+model:
+  backbone:
+    _target_: multi_sources.models.backbone.MultisourceGeneralBackbone
