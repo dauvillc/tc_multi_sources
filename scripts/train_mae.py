@@ -115,7 +115,7 @@ def main(cfg: DictConfig):
         filename="{epoch:02d}",
         save_top_k=1,
         mode="min",
-        every_n_train_steps=1000
+        every_n_train_steps=2000
     )
     # Create the trainer
     trainer = pl.Trainer(

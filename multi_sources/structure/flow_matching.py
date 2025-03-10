@@ -61,9 +61,10 @@ class MultisourceFlowMatchingReconstructor(pl.LightningModule):
         patch_size,
         values_dim,
         coords_dim,
-        n_sampling_diffusion_steps,
         adamw_kwargs,
         lr_scheduler_kwargs,
+        deterministic=False,
+        n_sampling_diffusion_steps=25,
         loss_max_distance_from_center=None,
         normalize_coords_across_sources=False,
         validation_dir=None,
@@ -79,9 +80,12 @@ class MultisourceFlowMatchingReconstructor(pl.LightningModule):
             patch_size (int): Size of the patches to split the images into.
             values_dim (int): Dimension of the values embeddings.
             coords_dim (int): Dimension of the coordinates embeddings.
-            n_sampling_diffusion_steps (int): Number of diffusion steps when sampling.
             adamw_kwargs (dict): Arguments to pass to torch.optim.AdamW (other than params).
             lr_scheduler_kwargs (dict): Arguments to pass to the learning rate scheduler.
+            deterministic (bool): If True, learns a deterministic model with the MSE
+                as objective, instead of the flow matching loss. In this case, the argument
+                n_sampling_diffusion_steps is ignored.
+            n_sampling_diffusion_steps (int): Number of diffusion steps when sampling.
             loss_max_distance_from_center (int or None): If specified, only pixels within this
                 distance from the center of the storm (in km) will be considered
                 in the loss computation.
@@ -104,9 +108,11 @@ class MultisourceFlowMatchingReconstructor(pl.LightningModule):
         self.patch_size = patch_size
         self.values_dim = values_dim
         self.coords_dim = coords_dim
-        self.n_sampling_diffusion_steps = n_sampling_diffusion_steps
         self.validation_dir = validation_dir
         self.lr_scheduler_kwargs = lr_scheduler_kwargs
+
+        self.deterministic = deterministic
+        self.n_sampling_diffusion_steps = n_sampling_diffusion_steps
         self.loss_max_distance_from_center = loss_max_distance_from_center
         self.adamw_kwargs = adamw_kwargs
         self.metrics = metrics
@@ -125,6 +131,7 @@ class MultisourceFlowMatchingReconstructor(pl.LightningModule):
         self.sourcetype_output_projs = nn.ModuleDict()
         self.sourcetype_coords_embeddings = nn.ModuleDict()
         self.source_to_type = {source.name: source.type for source in sources}
+        use_diffusion_t = not self.deterministic
         for source in sources:
             # Only create the embedding layer for that source type if it doesn't exist yet
             if source.type not in self.sourcetypes_characs_vars:
@@ -137,11 +144,13 @@ class MultisourceFlowMatchingReconstructor(pl.LightningModule):
                         source.n_data_variables(),
                         self.patch_size,
                         values_dim,
+                        use_diffusion_t=use_diffusion_t,
                     )
                     self.sourcetype_coords_embeddings[source.type] = CoordinatesEmbedding2d(
                         self.patch_size,
                         coords_dim,
                         source.n_charac_variables(),
+                        use_diffusion_t=use_diffusion_t,
                     )
                     self.sourcetype_output_projs[source.type] = SourcetypeProjection2d(
                         self.values_dim, self.coords_dim, n_output_channels, self.patch_size
@@ -152,7 +161,7 @@ class MultisourceFlowMatchingReconstructor(pl.LightningModule):
                         values_dim,
                     )
                     self.sourcetype_coords_embeddings[source.type] = CoordinatesEmbedding0d(
-                        coords_dim,
+                        coords_dim, use_diffusion_t=use_diffusion_t
                     )
                     self.sourcetype_output_projs[source.type] = SourcetypeProjection0d(
                         self.values_dim, self.coords_dim, n_output_channels
@@ -166,11 +175,12 @@ class MultisourceFlowMatchingReconstructor(pl.LightningModule):
                         "the same for all sources of type {source.type}"
                     )
 
-        # Token that will be added to the embedded values of the masked sources only,
-        # to help the model distinguish between the masked and unmasked tokens.
-        # Flow matching ingredients
-        self.fm_path = CondOTProbPath()
-        self.cnt = 0
+        if self.deterministic:
+            # [MASK] token that will replace the embeddings of the masked tokens
+            self.mask_token = nn.Parameter(torch.randn(1, 1, self.values_dim))
+        else:
+            # Flow matching ingredients
+            self.fm_path = CondOTProbPath()
 
     def preproc_input(self, x):
         # Normalize the coordinates across sources to make them relative instead of absolute
@@ -248,6 +258,10 @@ class MultisourceFlowMatchingReconstructor(pl.LightningModule):
                 # For 0D sources, the tokens shape is (1,)
                 tokens_shape = (1,)
 
+            if self.deterministic:
+                # Replace the tokens that were masked with a [MASK] token
+                v[data["avail"] == 0] = self.mask_token
+
             output[source] = {
                 "tokens_shape": tokens_shape,
                 "embedded_values": v,
@@ -261,6 +275,8 @@ class MultisourceFlowMatchingReconstructor(pl.LightningModule):
         Supposes that there are at least as many non-missing sources as the number of sources
         to mask. The number of sources to mask is determined by self.masking ratio.
         Masked sources have their values mixed with random noise following the noise schedule.
+        If the model is deterministic, the masked sources are replaced by a [MASK] token instead
+        of being noised.
         The availability flag is set to 0 where the source is masked.
         Args:
             x (dict of str to dict of str to tensor): The input sources.
@@ -272,12 +288,12 @@ class MultisourceFlowMatchingReconstructor(pl.LightningModule):
                 which sources to mask.
         Returns:
             masked_x (dict of str to dict of str to tensor): The input sources with a portion
-                of the sources masked. An entry "diffusion_t" is added to the dict of each source,
-                which is a tensor of shape (B,) such that: diffusion_t[b] is the diffusion timestep
-                at which the source was masked for the sample b if the source was masked,
-                and -1 otherwise.
+                of the sources masked. If not determnistic, an entry "diffusion_t" is added
+                to the dict of each source, which is a tensor of shape (B,) such that:
+                diffusion_t[b] is the diffusion timestep at which the source was masked
+                for the sample b if the source was masked, and -1 otherwise.
             path_samples (dict of str to PathSample): the ProbSample objects used to generate the
-                noised values.
+                noised values. Empty if the model is deterministic.
         """
         n_sources = len(x)
         any_elem = next(iter(x.values()))["values"]
@@ -324,28 +340,33 @@ class MultisourceFlowMatchingReconstructor(pl.LightningModule):
             avail_flag = masked_data["avail"]
             avail_flag[masked_sources_matrix[:, i]] = 0
             # The sources should be noised if they are masked.
-            should_noise = avail_flag == 0
-            if pure_noise:
-                t = torch.zeros(batch_size, device=device)  # Means x_t = x_0
-            else:
-                # Sigmoid of a standard gaussian to favor intermediate timesteps,
-                # following Stable Diffusion 3.
-                t = torch.normal(mean=0, std=1, size=(batch_size,), device=device).sigmoid()
-            # Generate random noise with the same shape as the values
-            noise = torch.randn_like(masked_data["values"])
-            # Compute the noised values associated with the diffusion timesteps
-            path_sample = self.fm_path.sample(t=t, x_0=noise, x_1=data["values"].detach().clone())
-            noised_values = path_sample.x_t.detach().clone()
-            masked_data["values"][should_noise] = noised_values[should_noise]
+            should_mask = avail_flag == 0
+            # For the deterministic case, we don't noise the values, instead they'll
+            # be replaced by a [MASK] token in self.embed().
+            if not self.deterministic:
+                if pure_noise:
+                    t = torch.zeros(batch_size, device=device)  # Means x_t = x_0
+                else:
+                    # Sigmoid of a standard gaussian to favor intermediate timesteps,
+                    # following Stable Diffusion 3.
+                    t = torch.normal(mean=0, std=1, size=(batch_size,), device=device).sigmoid()
+                # Generate random noise with the same shape as the values
+                noise = torch.randn_like(masked_data["values"])
+                # Compute the noised values associated with the diffusion timesteps
+                path_sample = self.fm_path.sample(
+                    t=t, x_0=noise, x_1=data["values"].detach().clone()
+                )
+                path_samples[source] = path_sample
+                noised_values = path_sample.x_t.detach().clone()
+                masked_data["values"][should_mask] = noised_values[should_mask]
+                # Save the diffusion timesteps at which the source was masked. For unnoised sources,
+                # the diffusion step is set to 1, since the step t=1 means no noise is left.
+                masked_data["diffusion_t"] = torch.where(should_mask, t, torch.ones_like(t))
+                # For sources that are fully unavailable, set the diffusion timestep to -1
+                masked_data["diffusion_t"][masked_data["avail"] == -1] = -1
             # Set the availability mask to 0 everywhere for noised sources.
             # (!= from the avail flag, it's a mask of same shape
-            masked_data["avail_mask"][should_noise] = 0
-            # Save the diffusion timesteps at which the source was masked. For unnoised sources,
-            # the diffusion step is set to 1, since the step t=1 means no noise is left.
-            masked_data["diffusion_t"] = torch.where(should_noise, t, torch.ones_like(t))
-            # For sources that are fully unavailable, set the diffusion timestep to -1
-            masked_data["diffusion_t"][masked_data["avail"] == -1] = -1
-            path_samples[source] = path_sample
+            masked_data["avail_mask"][should_mask] = 0
             masked_x[source] = masked_data
         return masked_x, path_samples
 
@@ -415,8 +436,8 @@ class MultisourceFlowMatchingReconstructor(pl.LightningModule):
         return loss
 
     def loss_fn(self, path_samples, pred, y_true, avail_flag):
-        """Computes the conditional flow matching loss for the model. Only pixels
-        that were noised are considered in the loss computation.
+        """Computes the MSE or conditional flow matching loss for the model. Only pixels
+        that were masked/noised are considered in the loss computation.
         Variables that have been tagged as input-only in their source are not considered
         in the loss computation.
         Args:
@@ -439,21 +460,12 @@ class MultisourceFlowMatchingReconstructor(pl.LightningModule):
             output_vars = self.sources[source].get_output_variables_mask()  # (C,)
             output_vars = torch.tensor(output_vars, device=pred_s.device)
             pred_s = pred_s[:, output_vars]
-            target_s = path_samples[source].dx_t[:, output_vars]
-            # debug: imshow x_t, the pred and the target
-            # if self.cnt != 0 and self.cnt % 10000 == 0:
-            #     for i in range(pred_s.shape[0]):
-            #         if avail_flag[source][i] == 0:
-            #             fig = plt.figure()
-            #             ax1 = fig.add_subplot(131)
-            #             ax2 = fig.add_subplot(132)
-            #             ax3 = fig.add_subplot(133)
-            #             ax1.imshow(path_samples[source].x_t[i, 0].detach().cpu().numpy())
-            #             ax2.imshow(pred_s[i, 0].detach().cpu().numpy())
-            #             ax3.imshow(target_s[i, 0].detach().cpu().numpy())
-            #             plt.show()
-            #             plt.close()
-            # self.cnt += 1
+            # The loss function is always the MSE in the end, but for the flow matching
+            # the target is the velocity field instead of the values.
+            if self.deterministic:
+                target_s = true_data["values"][:, output_vars]
+            else:
+                target_s = path_samples[source].dx_t[:, output_vars]
 
             # We'll compute a mask M on the tokens of the source of shape (B, C, ...)
             # such that M[b, ...] = True if and only if the following conditions are met:
@@ -479,6 +491,7 @@ class MultisourceFlowMatchingReconstructor(pl.LightningModule):
     def sample(self, batch, n_realizations_per_sample=1):
         """Samples the model using multiple steps of the ODE solver. All sources
         that have an availability flag set to 0 or -1 are solved.
+        If the model is deterministic, simply masks the sources and applies a forward pass.
         Args:
             batch (dict of str to dict of str to tensor): The input batch, preprocessed.
             n_realizations_per_sample (int): Number Np of realizations to sample for each
@@ -500,39 +513,46 @@ class MultisourceFlowMatchingReconstructor(pl.LightningModule):
             for _ in range(n_realizations_per_sample):
                 # Mask the sources with pure noise
                 masked_batch, path_samples = self.mask(batch, pure_noise=True, masking_seed=seed)
-                x_0 = {
-                    source: data["values"] for source, data in masked_batch.items()
-                }  # pure noise
 
-                def vf_func(x_t, t):
-                    """Function that computes the velocity fields of each source
-                    included in x."""
-                    # Don't modify masked_x in-place
-                    batch_t = {
-                        source: {k: v for k, v in data.items()}
-                        for source, data in masked_batch.items()
-                    }
-                    # Update the values and diffusion timesteps of the sources that are solved.
-                    for source, x_ts in x_t.items():
-                        is_solved = batch_t[source]["avail"] == 0
-                        batch_t[source]["values"][is_solved] = x_ts[is_solved]
-                        batch_t[source]["diffusion_t"][is_solved] = t
-                    # Run the model
-                    vf = self.forward(batch_t)
-                    # Where the sources are not being solved, we'll set the velocity field to zero,
-                    # so that those examples don't change in the solution.
-                    for source in vf:
-                        vf[source][batch_t[source]["avail"] != 0] = 0
-                    return vf
+                if self.deterministic:
+                    # If the model is deterministic, simply apply a forward pass
+                    pred = self.forward(masked_batch)
+                    all_sols.append(pred)
+                    time_grid = torch.tensor([1])
+                else:
+                    x_0 = {
+                        source: data["values"] for source, data in masked_batch.items()
+                    }  # pure noise
 
-                # Solve the ODE
-                time_grid = torch.linspace(0, 1, self.n_sampling_diffusion_steps)
-                solver = MultisourceEulerODESolver(vf_func)
-                sol = solver.solve(x_0, time_grid)  # Dict of tensors of shape (B, C, ...)
-                all_sols.append(sol)
+                    def vf_func(x_t, t):
+                        """Function that computes the velocity fields of each source
+                        included in x."""
+                        # Don't modify masked_x in-place
+                        batch_t = {
+                            source: {k: v for k, v in data.items()}
+                            for source, data in masked_batch.items()
+                        }
+                        # Update the values and diffusion timesteps of the sources that are solved.
+                        for source, x_ts in x_t.items():
+                            is_solved = batch_t[source]["avail"] == 0
+                            batch_t[source]["values"][is_solved] = x_ts[is_solved]
+                            batch_t[source]["diffusion_t"][is_solved] = t
+                        # Run the model
+                        vf = self.forward(batch_t)
+                        # Where the sources are not being solved, we'll set the velocity field to zero,
+                        # so that those examples don't change in the solution.
+                        for source in vf:
+                            vf[source][batch_t[source]["avail"] != 0] = 0
+                        return vf
+
+                    # Solve the ODE
+                    time_grid = torch.linspace(0, 1, self.n_sampling_diffusion_steps)
+                    solver = MultisourceEulerODESolver(vf_func)
+                    sol = solver.solve(x_0, time_grid)  # Dict of tensors of shape (B, C, ...)
+                    all_sols.append(sol)
 
             avail_flags = {source: data["avail"] for source, data in masked_batch.items()}
-            all_sols = {source: torch.stack([sol[source] for sol in all_sols]) for source in sol}
+            all_sols = {source: torch.stack([sol[source] for sol in all_sols]) for source in batch}
             return avail_flags, time_grid, all_sols
 
     def training_step(self, batch, batch_idx):
@@ -545,7 +565,8 @@ class MultisourceFlowMatchingReconstructor(pl.LightningModule):
             # For every 10 batches, make multiple realizations of the solution
             # for each sample in the batch and display them.
             if batch_idx % 10 == 0:
-                avail_flags, time_grid, sol = self.sample(batch, n_realizations_per_sample=5)
+                n_real = 2 if self.deterministic else 5
+                avail_flags, time_grid, sol = self.sample(batch, n_realizations_per_sample=n_real)
                 display_realizations(
                     sol, batch, avail_flags, self.validation_dir / f"realizations_{batch_idx}"
                 )
@@ -566,7 +587,6 @@ class MultisourceFlowMatchingReconstructor(pl.LightningModule):
                     on_step=False,
                     sync_dist=True,
                 )
-            # Display the solutio
         return self.mask_and_loss_step(batch, batch_idx, "val")
 
     def predict_step(self, batch, batch_idx):
