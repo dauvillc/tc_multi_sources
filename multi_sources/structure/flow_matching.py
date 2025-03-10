@@ -409,6 +409,7 @@ class MultisourceFlowMatchingReconstructor(pl.LightningModule):
             prog_bar=True,
             on_epoch=True,
             on_step=True,
+            sync_dist=True,
             batch_size=batch_size,
         )
         return loss
@@ -556,13 +557,6 @@ class MultisourceFlowMatchingReconstructor(pl.LightningModule):
             # Evaluate the metrics
             for metric_name, metric in self.metrics.items():
                 metric_res = metric(sol, batch, avail_flags)
-                for source, res in metric_res.items():
-                    self.log(
-                        f"val_{metric_name}_{source}",
-                        res,
-                        on_epoch=True,
-                        on_step=False,
-                    )
                 # Compute the average metric over all sources
                 avg_res = torch.stack(list(metric_res.values())).mean()
                 self.log(
@@ -570,6 +564,7 @@ class MultisourceFlowMatchingReconstructor(pl.LightningModule):
                     avg_res,
                     on_epoch=True,
                     on_step=False,
+                    sync_dist=True,
                 )
             # Display the solutio
         return self.mask_and_loss_step(batch, batch_idx, "val")
