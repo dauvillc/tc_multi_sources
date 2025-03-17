@@ -60,7 +60,7 @@ class ValuesCoordinatesTransformerBlock(nn.Module):
 
         # MLPs with residual connection too.
         V = self.values_mlp(V) + V
-        C = self.coords_mlp(C) + V
+        C = self.coords_mlp(C) + C
 
         return V, C
 
