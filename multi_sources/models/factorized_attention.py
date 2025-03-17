@@ -53,8 +53,10 @@ class MultisourcesAnchoredCrossAttention(nn.Module):
         """
         Args:
             inputs (dict of str: dict of str: tensor): Dictionary of inputs, such that
-                inputs[source_name] contains the keys "embedded_coords", "embedded_values", and
-                "tokens_shape".
+                inputs[source_name] contains the keys "embedded_coords", "embedded_values".
+                The values are expected of shape (B, ..., Dv) and the coordinates of shape
+                (B, ..., Dc), where ... is the spatial dimensions of the embedded source,
+                e.g. (h, w) for 2D sources.
 
         Returns:
             dict of str: tensor: Dictionary of outputs, such that
@@ -68,51 +70,69 @@ class MultisourcesAnchoredCrossAttention(nn.Module):
         anchor_values, anchor_coords, anchor_masks = {}, {}, {}
         anchor_indices, n_anchors_list = {}, []
         for source_name, source_inputs in inputs.items():
-            _, n = source_inputs["embedded_values"].shape[:2]
+            V, C = source_inputs["embedded_values"], source_inputs["embedded_coords"]
+            spatial_dims = V.shape[1:-1]
+            B, Dv, Dc = V.shape[0], V.shape[-1], C.shape[-1]
+
             # For 1D sources, simply select the anchor points at regular intervals. 0D sources
             # are just 1D sources of length 1, so we can handle them here as well.
-            if len(source_inputs["tokens_shape"]) <= 1:
+            if len(spatial_dims) == 1:
+                n = spatial_dims[0]  # Number of tokens in the sequence
                 n_anchor_points = n // self.anchor_points_spacing
-                indices = torch.linspace(0, n - 1, n_anchor_points).long()
+                indices = torch.linspace(0, n - 1, n_anchor_points).long().to(V.device)
+                anchor_values[source_name] = V[:, indices]
+                anchor_coords[source_name] = C[:, indices]
+                # Save the indices for later
+                anchor_indices[source_name] = indices
+
             # For 2D sources, we want to select the anchor points in a grid pattern.
-            if len(source_inputs["tokens_shape"]) == 2:
-                h, w = source_inputs["tokens_shape"]
+            elif len(spatial_dims) == 2:
+                h, w = spatial_dims
                 anchor_cols = torch.arange(0, w, self.anchor_points_spacing)
                 anchor_cols += ((w - 1) % self.anchor_points_spacing) // 2  # Centering
                 anchor_rows = torch.arange(0, h, self.anchor_points_spacing)
                 anchor_rows += ((h - 1) % self.anchor_points_spacing) // 2
-                # We need to gather the indices of the anchor points in the flattened sequence.
-                indices = torch.cartesian_prod(anchor_rows, anchor_cols)
-                indices = indices[:, 0] * w + indices[:, 1]
-                n_anchor_points = len(indices)
-            indices = indices.to(source_inputs["embedded_values"].device)
 
-            # Select the anchor tokens from the values and coordinates based on the indices
-            anchor_values[source_name] = source_inputs["embedded_values"][:, indices]
-            anchor_coords[source_name] = source_inputs["embedded_coords"][:, indices]
-            # Save the indices and the number of anchor points for later.
-            anchor_indices[source_name] = indices
+                anchor_v_s = V[:, anchor_rows[:, None], anchor_cols]
+                anchor_v_s = rearrange(anchor_v_s, "b h w d -> b (h w) d")
+                anchor_c_s = C[:, anchor_rows[:, None], anchor_cols]
+                anchor_c_s = rearrange(anchor_c_s, "b h w d -> b (h w) d")
+                anchor_values[source_name] = anchor_v_s
+                anchor_coords[source_name] = anchor_c_s
+
+                # Save the indices of the rows and columns for later
+                anchor_indices[source_name] = (anchor_rows, anchor_cols)
+                n_anchor_points = len(anchor_rows) * len(anchor_cols)
+
+            # Save the number of anchor points for later
             n_anchors_list.append(n_anchor_points)
 
         # Concatenate the anchor tokens from all sources
-        anchor_values = torch.cat([anchor_values[source_name] for source_name in inputs], dim=1)
-        anchor_coords = torch.cat([anchor_coords[source_name] for source_name in inputs], dim=1)
+        anchor_values = torch.cat([anchor_values[src] for src in inputs], dim=1)
+        anchor_coords = torch.cat([anchor_coords[src] for src in inputs], dim=1)
         # Compute the attention across the anchor tokens
         anchor_values = self.attention(anchor_values, anchor_coords)
         # Split back the sequence of anchor tokens to the sources
         anchor_values = torch.split(anchor_values, n_anchors_list, dim=1)
+
         # Split the updated anchor tokens back to the sources and sum them to the original tokens
         outputs = {}
         for i, (source_name, source_inputs) in enumerate(inputs.items()):
-            indices = anchor_indices[source_name]
-            bs, _, values_dim = source_inputs["embedded_values"].shape
-            outputs[source_name] = torch.scatter(
-                source_inputs["embedded_values"],
-                1,
-                indices.view(1, -1, 1).expand(bs, -1, values_dim),
-                anchor_values[i] + source_inputs["embedded_values"][:, indices],
-            )
+            V = source_inputs["embedded_values"].clone()
+            spatial_dims = V.shape[1:-1]
 
+            if len(spatial_dims) == 1:
+                indices = anchor_indices[source_name]
+                anchor_values_i = anchor_values[i]
+                V[:, indices] += anchor_values_i
+
+            elif len(spatial_dims) == 2:
+                anchor_rows, anchor_cols = anchor_indices[source_name]
+                anchor_v_s = anchor_values[i]
+                anchor_v_s = rearrange(anchor_v_s, "b (h w) d -> b h w d", h=len(anchor_rows))
+                V[:, anchor_rows[:, None], anchor_cols] += anchor_v_s
+
+            outputs[source_name] = V
         return outputs
 
 
@@ -183,8 +203,7 @@ class SeparateWindowedValuesCoordinatesAttention(nn.Module):
         """
         Args:
             x (dict of str: dict of str: tensor): Dictionary of inputs, such that
-                x[source_name] contains the keys "embedded_coords" and "embedded_values",
-                "tokens_shape".
+                x[source_name] contains the keys "embedded_coords" and "embedded_values".
 
         Returns:
             dict of str: tensor: Dictionary of outputs, such that
@@ -192,17 +211,18 @@ class SeparateWindowedValuesCoordinatesAttention(nn.Module):
         """
         outputs = {}
         for source_name, source_inputs in x.items():
-            # If the source isn't 2D, skip the spatial attention
-            if len(source_inputs["tokens_shape"]) != 2:
+            spatial_dims = source_inputs["embedded_values"].shape[1:-1]
+            # If the source is 0D or 1D, do nothing
+            if len(spatial_dims) < 2:
                 outputs[source_name] = source_inputs["embedded_values"]
                 continue
-            # Apply the linear transformations to the values and coordinates
+            h, w = spatial_dims
+            # Project the values to queries, keys and values
             v = self.values_qkv(source_inputs["embedded_values"])
+            v = rearrange(v, "b h w (d k) -> b h w d k", k=3)
+            # Project the coordinates to queries and keys
             c = self.coords_qk(source_inputs["embedded_coords"])
-            # Reshape to the original spatial layout of the tokens
-            h, w = source_inputs["tokens_shape"]
-            v = rearrange(v, "b (h w) (d k) -> b h w d k", h=h, w=w, k=3)
-            c = rearrange(c, "b (h w) (d k) -> b h w d k", h=h, w=w, k=2)
+            c = rearrange(c, "b h w (d k) -> b h w d k", k=2)
             # --> k=3 for queries, keys and values (no values for the coordinates)
             # Pad the values and coordinates so that h and w are multiples of the window size
             pad_h = (self.window_size - h % self.window_size) % self.window_size
@@ -271,8 +291,6 @@ class SeparateWindowedValuesCoordinatesAttention(nn.Module):
             )
             # Remove the padding
             y = y[:, :h, :w, :]
-            # Reshape back to the original sequence layout
-            y = rearrange(y, "b h w d -> b (h w) d")
             outputs[source_name] = self.output_proj(y)  # Back to values_dim
         return outputs
 

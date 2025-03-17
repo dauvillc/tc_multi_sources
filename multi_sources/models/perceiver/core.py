@@ -50,7 +50,14 @@ class MultisourcePerceiver(nn.Module):
         """
         super().__init__()
         self.encoder = MultisourcePerceiverEncoder(
-            values_dim, coords_dim, latent_size, att_inner_ratio, num_heads, dropout
+            values_dim,
+            coords_dim,
+            latent_size,
+            att_inner_ratio,
+            num_heads,
+            mlp_hidden_layers,
+            mlp_inner_ratio,
+            dropout,
         )
         self.transformer = ValuesCoordinatesTransformer(
             values_dim,
@@ -63,15 +70,21 @@ class MultisourcePerceiver(nn.Module):
             dropout,
         )
         self.decoder = MultisourcePerceiverDecoder(
-            values_dim, coords_dim, att_inner_ratio, num_heads, dropout
+            values_dim,
+            coords_dim,
+            att_inner_ratio,
+            num_heads,
+            mlp_hidden_layers,
+            mlp_inner_ratio,
+            dropout,
         )
 
     def forward(self, x):
         """
         Args:
             x (dict of str to dict of str to tensor): Dictionary of inputs, such that
-                x[src] contains at least the entries "embedded_values" and "embedded_coords". 
-        
+                x[src] contains at least the entries "embedded_values" and "embedded_coords".
+
         Returns:
             dict of str to tensor: Dict Y such that Y[src] is the output for source src,
                 of same shape as x[src]["embedded_values"].

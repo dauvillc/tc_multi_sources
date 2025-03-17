@@ -3,6 +3,8 @@
 import torch
 import torch.nn as nn
 
+from multi_sources.models.small_layers import PatchMerging
+
 
 class LinearEmbedding(nn.Module):
     """Embeds a vector using a linear layer."""
@@ -28,20 +30,25 @@ class ConvPatchEmbedding2d(nn.Module):
     a 2D convolutional layer.
     """
 
-    def __init__(self, channels, patch_size, emb_dim, norm=True):
+    def __init__(self, channels, patch_size, emb_dim, norm=True, downsample=True):
         """
         Args:
             channels (int): The number of channels in the image.
             patch_size (int): The size of the patches.
             emb_dim (int): The dimension of the embedding space.
             norm (bool): Whether to apply layer normalization after the embedding.
+            downsample (bool): Whether to downsample the image before embedding.
         """
         super().__init__()
         self.patch_size = patch_size
+
+        emb_dim = emb_dim // 2 if downsample else emb_dim
         self.embedding = nn.Sequential(
             nn.Conv2d(channels, emb_dim, kernel_size=self.patch_size, stride=self.patch_size),
             nn.GELU(),
         )
+        if downsample:
+            self.downsample = PatchMerging(emb_dim)
         if norm:
             self.norm = nn.LayerNorm(emb_dim)
 
@@ -50,7 +57,7 @@ class ConvPatchEmbedding2d(nn.Module):
         Args:
             image (torch.Tensor): A tensor of shape (B, C, H, W) containing the image.
         Returns:
-            embedded_image: torch.Tensor of shape (B, num_patches, emb_dim).
+            embedded_image: torch.Tensor of shape (B, h, w, emb_dim).
         """
         # Compute padding dynamically
         H, W = image.shape[2:]
@@ -60,8 +67,10 @@ class ConvPatchEmbedding2d(nn.Module):
 
         image = pad(image)
         embedded_image = self.embedding(image)  # (B, emb_dim, h, w)
-        # Flatten the spatial dimensions to (B, emb_dim, num_patches) then transpose
-        embedded_image = embedded_image.flatten(2).transpose(1, 2)
+        embedded_image = embedded_image.permute(0, 2, 3, 1)  # (B, h, w, emb_dim)
+
+        if hasattr(self, "downsample"):
+            embedded_image = self.downsample(embedded_image)  # (B, h//2, w//2, emb_dim)
         if hasattr(self, "norm"):
             embedded_image = self.norm(embedded_image)
         return embedded_image
@@ -75,13 +84,15 @@ class CoordinatesEmbedding2d(nn.Module):
     * the land-sea mask tensor has shape (B, H, W).
     * the time delta tensor has shape (B,)
     * Optional: context variables tensor has shape (B, n_context_vars).
-    Patches of the input are separately embedded into tokens of shape (B, emb_dim)
-    and concatenated into a sequence of shape (B, num_patches, emb_dim).
+    Patches of the input are separately embedded into a tensor of shape
+    (B, h, w, emb_dim). 
     The time coordinates are embedded using a linear layer and summed to the
     embedded spatial coordinates.
     """
 
-    def __init__(self, patch_size, emb_dim, n_context_vars=0, use_diffusion_t=True, mlp_ratio=4):
+    def __init__(
+        self, patch_size, emb_dim, n_context_vars=0, use_diffusion_t=True, downsample=True
+    ):
         """
         Args:
             patch_size (int): The size of the patches.
@@ -90,12 +101,15 @@ class CoordinatesEmbedding2d(nn.Module):
                 A value of 0 means that there are no context variables.
             use_diffusion_t (bool): Whether the layer will also receive the diffusion
                 timestep as input.
-            mlp_ratio (int): The ratio of the hidden dimension of the feedforward layer.
+            downsample (bool): Whether to downsample the image before embedding.
         """
         super().__init__()
         self.patch_size = patch_size
         self.emb_dim = emb_dim
-        self.coords_embedding = ConvPatchEmbedding2d(4, patch_size, emb_dim, norm=False)
+
+        self.coords_embedding = ConvPatchEmbedding2d(
+            4, patch_size, emb_dim, norm=False, downsample=downsample
+        )
         self.time_embedding = nn.Linear(1, emb_dim)
         self.use_diffusion_t = use_diffusion_t
         if use_diffusion_t:
@@ -115,20 +129,20 @@ class CoordinatesEmbedding2d(nn.Module):
                 context variables for the source type.
             * optional: diffusion_t: A tensor of shape (B,) containing the diffusion timestep.
         Returns:
-            embedded_coords: torch.Tensor of shape (B, num_patches, emb_dim).
+            embedded_coords: torch.Tensor of shape (B, h, w, emb_dim).
         """
         coords, landmask, dt = data["coords"], data["landmask"], data["dt"]
         B = coords.size(0)
-        dt = dt.view(B, 1, 1)
+        dt = dt.view(B, 1, 1, 1)
         # Embed the spatial coords with the land-sea mask
-        coords = torch.cat([coords, landmask.unsqueeze(1)], dim=1)
-        embedded_coords = self.coords_embedding(coords)
+        coords = torch.cat([coords, landmask.unsqueeze(1)], dim=1)  # (B, 4, H, W)
+        embedded_coords = self.coords_embedding(coords)  # (B, h, w, emb_dim)
         # Add the time embedding
         embedded_dt = self.time_embedding(dt)
         embedded_coords += embedded_dt
         # (Optional) Add the diffusion timestep embedding
         if self.use_diffusion_t:
-            diffusion_t = data["diffusion_t"].view(B, 1, 1)
+            diffusion_t = data["diffusion_t"].view(B, 1, 1, 1)
             embedded_diffusion_t = self.diffusion_t_embedding(diffusion_t)
             embedded_coords += embedded_diffusion_t
 
@@ -145,8 +159,8 @@ class SourcetypeEmbedding2d(nn.Module):
     """A module that embeds 2d sources from a common source type into a sequence of patches.
     Made for 2D sources, which means that the pixels tensor has shape (B, C, H, W).
     An additional channel containing the availability mask is added to the source.
-    Patches of the input are separately embedded into tokens of shape (B, emb_dim)
-    and concatenated into a sequence of shape (B, num_patches, emb_dim).
+    Patches of the input are separately embedded into a tensor of shape
+    (B, h, w, emb_dim).
 
     A source type is a set of sources that supposedly contain the same information
     but from different sources that may have different characteristics. For example,
@@ -155,7 +169,7 @@ class SourcetypeEmbedding2d(nn.Module):
     All sources in a given type must have the same channels, in the same order.
     """
 
-    def __init__(self, channels, patch_size, values_dim, use_diffusion_t=True):
+    def __init__(self, channels, patch_size, values_dim, use_diffusion_t=True, downsample=True):
         """Args:
         channels (int): The number of channels in the source, not counting
             the availability mask.
@@ -163,6 +177,7 @@ class SourcetypeEmbedding2d(nn.Module):
         values_dim (int): The dimension of the embedding space for the values.
         use_diffusion_t (bool): Whether the layer will also receive the diffusion
             timestep as input.
+        downsample (bool): Whether to downsample the image before embedding.
         """
         super().__init__()
         self.patch_size = patch_size
@@ -172,7 +187,7 @@ class SourcetypeEmbedding2d(nn.Module):
             channels += 1  # Add an additional channel for the diffusion timestep
         # Values embedding: embeds the pixels using a strided convolution
         self.values_embedding = ConvPatchEmbedding2d(
-            channels, patch_size, values_dim, norm=False
+            channels, patch_size, values_dim, norm=False, downsample=downsample
         )
         self.norm = nn.LayerNorm(values_dim)
 
@@ -186,7 +201,7 @@ class SourcetypeEmbedding2d(nn.Module):
                     * 'diffusion_t': torch.Tensor of shape (B,) containing the diffusion
                         timestep.
         Returns:
-            embedded_values: torch.Tensor of shape (B, num_patches, values_dim).
+            embedded_values: torch.Tensor of shape (B, h, w, values_dim).
         """
         # Disable cudNN here if the patch size is superior to 4,
         # as it raises an error for large patch sizes.
@@ -194,7 +209,7 @@ class SourcetypeEmbedding2d(nn.Module):
             # Add the availability mask as an additional channel
             values = data["values"]
             avail_mask = data["avail_mask"].unsqueeze(1)
-            values = torch.cat([values, avail_mask], dim=1)
+            values = torch.cat([values, avail_mask], dim=1)  # (B, C+1, H, W)
             if self.use_diffusion_t:
                 diffusion_t = data["diffusion_t"].view(-1, 1, 1, 1)
                 diffusion_t = diffusion_t.expand(-1, 1, values.size(2), values.size(3))

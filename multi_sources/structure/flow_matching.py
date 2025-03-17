@@ -38,8 +38,9 @@ class MultisourceFlowMatchingReconstructor(pl.LightningModule):
     some of the sources and trains its backbone to reconstruct the missing data.
     The sources may have different dimensionalities (e.g. 2D, 1D, 0D) and come with
     spatiotemporal coordinates.
-    The structure expects its input as a dict {source_name: map}, where each map contains the
+    The structure expects its input as a dict D {source_name: map}, where D[source] contains the
     following key-value pairs (all shapes excluding the batch dimension):
+    - "id" is a list of strings of length (B,) each uniquely identifying the elements.
     - "avail" is a scalar tensor of shape (B,) containing 1 if the element is available
         and -1 otherwise.
     - "values" is a tensor of shape (B, C, ...) containing the values of the source.
@@ -49,6 +50,10 @@ class MultisourceFlowMatchingReconstructor(pl.LightningModule):
         and the element's time, normalized by dt_max.
     - "dist_to_center" is a tensor of shape (B, ...) containing the distance
         to the center of the storm at each pixel, in km.
+
+    Besides the sources, D['id'] is a list of strings of length (B,) uniquely identifying the
+    samples.
+
     The structure outputs a dict {source_name: tensor} containing the predicted values for each source.
     """
 
@@ -66,8 +71,11 @@ class MultisourceFlowMatchingReconstructor(pl.LightningModule):
         deterministic=False,
         n_sampling_diffusion_steps=25,
         loss_max_distance_from_center=None,
+        ignore_land_pixels_in_loss=False,
         normalize_coords_across_sources=False,
+        downsample=True,
         validation_dir=None,
+        save_predictions_dir=None,
         metrics={},
     ):
         """
@@ -89,18 +97,29 @@ class MultisourceFlowMatchingReconstructor(pl.LightningModule):
             loss_max_distance_from_center (int or None): If specified, only pixels within this
                 distance from the center of the storm (in km) will be considered
                 in the loss computation.
+            ignore_land_pixels_in_loss (bool): If True, the pixels that are on land
+                will be ignored in the loss computation.
             normalize_coords_across_sources (bool): If True, the coordinates of each source
                 will be normalized across all sources in the batch so that the minimum
                 latitude and longitude in each example is 0 and maximum is 1.
                 If False, the coordinates will be normalized as sinusoïds.
+            downsample (bool): If True, the output will be downsampled by a factor of 2
+                before being fed to the backbone.
             validation_dir (optional, str or Path): Directory where to save the validation plots.
                 If None, no plots will be saved.
+            save_predictions_dir (optional, str or Path): Directory where to save the predictions
+                of the model. If None, no predictions will be saved.
+                If specified, deterministic must be set to True.
             metrics (dict of str: callable): Metrics to compute during training and validation.
                 A metric should have the signature metric(y_pred, batch, avail_flags, **kwargs)
                 and return a dict {source: tensor of shape (batch_size,)}.
             **kwargs: Additional arguments to pass to the LightningModule constructor.
         """
         super().__init__()
+        # Checks
+        if save_predictions_dir is not None and not deterministic:
+            raise ValueError("save_predictions_dir can only be specified if deterministic=True")
+
         self.sources = {source.name: source for source in sources}
         self.source_names = [source.name for source in sources]
         self.backbone = backbone
@@ -108,15 +127,21 @@ class MultisourceFlowMatchingReconstructor(pl.LightningModule):
         self.patch_size = patch_size
         self.values_dim = values_dim
         self.coords_dim = coords_dim
+        self.downsample = downsample
         self.validation_dir = validation_dir
         self.lr_scheduler_kwargs = lr_scheduler_kwargs
 
         self.deterministic = deterministic
+        self.predictions_dir = save_predictions_dir
         self.n_sampling_diffusion_steps = n_sampling_diffusion_steps
         self.loss_max_distance_from_center = loss_max_distance_from_center
+        self.ignore_land_pixels_in_loss = ignore_land_pixels_in_loss
         self.adamw_kwargs = adamw_kwargs
         self.metrics = metrics
         self.normalize_coords_across_sources = normalize_coords_across_sources
+
+        # RNG that will be used to select the sources to mask
+        self.source_select_gen = torch.Generator()
 
         # Save the configuration so that it can be loaded from the checkpoints
         self.cfg = cfg
@@ -145,15 +170,21 @@ class MultisourceFlowMatchingReconstructor(pl.LightningModule):
                         self.patch_size,
                         values_dim,
                         use_diffusion_t=use_diffusion_t,
+                        downsample=downsample,
                     )
                     self.sourcetype_coords_embeddings[source.type] = CoordinatesEmbedding2d(
                         self.patch_size,
                         coords_dim,
                         source.n_charac_variables(),
                         use_diffusion_t=use_diffusion_t,
+                        downsample=downsample,
                     )
                     self.sourcetype_output_projs[source.type] = SourcetypeProjection2d(
-                        self.values_dim, self.coords_dim, n_output_channels, self.patch_size
+                        self.values_dim,
+                        self.coords_dim,
+                        n_output_channels,
+                        self.patch_size,
+                        upsample=downsample,
                     )
                 elif source.dim == 0:
                     self.sourcetype_embeddings[source.type] = SourceSpecificEmbedding0d(
@@ -177,12 +208,15 @@ class MultisourceFlowMatchingReconstructor(pl.LightningModule):
 
         if self.deterministic:
             # [MASK] token that will replace the embeddings of the masked tokens
-            self.mask_token = nn.Parameter(torch.randn(1, 1, self.values_dim))
+            self.mask_token = nn.Parameter(torch.randn(1, self.values_dim))
         else:
             # Flow matching ingredients
             self.fm_path = CondOTProbPath()
 
     def preproc_input(self, x):
+        # Remove the ids from the input
+        sample_ids = x.pop("id")
+
         # Normalize the coordinates across sources to make them relative instead of absolute
         # (i.e the min coord across all sources of a sample is always 0 and the max is 1).
         coords = [source["coords"] for source in x.values()]
@@ -201,7 +235,7 @@ class MultisourceFlowMatchingReconstructor(pl.LightningModule):
             # is a single value for the whole source, which is -1 if the source is missing,
             # and 1 if it's available. The availability mask gives the availability of each
             # point in the source: 1 if the point is available, 0 if it's masked, -1 if missing.
-            am = (~torch.isnan(v)[:, 0]).float() * 2 - 1  # (B, H, W)
+            am = (~torch.isnan(v)[:, 0]).float() * 2 - 1  # (B, ...)
             # Don't modify the tensors in-place, as we need to keep the NaN values
             # for the loss computation
             dt = torch.nan_to_num(data["dt"], nan=-1.0)
@@ -236,10 +270,14 @@ class MultisourceFlowMatchingReconstructor(pl.LightningModule):
                 **embed_input,  # Data needed for embedding
                 **loss_info,  # Additional data needed for loss computation
             }
-        return input_
+        return sample_ids, input_
 
     def embed(self, x):
-        """Embeds the input sources."""
+        """Embeds the input sources. The embedded tensors' shapes depend on the dimensionality
+        of the source:
+        - For 2D sources: (B, h, w, Dv) for the values and (B, h, w, Dc) for the coordinates,
+            where h = H // patch_size and w = W // patch_size.
+        """
         output = {}
         for source, data in x.items():
             # Embed the source's values
@@ -247,23 +285,12 @@ class MultisourceFlowMatchingReconstructor(pl.LightningModule):
             v = self.sourcetype_embeddings[source_type](data)
             # Embed the source's coordinates
             c = self.sourcetype_coords_embeddings[source_type](data)
-            # Save the layout of the tokens for the output projection. For example
-            # a tokens_shape of (3, 2) means 3 tokens in the first dimension and 2 in the second.
-            # That info is lost in the embedded sequences as they are flattened.
-            if len(data["values"].shape) > 2:
-                tokens_shape = tuple(
-                    int(np.ceil(s / self.patch_size)) for s in data["values"].shape[2:]
-                )
-            else:
-                # For 0D sources, the tokens shape is (1,)
-                tokens_shape = (1,)
 
             if self.deterministic:
                 # Replace the tokens that were masked with a [MASK] token
-                v[data["avail"] == 0] = self.mask_token
+                v[data["avail"] == 0] = self.mask_token.view((1,) * (v.dim() - 1) + (-1,))
 
             output[source] = {
-                "tokens_shape": tokens_shape,
                 "embedded_values": v,
                 "embedded_coords": c,
             }
@@ -301,14 +328,15 @@ class MultisourceFlowMatchingReconstructor(pl.LightningModule):
         device = any_elem.device
 
         if target_source is None:
-            generator = torch.Generator(device=device)
             if masking_seed is not None:
-                generator.manual_seed(int(masking_seed))
+                self.source_select_gen.manual_seed(int(masking_seed))
             # Select the sources to mask, which can differ between samples in the batch.
             # Missing sources cannot be masked.
             # Strategy: we'll generate a random noise tensor of shape (B, n_sources)
             # and for each row, mask the sources with the highest noise.
-            noise = torch.rand((batch_size, n_sources), device=device, generator=generator)
+            noise = torch.rand((batch_size, n_sources), generator=self.source_select_gen).to(
+                device
+            )
             for i, (source, data) in enumerate(x.items()):
                 # Multiply the noise by the availability mask (-1 for missing sources, 1 otherwise)
                 noise[:, i] = noise[:, i] * data["avail"].squeeze(-1)
@@ -396,9 +424,7 @@ class MultisourceFlowMatchingReconstructor(pl.LightningModule):
             c = x[source]["embedded_coords"]
             # Project from latent values space to output space using the output layer
             # corresponding to the source type
-            pred[source] = self.sourcetype_output_projs[self.source_to_type[source]](
-                v, c, tokens_shape=x[source]["tokens_shape"]
-            )
+            pred[source] = self.sourcetype_output_projs[self.source_to_type[source]](v, c)
         # For 2D sources, remove the padding
         for source, spatial_shape in spatial_shapes.items():
             pred[source] = pred[source][..., : spatial_shape[0], : spatial_shape[1]]
@@ -478,6 +504,9 @@ class MultisourceFlowMatchingReconstructor(pl.LightningModule):
             if self.loss_max_distance_from_center is not None:
                 dist_mask = true_data["dist_to_center"] <= self.loss_max_distance_from_center
                 loss_mask = loss_mask & dist_mask
+            # Optionally ignore the pixels that are on land
+            if self.ignore_land_pixels_in_loss:
+                loss_mask[true_data["landmask"] > 0] = False
             # Expand the mask to the number of channels in the source
             loss_mask = loss_mask.unsqueeze(1).expand_as(target_s)  # (B, C, ...)
             target_s = target_s[loss_mask]
@@ -556,19 +585,22 @@ class MultisourceFlowMatchingReconstructor(pl.LightningModule):
             return avail_flags, time_grid, all_sols
 
     def training_step(self, batch, batch_idx):
-        batch = self.preproc_input(batch)
+        sample_ids, batch = self.preproc_input(batch)
         return self.mask_and_loss_step(batch, batch_idx, "train")
 
-    def validation_step(self, batch, batch_idx):
-        batch = self.preproc_input(batch)
+    def validation_step(self, input_batch, batch_idx):
+        sample_ids, batch = self.preproc_input(input_batch)
         if self.validation_dir is not None and batch_idx % 5 == 0:
             # For every 10 batches, make multiple realizations of the solution
             # for each sample in the batch and display them.
             if batch_idx % 10 == 0:
-                n_real = 2 if self.deterministic else 5
+                n_real = 1 if self.deterministic else 5
                 avail_flags, time_grid, sol = self.sample(batch, n_realizations_per_sample=n_real)
                 display_realizations(
-                    sol, batch, avail_flags, self.validation_dir / f"realizations_{batch_idx}"
+                    sol,
+                    input_batch,
+                    avail_flags,
+                    self.validation_dir / f"realizations_{batch_idx}",
                 )
             else:
                 # We'll only compute the metrics on one realization of the solution.
@@ -598,6 +630,20 @@ class MultisourceFlowMatchingReconstructor(pl.LightningModule):
         """
         # TODO
         pass
+
+    def save_predictions(self, preds, avail_flags, sample_ids):
+        """Given a set of predictions, saves the one that correspond
+        to masked sources to a tensor file.
+        Args:
+            preds (dict of str to tensor): The predictions for each source.
+            avail_flags (dict of str to tensor): The availability flags for each source.
+            sample_ids (list of str): The sample IDs.
+        """
+        for source, pred in preds.items():
+            for i, (sample_id, p) in enumerate(zip(sample_ids, pred)):
+                if avail_flags[source][i] == 0:
+                    # Save the pred as <sample_id>_<source>.pt
+                    torch.save(p, self.save_predictions_dir / f"{sample_id}_{source}.pt")
 
     def configure_optimizers(self):
         """Configures the optimizer for the model.

@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange
-from multi_sources.models.perceiver.small_layers import RMSNorm
+from multi_sources.models.perceiver.small_layers import RMSNorm, MLP
 
 
 class MultisourcePerceiverEncoder(nn.Module):
@@ -21,6 +21,7 @@ class MultisourcePerceiverEncoder(nn.Module):
     - Compute a single attention map A = Softmax(q_v k_v^T + q_c k_c^T).
     - Update Lv and Lc via Lv = A @ v_v and Lc = A @ v_c.
     - Project the updated latents to the values and coordinates spaces.
+    - Run Lv and Lc through MLPs.
     - Output Lv and Lc.
     """
 
@@ -29,8 +30,10 @@ class MultisourcePerceiverEncoder(nn.Module):
         values_dim,
         coords_dim,
         latent_size,
-        inner_ratio,
+        att_inner_ratio,
         num_heads,
+        mlp_hidden_layers,
+        mlp_inner_ratio,
         dropout=0.0,
         **unused_kwargs
     ):
@@ -39,38 +42,50 @@ class MultisourcePerceiverEncoder(nn.Module):
             values_dim (int): Embedding dimension of the values.
             coords_dim (int): Embedding dimension of the coordinates.
             latent_size (int): Index size of the latent arrays.
-            inner_ratio (float): Ratio of the inner dimension to the values dimension.
+            att_inner_ratio (float): Ratio of the inner dimension to the values dimension
+                in the attention layer.
             num_heads (int): Number of heads in the attention block.
+            mlp_hidden_layers (int): Number of hidden layers in the MLP.
+            mlp_inner_ratio (float): Ratio of the inner dimension to the values dimension
+                in the MLP.
             dropout (float): Dropout rate.
         """
         super().__init__()
         self.values_dim = values_dim
         self.coords_dim = coords_dim
-        self.inner_dim = inner_ratio * values_dim
-        self.head_dim = self.inner_dim // num_heads
+        self.att_inner_dim = att_inner_ratio * values_dim
+        self.head_dim = self.att_inner_dim // num_heads
         self.num_heads = num_heads
 
         self.latent_values = nn.Parameter(torch.randn(1, latent_size, values_dim))
         self.latent_coords = nn.Parameter(torch.randn(1, latent_size, coords_dim))
 
         self.values_q = nn.Sequential(
-            nn.Linear(values_dim, self.inner_dim), RMSNorm(self.inner_dim)
+            nn.Linear(values_dim, self.att_inner_dim), RMSNorm(self.att_inner_dim)
         )
         self.coords_q = nn.Sequential(
-            nn.Linear(coords_dim, self.inner_dim), RMSNorm(self.inner_dim)
+            nn.Linear(coords_dim, self.att_inner_dim), RMSNorm(self.att_inner_dim)
         )
         self.values_kv = nn.Sequential(
-            nn.Linear(values_dim, self.inner_dim * 2), RMSNorm(self.inner_dim * 2)
+            nn.Linear(values_dim, self.att_inner_dim * 2), RMSNorm(self.att_inner_dim * 2)
         )
         self.coords_kv = nn.Sequential(
-            nn.Linear(coords_dim, self.inner_dim * 2), RMSNorm(self.inner_dim * 2)
+            nn.Linear(coords_dim, self.att_inner_dim * 2), RMSNorm(self.att_inner_dim * 2)
         )
         self.output_proj_v = nn.Sequential(
-            nn.Linear(self.inner_dim, values_dim), nn.Dropout(dropout)
+            nn.Linear(self.att_inner_dim, values_dim), nn.Dropout(dropout)
         )
         self.output_proj_c = nn.Sequential(
-            nn.Linear(self.inner_dim, coords_dim), nn.Dropout(dropout)
+            nn.Linear(self.att_inner_dim, coords_dim), nn.Dropout(dropout)
         )
+
+        self.values_mlp = nn.Sequential(
+            nn.LayerNorm(values_dim), MLP(values_dim, mlp_hidden_layers, mlp_inner_ratio)
+        )
+        self.coords_mlp = nn.Sequential(
+            nn.LayerNorm(coords_dim), MLP(coords_dim, mlp_hidden_layers, mlp_inner_ratio)
+        )
+
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
@@ -84,13 +99,16 @@ class MultisourcePerceiverEncoder(nn.Module):
             Lv (tensor): Updated latent array for the values.
             Lc (tensor): Updated latent array for the coordinates.
         """
+        B = next(iter(x.values()))["embedded_coords"].shape[0]  # Batch size
+        Dv, Dc = self.values_dim, self.coords_dim
+
         # Project the latents to queries.
         q_v = self.values_q(self.latent_values)
         q_c = self.coords_q(self.latent_coords)
 
         # Concatenate the values and coords sequences of all sources.
-        V = torch.cat([x[src]["embedded_values"] for src in x], dim=1)
-        C = torch.cat([x[src]["embedded_coords"] for src in x], dim=1)
+        V = torch.cat([x[src]["embedded_values"].view(B, -1, Dv) for src in x], dim=1)
+        C = torch.cat([x[src]["embedded_coords"].view(B, -1, Dc) for src in x], dim=1)
 
         # Project the values and coordinates to keys and values.
         kv, vv = self.values_kv(V).chunk(2, dim=-1)
@@ -120,12 +138,16 @@ class MultisourcePerceiverEncoder(nn.Module):
         Lc = rearrange(Lc, "b h n d -> b n (h d)")
         Lc = self.output_proj_c(Lc)
 
+        # Apply the MLPs with residual connections.
+        Lv = self.values_mlp(Lv) + Lv
+        Lc = self.coords_mlp(Lc) + Lc
+
         return Lv, Lc
 
 
 class MultisourcePerceiverDecoder(nn.Module):
     """Implements the decoding part of the Perceiver model (Jaegle et al., 2022) for
-    multiple sources. Each source s includes a sequence of coordinates Cs.
+    multiple sources. Each source s includes a sequence of values Vs and coordinates Cs.
     The decoder receives the latent arrays Lv and Lc, and the coordinates
     sequences of all sources. It performs the following steps during the forward pass:
     - Project Lv to values v_v.
@@ -133,41 +155,59 @@ class MultisourcePerceiverDecoder(nn.Module):
     - For each source s:
         - Project Cs to queries q_c.
         - Compute the attention map A = Softmax(q_c k_c^T).
-        - Compute the output values Vs = A @ v_v.
-        - Project Vs to the original values space.
+        - Compute the output values Vs_out = A @ v_v
+        - Project Vs_out to the original values space.
+        - Let Vs_out = Vs_out + Vs.
+        - Run Vs_out through an (LayerNorm, MLP) with residual connection.
     - Output the values sequences Vs.
     """
 
     def __init__(
-        self, values_dim, coords_dim, inner_ratio, num_heads, dropout=0.0, **unused_kwargs
+        self,
+        values_dim,
+        coords_dim,
+        att_inner_ratio,
+        num_heads,
+        mlp_hidden_layers,
+        mlp_inner_ratio,
+        dropout=0.0,
+        **unused_kwargs
     ):
         """
         Args:
             values_dim (int): Embedding dimension of the values.
             coords_dim (int): Embedding dimension of the coordinates.
-            inner_ratio (float): Ratio of the inner dimension to the values dimension.
+            att_inner_ratio (float): Ratio of the inner dimension to the values dimension.
             num_heads (int): Number of heads in the attention block.
+            mlp_hidden_layers (int): Number of hidden layers in the MLP.
+            mlp_inner_ratio (float): Ratio of the inner dimension to the values dimension
+                in the MLP.
             dropout (float): Dropout rate.
         """
         super().__init__()
         self.values_dim = values_dim
         self.coords_dim = coords_dim
-        self.inner_dim = inner_ratio * values_dim
-        self.head_dim = self.inner_dim // num_heads
+        self.att_inner_dim = att_inner_ratio * values_dim
+        self.head_dim = self.att_inner_dim // num_heads
         self.num_heads = num_heads
 
         self.coords_k = nn.Sequential(
-            nn.Linear(coords_dim, self.inner_dim), RMSNorm(self.inner_dim)
+            nn.Linear(coords_dim, self.att_inner_dim), RMSNorm(self.att_inner_dim)
         )
         self.coords_q = nn.Sequential(
-            nn.Linear(coords_dim, self.inner_dim), RMSNorm(self.inner_dim)
+            nn.Linear(coords_dim, self.att_inner_dim), RMSNorm(self.att_inner_dim)
         )
         self.values_v = nn.Sequential(
-            nn.Linear(values_dim, self.inner_dim), RMSNorm(self.inner_dim)
+            nn.Linear(values_dim, self.att_inner_dim), RMSNorm(self.att_inner_dim)
         )
         self.output_proj = nn.Sequential(
-            nn.Linear(self.inner_dim, values_dim), nn.Dropout(dropout)
+            nn.Linear(self.att_inner_dim, values_dim), nn.Dropout(dropout)
         )
+
+        self.output_mlp = nn.Sequential(
+            nn.LayerNorm(values_dim), MLP(values_dim, mlp_hidden_layers, mlp_inner_ratio)
+        )
+
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x, Lv, Lc):
@@ -175,6 +215,8 @@ class MultisourcePerceiverDecoder(nn.Module):
         Args:
             x (dict of str to tensor): Dictionary of inputs for each source, such
                 that x[src] contains at least the entry "embedded_coords".
+                The values are expected to have shape (B, ..., Dv) where ... are the
+                spatial dimensions, e.g. (B, h, w, Dv) for 2D sources.
             Lv (tensor): Latent array for the values.
             Lc (tensor): Latent array for the coordinates.
 
@@ -190,9 +232,12 @@ class MultisourcePerceiverDecoder(nn.Module):
         outputs = {}
         for src in x:
             C = x[src]["embedded_coords"]
-            q_c = self.coords_q(C)
+            V = x[src]["embedded_values"]
+            spatial_shape = C.shape[1:-1]  # e.g. (h, w) for 2D sources
             
-            # Reshape to use parallel heads.
+            # Flatten the spatial dimensions of the coordinates and project them to queries.
+            C = rearrange(C, "b ... d -> b (...) d")
+            q_c = self.coords_q(C)
             q_c = rearrange(q_c, "b n (h d) -> b h n d", h=self.num_heads)
 
             # Compute the attention map.
@@ -202,9 +247,16 @@ class MultisourcePerceiverDecoder(nn.Module):
             attn_map = self.dropout(attn_map)
 
             # Compute the output values.
-            Vs = attn_map @ v_v
-            Vs = rearrange(Vs, "b h n d -> b n (h d)")
-            Vs = self.output_proj(Vs)
-            outputs[src] = Vs
+            V_out = attn_map @ v_v
+            V_out = rearrange(V_out, "b h n d -> b n (h d)")
+            V_out = self.output_proj(V_out)
+            
+            # Reshape the values to their original dimensionality.
+            V_out = V_out.view(V.shape[0], *spatial_shape, self.values_dim)
+
+            # Apply the MLP with residual connection.
+            V_out = self.output_mlp(V_out) + V
+
+            outputs[src] = V_out
 
         return outputs

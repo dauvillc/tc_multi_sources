@@ -6,13 +6,7 @@ from .utils import pair
 
 class FeedForward(nn.Module):
     def __init__(
-        self,
-        values_dim,
-        coords_dim,
-        dropout=0.0,
-        act_layer=nn.GELU,
-        inner_ratio=4,
-        **kwargs
+        self, values_dim, coords_dim, dropout=0.0, act_layer=nn.GELU, inner_ratio=4, **kwargs
     ):
         super().__init__()
         inner_dim = values_dim * inner_ratio
@@ -134,7 +128,40 @@ class RMSNorm(nn.Module):
         """
         # computation is in fp32
         x_fp32 = x.float()
-        x_normed = (
-            x_fp32 * torch.rsqrt(x_fp32.pow(2).mean(-1, keepdim=True) + self.eps)
-        ).type_as(x)
+        x_normed = (x_fp32 * torch.rsqrt(x_fp32.pow(2).mean(-1, keepdim=True) + self.eps)).type_as(
+            x
+        )
         return x_normed * self.scale
+
+
+class PatchMerging(nn.Module):
+    """Implements the patch merging of Swin Transformer."""
+
+    def __init__(self, input_dim):
+        super().__init__()
+        self.norm = nn.LayerNorm(4 * input_dim)
+        self.reduction = nn.Linear(4 * input_dim, 2 * input_dim, bias=False)
+
+    def forward(self, x):
+        """
+        Args:
+            x (torch.Tensor): Input tensor of shape (B, H, W, C).
+        Returns:
+            torch.Tensor: Output tensor of shape (B, H//2, W//2, C*2).
+        """
+        # Pad the input tensor to have spatial dims divisible by 2
+        B, H, W, C = x.shape
+        if H % 2 != 0 or W % 2 != 0:
+            x = F.pad(x, (0, 0, 0, W % 2, 0, H % 2), mode="constant", value=0)
+
+        # Stack the corners of each 4x4 patch
+        x0 = x[:, 0::2, 0::2, :]
+        x1 = x[:, 1::2, 0::2, :]
+        x2 = x[:, 0::2, 1::2, :]
+        x3 = x[:, 1::2, 1::2, :]
+        x = torch.cat([x0, x1, x2, x3], dim=-1)  # (B, H//2, W//2, 4*C)
+
+        # Reduce the dimensionality and normalize
+        x = self.norm(x)
+        x = self.reduction(x)
+        return x

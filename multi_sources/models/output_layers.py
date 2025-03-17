@@ -1,6 +1,7 @@
 """Implements layers to project the output of a ViT in latent space to the output space."""
 
-import torch.nn as nn
+import torch.nn.functional as F
+from torch import nn
 from multi_sources.models.icnr import ICNR
 from multi_sources.models.conv import ResNet
 from einops.layers.torch import Rearrange
@@ -11,16 +12,19 @@ class SourcetypeProjection2d(nn.Module):
     that source's original space. Meant to be shared across all sources of the same type.
     """
 
-    def __init__(self, values_dim, coords_dim, out_channels, patch_size):
+    def __init__(self, values_dim, coords_dim, out_channels, patch_size, upsample=True):
         """
         Args:
             values_dim (int): Dimension of the values embeddings.
             coords_dim (int): Dimension of the coordinates embeddings.
             out_channels (int): Number of channels in the output space.
             patch_size (int): Size of the embedding patches.
+            upsample (bool, optional): Whether to upsample the output by a factor of 2.
         """
         super().__init__()
         self.patch_size = patch_size
+        self.upsample = upsample
+
         self.norm = nn.LayerNorm(values_dim)
         self.modulation = nn.Sequential(nn.SiLU(), nn.Linear(coords_dim, 2 * values_dim))
         # Subpixel convolution to project the latent space to the output space
@@ -33,6 +37,7 @@ class SourcetypeProjection2d(nn.Module):
             bias=False,
         )
         self.pixel_shuffle = nn.PixelShuffle(patch_size)
+
         # Final ResNet to correct the artifacts
         self.resnet = ResNet(out_channels, 16, 2)
         # Apply the ICNR initialization to the deconvolution, to reduce checkerboard artifacts
@@ -41,25 +46,27 @@ class SourcetypeProjection2d(nn.Module):
         )
         self.conv.weight.data.copy_(weight)
 
-    def forward(self, values, coords, tokens_shape, **unused_kwargs):
+    def forward(self, values, coords, **unused_kwargs):
         """
         Args:
-            values (torch.Tensor): Embedded values of shape (B, L, D).
-            coords (torch.Tensor): Embedded coordinates of shape (B, L, D).
-            tokens_shape (tuple of int): Shape for rearranging tokens, (width, height).
+            values (torch.Tensor): Embedded values of shape (B, h, w, Dv).
+            coords (torch.Tensor): Embedded coordinates of shape (B, h, w, Dc).
         Returns:
             torch.Tensor of shape (B, channels, H, W) containing the projected output.
         """
         # Apply the modulation to the values embeddings
         shift, scale = self.modulation(coords).chunk(2, dim=-1)
         v = (1 + scale) * self.norm(values) + shift
-        # Transpose x from (B, L, D) to (B, D, w, h)
-        v = v.transpose(1, 2).view(v.size(0), -1, *tokens_shape)
+        # Transpose x from (B, h, w, Dv) to (B, Dv, h, w)
+        v = v.permute(0, 3, 1, 2)
         # Deconvolve the latent space using subpixel convolutions
         v = self.conv(v)
         v = self.pixel_shuffle(v)  # (B, C, H, W)
-        if hasattr(self, "rearrange"):
-            v = self.rearrange(v)
+
+        if self.upsample:
+            # Upsample the output using bilinear interpolation
+            v = F.interpolate(v, scale_factor=2, mode="bilinear", align_corners=False)
+
         # Correct the artifacts with a ResNet
         v = self.resnet(v)
         return v

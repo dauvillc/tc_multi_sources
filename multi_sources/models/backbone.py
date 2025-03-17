@@ -71,6 +71,9 @@ class MultisourceGeneralBackbone(nn.Module):
             for layer in block:
                 # Apply the layer and update the values
                 layer_otp = layer(x)
+                # Check that all sources are present in the output
+                assert set(x.keys()) == set(layer_otp.keys())
+                # Update the values
                 for source_name, source_output in layer_otp.items():
                     x[source_name]["embedded_values"] = source_output
 
@@ -99,7 +102,7 @@ class AdapativeConditionalNormalization(nn.Module):
         Returns:
             dict of str: tensor: Dictionary of outputs, such that
                 outputs[source_name] contains the predicted values of the tokens,
-                of shape (B, L, D).
+                of shape (B, ..., values_dim).
         """
         skips, gates = {}, {}
         for source_name, source_data in data.items():
