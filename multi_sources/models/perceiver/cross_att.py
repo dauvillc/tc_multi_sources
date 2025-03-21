@@ -103,8 +103,8 @@ class MultisourcePerceiverEncoder(nn.Module):
         Dv, Dc = self.values_dim, self.coords_dim
 
         # Project the latents to queries.
-        q_v = self.values_q(self.latent_values)
-        q_c = self.coords_q(self.latent_coords)
+        qv = self.values_q(self.latent_values)
+        qc = self.coords_q(self.latent_coords)
 
         # Concatenate the values and coords sequences of all sources.
         V = torch.cat([x[src]["embedded_values"].view(B, -1, Dv) for src in x], dim=1)
@@ -115,8 +115,8 @@ class MultisourcePerceiverEncoder(nn.Module):
         kc, vc = self.coords_kv(C).chunk(2, dim=-1)
 
         # Reshape to use parallel heads.
-        qv = rearrange(q_v, "b n (h d) -> b h n d", h=self.num_heads)
-        qc = rearrange(q_c, "b n (h d) -> b h n d", h=self.num_heads)
+        qv = rearrange(qv, "b n (h d) -> b h n d", h=self.num_heads)
+        qc = rearrange(qc, "b n (h d) -> b h n d", h=self.num_heads)
         kv = rearrange(kv, "b n (h d) -> b h n d", h=self.num_heads)
         kc = rearrange(kc, "b n (h d) -> b h n d", h=self.num_heads)
         vv = rearrange(vv, "b n (h d) -> b h n d", h=self.num_heads)
