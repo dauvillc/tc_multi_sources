@@ -8,6 +8,7 @@ from lightning.pytorch.loggers import WandbLogger
 from lightning.pytorch.callbacks import ModelCheckpoint, LearningRateMonitor
 from torch.utils.data import DataLoader
 from omegaconf import DictConfig, OmegaConf
+
 from utils.utils import get_random_code
 from utils.checkpoints import load_experiment_cfg_from_checkpoint
 from multi_sources.data_processing.collate_fn import multi_source_collate_fn
@@ -18,7 +19,7 @@ def main(cfg: DictConfig):
     OmegaConf.register_new_resolver("eval", eval)
     OmegaConf.register_new_resolver("nan", lambda: float("nan"))
     cfg = OmegaConf.to_object(cfg)
-    
+
     resume_run_id = cfg["resume_run_id"] if "resume_run_id" in cfg else None
     # If a run is resuming, the resume_mode must be set to either 'resume' or 'fine_tune'
     if resume_run_id and (
@@ -77,6 +78,8 @@ def main(cfg: DictConfig):
     if resume_run_id:
         # The following snippet loads the weights of the checkpoint into the new
         # lightning module, but allowing new weights that are not in the checkpoint.
+        # It also allows weights that are in the checkpoint but not in the new lightning
+        # module to be ignored.
         # https://discuss.pytorch.org/t/how-to-load-part-of-pre-trained-model/1113/39
         ckpt = torch.load(checkpoint_path, map_location="cpu")
         former_dict = ckpt["state_dict"]
@@ -84,19 +87,20 @@ def main(cfg: DictConfig):
         # output layers of the model. In this case, the output layers are not loaded from
         # the checkpoint.
         if "reset_output_layers" in cfg and cfg["reset_output_layers"]:
-            former_dict = {
-                k: v
-                for k, v in former_dict.items()
-                if "output_proj" not in k
-            }
+            former_dict = {k: v for k, v in former_dict.items() if "output_proj" not in k}
         new_dict = pl_module.state_dict()
         # add to the former dict the weights that were added in the new dict.
         for k, v in new_dict.items():
             if k not in former_dict:
                 former_dict[k] = v
+        # Remove from the former dict the weights that are not in the new dict.
+        for k in list(former_dict.keys()):
+            if k not in new_dict:
+                del former_dict[k]
         # 3. load the former state dict that now contains all the weights.
         pl_module.load_state_dict(former_dict)
 
+    # Callbacks
     # Create the logs directory if it does not exist
     Path(cfg["paths"]["wandb_logs"]).mkdir(parents=True, exist_ok=True)
     # Create the logger
@@ -108,22 +112,26 @@ def main(cfg: DictConfig):
         dir=cfg["paths"]["wandb_logs"],
         save_dir=cfg["paths"]["wandb_logs"],
     )
-    # Model checkpoint
-    checkpoint_callback = ModelCheckpoint(
-        monitor="val_loss",
+
+    # Model checkpoint after every epoch
+    epoch_checkpoint_callback = ModelCheckpoint(
         dirpath=Path(cfg["paths"]["checkpoints"]) / run_id,
-        filename="{epoch:02d}",
-        save_top_k=1,
+        filename=f"{run_id}-" + "{epoch}-best",
+        monitor="val_loss",
         mode="min",
-        every_n_train_steps=2000
+        save_top_k=1,
     )
+    lr_monitor = LearningRateMonitor()
+    callbacks = [epoch_checkpoint_callback, lr_monitor]
+                 
     # Create the trainer
     trainer = pl.Trainer(
         logger=logger,
         log_every_n_steps=5,
-        callbacks=[checkpoint_callback, LearningRateMonitor()],
+        callbacks=callbacks,
         **cfg["trainer"],
     )
+
     # Train the model
     if resume_run_id and cfg["resume_mode"] == "resume":
         trainer.fit(pl_module, train_dataloader, val_dataloader, ckpt_path=checkpoint_path)
