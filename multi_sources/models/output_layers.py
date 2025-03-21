@@ -12,18 +12,18 @@ class SourcetypeProjection2d(nn.Module):
     that source's original space. Meant to be shared across all sources of the same type.
     """
 
-    def __init__(self, values_dim, coords_dim, out_channels, patch_size, upsample=True):
+    def __init__(
+        self, values_dim, coords_dim, out_channels, patch_size, **unused_kwargs
+    ):
         """
         Args:
             values_dim (int): Dimension of the values embeddings.
             coords_dim (int): Dimension of the coordinates embeddings.
             out_channels (int): Number of channels in the output space.
             patch_size (int): Size of the embedding patches.
-            upsample (bool, optional): Whether to upsample the output by a factor of 2.
         """
         super().__init__()
         self.patch_size = patch_size
-        self.upsample = upsample
 
         self.norm = nn.LayerNorm(values_dim)
         self.modulation = nn.Sequential(nn.SiLU(), nn.Linear(coords_dim, 2 * values_dim))
@@ -62,10 +62,6 @@ class SourcetypeProjection2d(nn.Module):
         # Deconvolve the latent space using subpixel convolutions
         v = self.conv(v)
         v = self.pixel_shuffle(v)  # (B, C, H, W)
-
-        if self.upsample:
-            # Upsample the output using bilinear interpolation
-            v = F.interpolate(v, scale_factor=2, mode="bilinear", align_corners=False)
 
         # Correct the artifacts with a ResNet
         v = self.resnet(v)
