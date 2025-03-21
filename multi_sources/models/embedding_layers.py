@@ -3,8 +3,6 @@
 import torch
 import torch.nn as nn
 
-from multi_sources.models.small_layers import PatchMerging
-
 
 class LinearEmbedding(nn.Module):
     """Embeds a vector using a linear layer."""
@@ -30,25 +28,21 @@ class ConvPatchEmbedding2d(nn.Module):
     a 2D convolutional layer.
     """
 
-    def __init__(self, channels, patch_size, emb_dim, norm=True, downsample=True):
+    def __init__(self, channels, patch_size, emb_dim, norm=True):
         """
         Args:
             channels (int): The number of channels in the image.
             patch_size (int): The size of the patches.
             emb_dim (int): The dimension of the embedding space.
             norm (bool): Whether to apply layer normalization after the embedding.
-            downsample (bool): Whether to downsample the image before embedding.
         """
         super().__init__()
         self.patch_size = patch_size
 
-        emb_dim = emb_dim // 2 if downsample else emb_dim
         self.embedding = nn.Sequential(
             nn.Conv2d(channels, emb_dim, kernel_size=self.patch_size, stride=self.patch_size),
             nn.GELU(),
         )
-        if downsample:
-            self.downsample = PatchMerging(emb_dim)
         if norm:
             self.norm = nn.LayerNorm(emb_dim)
 
@@ -69,8 +63,6 @@ class ConvPatchEmbedding2d(nn.Module):
         embedded_image = self.embedding(image)  # (B, emb_dim, h, w)
         embedded_image = embedded_image.permute(0, 2, 3, 1)  # (B, h, w, emb_dim)
 
-        if hasattr(self, "downsample"):
-            embedded_image = self.downsample(embedded_image)  # (B, h//2, w//2, emb_dim)
         if hasattr(self, "norm"):
             embedded_image = self.norm(embedded_image)
         return embedded_image
@@ -85,14 +77,12 @@ class CoordinatesEmbedding2d(nn.Module):
     * the time delta tensor has shape (B,)
     * Optional: context variables tensor has shape (B, n_context_vars).
     Patches of the input are separately embedded into a tensor of shape
-    (B, h, w, emb_dim). 
+    (B, h, w, emb_dim).
     The time coordinates are embedded using a linear layer and summed to the
     embedded spatial coordinates.
     """
 
-    def __init__(
-        self, patch_size, emb_dim, n_context_vars=0, use_diffusion_t=True, downsample=True
-    ):
+    def __init__(self, patch_size, emb_dim, n_context_vars=0, use_diffusion_t=True):
         """
         Args:
             patch_size (int): The size of the patches.
@@ -101,15 +91,12 @@ class CoordinatesEmbedding2d(nn.Module):
                 A value of 0 means that there are no context variables.
             use_diffusion_t (bool): Whether the layer will also receive the diffusion
                 timestep as input.
-            downsample (bool): Whether to downsample the image before embedding.
         """
         super().__init__()
         self.patch_size = patch_size
         self.emb_dim = emb_dim
 
-        self.coords_embedding = ConvPatchEmbedding2d(
-            4, patch_size, emb_dim, norm=False, downsample=downsample
-        )
+        self.coords_embedding = ConvPatchEmbedding2d(4, patch_size, emb_dim, norm=False)
         self.time_embedding = nn.Linear(1, emb_dim)
         self.use_diffusion_t = use_diffusion_t
         if use_diffusion_t:
@@ -169,7 +156,7 @@ class SourcetypeEmbedding2d(nn.Module):
     All sources in a given type must have the same channels, in the same order.
     """
 
-    def __init__(self, channels, patch_size, values_dim, use_diffusion_t=True, downsample=True):
+    def __init__(self, channels, patch_size, values_dim, use_diffusion_t=True):
         """Args:
         channels (int): The number of channels in the source, not counting
             the availability mask.
@@ -177,7 +164,6 @@ class SourcetypeEmbedding2d(nn.Module):
         values_dim (int): The dimension of the embedding space for the values.
         use_diffusion_t (bool): Whether the layer will also receive the diffusion
             timestep as input.
-        downsample (bool): Whether to downsample the image before embedding.
         """
         super().__init__()
         self.patch_size = patch_size
@@ -186,9 +172,7 @@ class SourcetypeEmbedding2d(nn.Module):
         if use_diffusion_t:
             channels += 1  # Add an additional channel for the diffusion timestep
         # Values embedding: embeds the pixels using a strided convolution
-        self.values_embedding = ConvPatchEmbedding2d(
-            channels, patch_size, values_dim, norm=False, downsample=downsample
-        )
+        self.values_embedding = ConvPatchEmbedding2d(channels, patch_size, values_dim, norm=False)
         self.norm = nn.LayerNorm(values_dim)
 
     def forward(self, data):
