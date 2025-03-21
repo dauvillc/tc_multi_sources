@@ -5,7 +5,7 @@ backbone:
   _target_: multi_sources.models.perceiver.core.MultisourcePerceiver
   values_dim: ${model.values_dim}
   coords_dim: ${model.coords_dim}
-  latent_size: 768
+  latent_size: 256
   num_blocks: 8
   att_inner_ratio: 1
   num_heads: 8
