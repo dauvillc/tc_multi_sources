@@ -148,7 +148,11 @@ class MultisourceDeterministicReconstructor(MultisourceAbstractReconstructor):
         for source, data in x.items():
             # Copy the data to avoid modifying the original dict
             masked_data = {k: v.clone() if torch.is_tensor(v) else v for k, v in data.items()}
-            masked_data["avail"] = avail_flags[source]
+            avail_flag = avail_flags[source]
+            masked_data["avail"] = avail_flag
+            # Set the availability mask to 0 everywhere for noised sources.
+            # (!= from the avail flag, it's a mask of same shape
+            masked_data["avail_mask"][avail_flag == 0] = 0
             masked_x[source] = masked_data
         return masked_x
     
@@ -186,6 +190,20 @@ class MultisourceDeterministicReconstructor(MultisourceAbstractReconstructor):
         pred = self.forward(masked_x)
         # Compute the loss
         loss = self.compute_loss(pred, batch, masked_x)
+        # If the loss is NaN or infinite, raise an error and display the input batch
+        # so that we can debug.
+        if not torch.isfinite(loss) or loss.item() > 1e5:
+            avail_flags = {source: masked_x[source]["avail"] for source in masked_x}
+            if self.validation_dir is not None:
+                # For every 10 batches, make a prediction and display it.
+                display_realizations(
+                    pred,
+                    batch,
+                    avail_flags,
+                    self.validation_dir / f"realizations_debug_{batch_idx}",
+                    deterministic=True,
+                )
+            raise ValueError(f"Loss is {loss.item()}")
 
         self.log(
             f"train_loss",
@@ -217,14 +235,15 @@ class MultisourceDeterministicReconstructor(MultisourceAbstractReconstructor):
 
         avail_flags = {source: masked_batch[source]["avail"] for source in masked_batch}
         if self.validation_dir is not None and batch_idx % 5 == 0:
-            # For every 10 batches, make a prediction and display it.
-            if batch_idx % 10 == 0:
+            # For every 30 batches, make a prediction and display it.
+            if batch_idx % 30 == 0:
                 display_realizations(
                     pred,
                     input_batch,
                     avail_flags,
                     self.validation_dir / f"realizations_{batch_idx}",
                     deterministic=True,
+                    display_fraction=0.25
                 )
 
         # Evaluate the metrics

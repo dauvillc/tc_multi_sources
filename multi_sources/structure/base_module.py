@@ -390,11 +390,11 @@ class MultisourceAbstractReconstructor(pl.LightningModule, ABC):
             # If a maximum distance from the center is specified, exclude the pixels
             # that are too far from the center from the loss computation.
             if self.loss_max_distance_from_center is not None:
-                dist_mask = dist_to_center <= self.loss_max_distance_from_center
+                dist_mask = dist_to_center[source] <= self.loss_max_distance_from_center
                 loss_mask = loss_mask & dist_mask
             # Optionally ignore the pixels that are on land
             if self.ignore_land_pixels_in_loss:
-                loss_mask[landmask > 0] = False
+                loss_mask[landmask[source] > 0] = False
             # Apply the mask to the predictions and groundtruth
             loss_mask = loss_mask.unsqueeze(1).expand_as(pred_s)  # (B, C, ...)
             pred_s = pred_s[loss_mask]
