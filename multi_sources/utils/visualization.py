@@ -5,6 +5,8 @@ import numpy as np
 from pathlib import Path
 from string import Template
 
+from multi_sources.data_processing.grid_functions import crop_nan_border
+
 
 def display_solution_html(batch, sol, time_grid, sample_index=0):
     """Display the solution and groundtruth of the flow matching process using plotly.
@@ -157,7 +159,8 @@ def display_solution_html(batch, sol, time_grid, sample_index=0):
     return fig
 
 
-def display_realizations(sol, batch, avail_flags, save_filepath_prefix):
+def display_realizations(sol, batch, avail_flags, save_filepath_prefix, deterministic=False,
+                         display_fraction=1.0):
     """Given multiple solutions of the flow matching process, creates one figure
     per sample to display the solutions and groundtruth.
     Args:
@@ -173,18 +176,27 @@ def display_realizations(sol, batch, avail_flags, save_filepath_prefix):
             available and masked, and -1 if it was not available.
         save_filepath_prefix (str or Path): Prefix of the filepath where the figure will be saved.
             The figure will be saved as save_filepath_prefix + "_{sample_idx}.png".
+        deterministic (bool, optional): If True, expects sol to be a tensor of shape (B, C, ...).
+        display_fraction (float, optional): Fraction of the samples to display. Defaults to 1.0.
     """
     save_filepath_prefix = Path(save_filepath_prefix)
     # Make sure parent directory exists
     save_filepath_prefix.parent.mkdir(parents=True, exist_ok=True)
+
+    # Make the deterministic case compatible with the non-deterministic case
+    if deterministic:
+        sol = {src: sol_s.unsqueeze(0) for src, sol_s in sol.items()}
 
     # Extract batch size and number of realizations
     any_source = next(iter(sol.keys()))
     n_realizations = sol[any_source].shape[0]
     batch_size = sol[any_source].shape[1]
 
-    # For each sample in the batch
-    for sample_idx in range(batch_size):
+    # Take a fraction of the samples, evenly spaced
+    samples_to_display = np.linspace(0, batch_size - 1, int(display_fraction * batch_size)).astype(int)
+
+    # For each sample
+    for sample_idx in samples_to_display:
         # Get available sources for this sample (either masked or available)
         sources = [
             source
@@ -211,16 +223,35 @@ def display_realizations(sol, batch, avail_flags, save_filepath_prefix):
             # For each realization
             for r_idx in range(n_realizations):
                 ax = axs[src_idx, r_idx]
+                # Get original coordinates
+                coords = batch[source]["coords"][sample_idx]  # (2, H, W), lat/lon
 
                 # Only show prediction if the source was masked
                 if is_masked:
                     # Get prediction data
-                    pred = sol[source][r_idx, sample_idx, 0].detach().cpu().numpy()
+                    pred = sol[source][r_idx, sample_idx, 0]
 
                     # Display data based on dimensionality
                     if len(pred.shape) == 2:
+                        # The images' borders may be NaN due to the batching system.
+                        # Crop the NaN borders to display the images correctly.
+                        pred = crop_nan_border(coords, [pred.unsqueeze(0)])[0].squeeze(0)
+                        pred = pred.detach().cpu().numpy()
                         im = ax.imshow(pred, cmap="viridis")
+                        # Add coords as axis labels
+                        h, w = pred.shape
+                        x_vals = coords[1, 0, :w]
+                        y_vals = coords[0, :h, 0]
+                        step_x = max(1, w // 5)
+                        step_y = max(1, h // 5)
+                        ax.set_xticks(range(0, w, step_x))
+                        ax.set_yticks(range(0, h, step_y))
+                        ax.set_xticklabels(
+                            [f"{val:.2f}" for val in x_vals[0::step_x]], rotation=45
+                        )
+                        ax.set_yticklabels([f"{val:.2f}" for val in y_vals[0::step_y]])
                     else:  # For 0D or 1D data
+                        pred = pred[0].detach().cpu().numpy()
                         ax.bar(range(len(pred)), pred)
                         (
                             ax.set_ylim([0, 1.2 * pred.max()])
@@ -235,12 +266,23 @@ def display_realizations(sol, batch, avail_flags, save_filepath_prefix):
 
             # Display groundtruth in the last column
             ax = axs[src_idx, -1]
-            true = batch[source]["values"][sample_idx, 0].detach().cpu().numpy()
+            true = batch[source]["values"][sample_idx, 0]
 
-            # Display ground truth data based on dimensionality
             if len(true.shape) == 2:
+                true = crop_nan_border(coords, [true.unsqueeze(0)])[0].squeeze(0)
+                true = true.detach().cpu().numpy()
                 im = ax.imshow(true, cmap="viridis")
+                h, w = true.shape
+                x_vals = coords[1, 0, :w]
+                y_vals = coords[0, :h, 0]
+                step_x = max(1, w // 5)
+                step_y = max(1, h // 5)
+                ax.set_xticks(range(0, w, step_x))
+                ax.set_yticks(range(0, h, step_y))
+                ax.set_xticklabels([f"{val:.2f}" for val in x_vals[0::step_x]], rotation=45)
+                ax.set_yticklabels([f"{val:.2f}" for val in y_vals[0::step_y]])
             else:  # For 0D or 1D data
+                true = true[0].detach().cpu().numpy()
                 ax.bar(range(len(true)), true)
                 (
                     ax.set_ylim([0, 1.2 * true.max()])
