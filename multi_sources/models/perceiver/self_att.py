@@ -36,12 +36,18 @@ class ValuesCoordinatesSelfAttention(nn.Module):
         self.head_dim = self.inner_dim // num_heads
         self.num_heads = num_heads
 
-        self.values_qkv = nn.Sequential(
-            nn.Linear(values_dim, self.inner_dim * 3), RMSNorm(self.inner_dim * 3)
+        self.v_norm = nn.LayerNorm(values_dim)
+        self.c_norm = nn.LayerNorm(coords_dim)
+
+        self.values_qk = nn.Sequential(
+            nn.Linear(values_dim, self.inner_dim * 2), RMSNorm(self.inner_dim * 2)
         )
-        self.coords_qkv = nn.Sequential(
-            nn.Linear(coords_dim, self.inner_dim * 3), RMSNorm(self.inner_dim * 3)
+        self.coords_qk = nn.Sequential(
+            nn.Linear(coords_dim, self.inner_dim * 2), RMSNorm(self.inner_dim * 2)
         )
+        self.values_v = nn.Linear(values_dim, self.inner_dim)
+        self.coords_v = nn.Linear(coords_dim, self.inner_dim)
+
         self.dropout = nn.Dropout(dropout)
 
         self.output_proj_v = nn.Sequential(
@@ -61,14 +67,22 @@ class ValuesCoordinatesSelfAttention(nn.Module):
             tensor: Updated values tensor of shape (batch_size, num_values, values_dim).
             tensor: Updated coordinates tensor of shape (batch_size, num_values, coords_dim).
         """
+        # Normalize the values and coordinates.
+        V = self.v_norm(V)
+        C = self.c_norm(C)
+
         # Project the values and coordinates to the query, key and value spaces.
-        qkv_values = self.values_qkv(V).chunk(3, dim=-1)
-        qkv_coords = self.coords_qkv(C).chunk(3, dim=-1)
+        qv, kv = self.values_qk(V).chunk(2, dim=-1)
+        qc, kc = self.coords_qk(C).chunk(2, dim=-1)
+        vv = self.values_v(V)
+        vc = self.coords_v(C)
+
+        # Split the queries, keys and values in the heads dimension.
         qv, kv, vv = map(
-            lambda x: rearrange(x, "b n (h d) -> b h n d", h=self.num_heads), qkv_values
+            lambda x: rearrange(x, "b n (h d) -> b h n d", h=self.num_heads), (qv, kv, vv)
         )
         qc, kc, vc = map(
-            lambda x: rearrange(x, "b n (h d) -> b h n d", h=self.num_heads), qkv_coords
+            lambda x: rearrange(x, "b n (h d) -> b h n d", h=self.num_heads), (qc, kc, vc)
         )
 
         # Compute the common attention map.

@@ -59,14 +59,14 @@ class ValuesCoordinatesAttentionInternal(nn.Module):
         super().__init__()
         self.num_heads = num_heads
 
-        self.values_to_qkv = nn.Sequential(
-            nn.Linear(values_dim, inner_dim * 3, bias=False),
-            RMSNorm(inner_dim * 3),
-        )
-        self.coords_to_qk = nn.Sequential(
-            nn.Linear(coords_dim, inner_dim * 2, bias=False),
-            RMSNorm(inner_dim * 2),
-        )
+        self.values_to_qkv = nn.Linear(values_dim, inner_dim * 3, bias=False)
+        # RMSNorm on the queries and keys to stabilize the training (cf Stable Diff. 3)
+        self.values_qnorm = RMSNorm(inner_dim)
+        self.values_knorm = RMSNorm(inner_dim)
+
+        self.coords_to_qk = nn.Linear(coords_dim, inner_dim * 2, bias=False)
+        self.coords_qnorm = RMSNorm(inner_dim)
+        self.coords_knorm = RMSNorm(inner_dim)
 
         dim_head = inner_dim // num_heads
         self.attention_map = AttentionMap(dim_head, relative_pos=True, rel_pos_dim_head=dim_head)
@@ -82,17 +82,21 @@ class ValuesCoordinatesAttentionInternal(nn.Module):
             Tensor of shape (batch_size, seq_len, values_dim), the updated values.
         """
         # Project the values and coordinates to the query, key and value spaces.
-        qkv_values = self.values_to_qkv(values).chunk(3, dim=-1)
-        qk_coords = self.coords_to_qk(coords).chunk(2, dim=-1)
-        qp, kp, v = map(
-            lambda x: rearrange(x, "b n (h d) -> b h n d", h=self.num_heads), qkv_values
+        qv, kv, vv = self.values_to_qkv(values).chunk(3, dim=-1)
+        qv, kv = self.values_qnorm(qv), self.values_knorm(kv)  # RMSNorm
+        qc, kc = self.coords_to_qk(coords).chunk(2, dim=-1)
+        qc, kc = self.coords_qnorm(qc), self.coords_knorm(kc)
+
+        # Reshape to split into multiple heads
+        qv, kv, vv = map(
+            lambda x: rearrange(x, "b n (h d) -> b h n d", h=self.num_heads), (qv, kv, vv)
         )
-        qc, kc = map(lambda x: rearrange(x, "b n (h d) -> b h n d", h=self.num_heads), qk_coords)
+        qc, kc = map(lambda x: rearrange(x, "b n (h d) -> b h n d", h=self.num_heads), (qc, kc))
 
         # Compute the attention map using two sets of keys and queries, one from the values
         # and one from the coordinates.
-        attn = self.attention_map(kp, qp, kc, qc, mask=attention_mask)
-        out = torch.matmul(attn, v)
+        attn = self.attention_map(kv, qv, kc, qc, mask=attention_mask)
+        out = torch.matmul(attn, vv)
         out = rearrange(out, "b h n d -> b n (h d)")
         out = self.output_proj(out)
         return out

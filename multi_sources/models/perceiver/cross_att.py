@@ -66,12 +66,15 @@ class MultisourcePerceiverEncoder(nn.Module):
         self.coords_q = nn.Sequential(
             nn.Linear(coords_dim, self.att_inner_dim), RMSNorm(self.att_inner_dim)
         )
-        self.values_kv = nn.Sequential(
-            nn.Linear(values_dim, self.att_inner_dim * 2), RMSNorm(self.att_inner_dim * 2)
+        self.values_k = nn.Sequential(
+            nn.Linear(values_dim, self.att_inner_dim), RMSNorm(self.att_inner_dim)
         )
-        self.coords_kv = nn.Sequential(
-            nn.Linear(coords_dim, self.att_inner_dim * 2), RMSNorm(self.att_inner_dim * 2)
+        self.coords_k = nn.Sequential(
+            nn.Linear(coords_dim, self.att_inner_dim), RMSNorm(self.att_inner_dim)
         )
+        self.values_v = nn.Linear(values_dim, self.att_inner_dim)
+        self.coords_v = nn.Linear(coords_dim, self.att_inner_dim)
+
         self.output_proj_v = nn.Sequential(
             nn.Linear(self.att_inner_dim, values_dim), nn.Dropout(dropout)
         )
@@ -111,8 +114,10 @@ class MultisourcePerceiverEncoder(nn.Module):
         C = torch.cat([x[src]["embedded_coords"].view(B, -1, Dc) for src in x], dim=1)
 
         # Project the values and coordinates to keys and values.
-        kv, vv = self.values_kv(V).chunk(2, dim=-1)
-        kc, vc = self.coords_kv(C).chunk(2, dim=-1)
+        kv = self.values_k(V)
+        kc = self.coords_k(C)
+        vv = self.values_v(V)
+        vc = self.coords_v(C)
 
         # Reshape to use parallel heads.
         qv = rearrange(qv, "b n (h d) -> b h n d", h=self.num_heads)
@@ -191,15 +196,17 @@ class MultisourcePerceiverDecoder(nn.Module):
         self.head_dim = self.att_inner_dim // num_heads
         self.num_heads = num_heads
 
+        # Normalization layers for the latent arrays
+        self.lv_norm = nn.LayerNorm(values_dim)
+        self.lc_norm = nn.LayerNorm(coords_dim)
+
         self.coords_k = nn.Sequential(
             nn.Linear(coords_dim, self.att_inner_dim), RMSNorm(self.att_inner_dim)
         )
         self.coords_q = nn.Sequential(
             nn.Linear(coords_dim, self.att_inner_dim), RMSNorm(self.att_inner_dim)
         )
-        self.values_v = nn.Sequential(
-            nn.Linear(values_dim, self.att_inner_dim), RMSNorm(self.att_inner_dim)
-        )
+        self.values_v = nn.Linear(values_dim, self.att_inner_dim)
         self.output_proj = nn.Sequential(
             nn.Linear(self.att_inner_dim, values_dim), nn.Dropout(dropout)
         )
@@ -223,6 +230,10 @@ class MultisourcePerceiverDecoder(nn.Module):
         Returns:
             dict of str to tensor: Dictionary {src: Vs} of output values sequences.
         """
+        # Normalize the latents.
+        Lv = self.lv_norm(Lv)
+        Lc = self.lc_norm(Lc)
+
         # Project the latents to values and keys.
         v_v = self.values_v(Lv)
         k_c = self.coords_k(Lc)
@@ -231,10 +242,11 @@ class MultisourcePerceiverDecoder(nn.Module):
 
         outputs = {}
         for src in x:
+            # The original embeddings are already normalized.
             C = x[src]["embedded_coords"]
             V = x[src]["embedded_values"]
             spatial_shape = C.shape[1:-1]  # e.g. (h, w) for 2D sources
-            
+
             # Flatten the spatial dimensions of the coordinates and project them to queries.
             C = rearrange(C, "b ... d -> b (...) d")
             q_c = self.coords_q(C)
@@ -250,7 +262,7 @@ class MultisourcePerceiverDecoder(nn.Module):
             V_out = attn_map @ v_v
             V_out = rearrange(V_out, "b h n d -> b n (h d)")
             V_out = self.output_proj(V_out)
-            
+
             # Reshape the values to their original dimensionality.
             V_out = V_out.view(V.shape[0], *spatial_shape, self.values_dim)
 
