@@ -231,8 +231,8 @@ def process_pmw_file(file, source, source_groups, dest_dir, regridding_res, chec
             raise RuntimeError(f"Resampling error for sample {file}: {e}")
 
         # Save processed data in the netCDF format
-        new_ds = ds[data_vars + ["latitude", "longitude", "land_mask", "dist_to_center"]]
-        new_ds.to_netcdf(dest_file)
+        ds = ds[data_vars + ["latitude", "longitude", "land_mask", "dist_to_center"]]
+        ds.to_netcdf(dest_file)
 
         return sample_metadata
 
