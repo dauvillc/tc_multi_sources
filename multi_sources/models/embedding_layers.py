@@ -68,230 +68,126 @@ class ConvPatchEmbedding2d(nn.Module):
         return embedded_image
 
 
-class CoordinatesEmbedding2d(nn.Module):
-    """A module that embeds the coordinates of a sequence of patches.
-    Made for 2D coordinates, which means that:
-    * the coordinates tensor has shape (B, 3, H, W),
-        for latitude, longitude sin and longitude cos.
-    * the land-sea mask tensor has shape (B, H, W).
-    * the time delta tensor has shape (B,)
-    * Optional: context variables tensor has shape (B, n_context_vars).
-    Patches of the input are separately embedded into a tensor of shape
-    (B, h, w, emb_dim).
-    The time coordinates are embedded using a linear layer and summed to the
-    embedded spatial coordinates.
-    """
-
-    def __init__(self, patch_size, emb_dim, n_context_vars=0, use_diffusion_t=True):
-        """
-        Args:
-            patch_size (int): The size of the patches.
-            emb_dim (int): The dimension of the embedding space.
-            n_context_vars (int): The number of context variables for the source type.
-                A value of 0 means that there are no context variables.
-            use_diffusion_t (bool): Whether the layer will also receive the diffusion
-                timestep as input.
-        """
-        super().__init__()
-        self.patch_size = patch_size
-        self.emb_dim = emb_dim
-
-        self.coords_embedding = ConvPatchEmbedding2d(4, patch_size, emb_dim, norm=False)
-        self.time_embedding = nn.Linear(1, emb_dim)
-        self.use_diffusion_t = use_diffusion_t
-        if use_diffusion_t:
-            self.diffusion_t_embedding = nn.Linear(1, emb_dim)
-        if n_context_vars > 0:
-            self.context_embedding = nn.Linear(n_context_vars, emb_dim)
-        self.norm = nn.LayerNorm(emb_dim)
-
-    def forward(self, data):
-        """
-        Args:
-            data (dict of str to torch.Tensor): A dict including at least the following keys:
-            * coords : A tensor of shape (B, 3, H, W) containing the coordinates.
-            * landmask : A tensor of shape (B, H, W) containing the land-sea mask.
-            * dt : A tensor of shape (B,) containing the time delta.
-            * optional: context: A tensor of shape (B, n_context_vars) containing the
-                context variables for the source type.
-            * optional: diffusion_t: A tensor of shape (B,) containing the diffusion timestep.
-        Returns:
-            embedded_coords: torch.Tensor of shape (B, h, w, emb_dim).
-        """
-        coords, landmask, dt = data["coords"], data["landmask"], data["dt"]
-        B = coords.size(0)
-        dt = dt.view(B, 1, 1, 1)
-        # Embed the spatial coords with the land-sea mask
-        coords = torch.cat([coords, landmask.unsqueeze(1)], dim=1)  # (B, 4, H, W)
-        embedded_coords = self.coords_embedding(coords)  # (B, h, w, emb_dim)
-        # Add the time embedding
-        embedded_dt = self.time_embedding(dt)
-        embedded_coords += embedded_dt
-        # (Optional) Add the diffusion timestep embedding
-        if self.use_diffusion_t:
-            diffusion_t = data["diffusion_t"].view(B, 1, 1, 1)
-            embedded_diffusion_t = self.diffusion_t_embedding(diffusion_t)
-            embedded_coords += embedded_diffusion_t
-
-        if "context" in data and data["context"] is not None:
-            context_vars = data["context"]
-            embedded_context = self.context_embedding(context_vars)
-            embedded_coords += embedded_context.unsqueeze(1)
-
-        embedded_coords = self.norm(embedded_coords)
-        return embedded_coords
-
-
 class SourcetypeEmbedding2d(nn.Module):
-    """A module that embeds 2d sources from a common source type into a sequence of patches.
-    Made for 2D sources, which means that the pixels tensor has shape (B, C, H, W).
-    An additional channel containing the availability mask is added to the source.
-    Patches of the input are separately embedded into a tensor of shape
-    (B, h, w, emb_dim).
+    """A class that embeds the values and coordinates of a 2D source, including optional
+    characteristic variables.
 
-    A source type is a set of sources that supposedly contain the same information
-    but from different sources that may have different characteristics. For example,
-    microwave brightness temperatures from different satellites.
-
-    All sources in a given type must have the same channels, in the same order.
+    This module handles both coordinate embeddings (latitude, longitude,
+    and time) and values embeddings (channels, masks, diffusion timestep),
+    then outputs their embedded representations.
+    Additionally, a conditioning tensor is computed that embeds the conditioning
+    that isn't the values or the spatio-temporal coordinates. This includes:
+    - The characteristic variables.
+    - The diffusion timestep.
+    If those elements aren't given, the conditioning tensor is set to None.
     """
 
-    def __init__(self, channels, patch_size, values_dim, use_diffusion_t=True):
-        """Args:
-        channels (int): The number of channels in the source, not counting
-            the availability mask.
-        patch_size (int): The size of the patches to be embedded.
-        values_dim (int): The dimension of the embedding space for the values.
-        use_diffusion_t (bool): Whether the layer will also receive the diffusion
-            timestep as input.
+    def __init__(
+        self,
+        channels,
+        patch_size,
+        values_dim,
+        coords_dim,
+        n_charac_vars=0,
+        use_diffusion_t=True,
+        use_predicted_mean=False,
+    ):
+        """
+        Args:
+            channels (int): Number of channels for the source data, excluding
+                land-sea and availability masks.
+            patch_size (int): Size of the patches to be used for convolution.
+            values_dim (int): Dimension of the values embedding space.
+            coords_dim (int): Dimension of the coordinate embedding space.
+            n_charac_vars (int): Number of optional characteristic variables.
+            use_diffusion_t (bool): Whether to include a diffusion timestep channel.
+            use_predicted_mean (bool): Whether to include a predicted mean channel.
         """
         super().__init__()
-        self.patch_size = patch_size
+
+        # Values embedding layers
+        self.values_patch_size = patch_size
         self.use_diffusion_t = use_diffusion_t
-        channels += 1  # Add an additional channel for the availability mask
+        self.use_predicted_mean = use_predicted_mean
+
+        ch = channels + 2  # landmask + availability
         if use_diffusion_t:
-            channels += 1  # Add an additional channel for the diffusion timestep
-        # Values embedding: embeds the pixels using a strided convolution
-        self.values_embedding = ConvPatchEmbedding2d(channels, patch_size, values_dim, norm=False)
-        self.norm = nn.LayerNorm(values_dim)
+            ch += 1  # diffusion channel
+        if use_predicted_mean:
+            ch += 1
+        self.values_embedding = ConvPatchEmbedding2d(ch, patch_size, values_dim, norm=True)
+
+        # Coords embedding layers
+        self.coords_patch_size = patch_size
+        self.coords_emb_dim = coords_dim
+        self.coords_embedding = ConvPatchEmbedding2d(3, patch_size, coords_dim, norm=False)
+        self.time_embedding = nn.Linear(1, coords_dim)
+        self.coords_norm = nn.LayerNorm(coords_dim)
+
+        # Conditioning embedding layers
+        if self.use_diffusion_t:
+            self.diffusion_t_embedding = nn.Linear(1, values_dim)
+        if n_charac_vars > 0:
+            self.characs_embedding = nn.Linear(n_charac_vars, values_dim)
 
     def forward(self, data):
-        """Args:
-            data (dict of str to torch.Tensor): A dictionary containing at least the following
-                keys:
-                * 'values': torch.Tensor of shape (B, C, H, W) containing the pixels of the source.
-                * 'avail_mask': torch.Tensor of shape (B, H, W) containing the availability mask.
-                * If use_diffusion_t is True:
-                    * 'diffusion_t': torch.Tensor of shape (B,) containing the diffusion
-                        timestep.
-        Returns:
-            embedded_values: torch.Tensor of shape (B, h, w, values_dim).
         """
-        # Disable cudNN here if the patch size is superior to 4,
-        # as it raises an error for large patch sizes.
-        with torch.backends.cudnn.flags(enabled=self.patch_size <= 4):
-            # Add the availability mask as an additional channel
+        Args:
+            data (dict): Must contain:
+                - "coords": (B, 3, H, W) coordinate tensor.
+                - "dt": (B,) time delta tensor.
+                - "values": (B, C, H, W) source pixel data.
+                - "avail_mask": (B, H, W) data availability mask.
+                - "landmask": (B, H, W) land-sea mask.
+                - Optionally "characs": (B, n_characs_vars) characteristic variables.
+                - Optionally "diffusion_t": (B,) diffusion timestep.
+                - Optionally "predicted_mean": (B, C_out, H, W), predicted mean.
+        Returns:
+            embedded_values: (B, h, w, values_dim) tensor of embedded values.
+            embedded_coords: (B, h, w, coords_dim) tensor of embedded coordinates.
+            conditioning: (B, 1, 1, coords_dim) tensor containing the conditioning, or
+                None if no conditioning is given.
+        """
+
+        # Embed values
+        with torch.backends.cudnn.flags(enabled=self.values_patch_size <= 4):
             values = data["values"]
             avail_mask = data["avail_mask"].unsqueeze(1)
-            values = torch.cat([values, avail_mask], dim=1)  # (B, C+1, H, W)
+            landmask = data["landmask"].unsqueeze(1)
+            values = torch.cat([values, avail_mask, landmask], dim=1)
             if self.use_diffusion_t:
-                diffusion_t = data["diffusion_t"].view(-1, 1, 1, 1)
-                diffusion_t = diffusion_t.expand(-1, 1, values.size(2), values.size(3))
+                diffusion_t = (
+                    data["diffusion_t"]
+                    .view(-1, 1, 1, 1)
+                    .expand(-1, 1, values.size(2), values.size(3))
+                )
                 values = torch.cat([values, diffusion_t], dim=1)
+            if self.use_predicted_mean:
+                predicted_mean = data["predicted_mean"]
+                values = torch.cat([values, predicted_mean], dim=1)
             embedded_values = self.values_embedding(values)
-            embedded_values = self.norm(embedded_values)
-        return embedded_values
 
+        # Embed coords
+        coords = data["coords"]
+        dt = data["dt"].view(coords.size(0), 1, 1, 1)
+        embedded_coords = self.coords_embedding(coords)
+        embedded_coords += self.time_embedding(dt)
+        embedded_coords = self.coords_norm(embedded_coords)
 
-class CoordinatesEmbedding0d(nn.Module):
-    """A module that embeds the coordinates of a sequence of patches.
-    Made for 0D coordinates, which means that:
-    * the coordinates tensor has shape (B, 3),
-        for latitude, longitude sin and longitude cos.
-    * the land-sea mask tensor has shape (B,).
-    * the time delta tensor has shape (B,)
-    The coordinates are embedded using a linear layer and summed to the
-    embedded time delta.
-    """
-
-    def __init__(self, emb_dim, use_diffusion_t=True, mlp_ratio=4):
-        """
-        Args:
-            emb_dim (int): The dimension of the embedding space.
-            use_diffusion_t (bool): Whether the layer will also receive the diffusion
-                timestep as input.
-            mlp_ratio (int): The ratio of the hidden dimension of the feedforward layer.
-        """
-        super().__init__()
-        self.emb_dim = emb_dim
-        self.coords_embedding = LinearEmbedding(4, emb_dim)
-        self.time_embedding = nn.Linear(1, emb_dim)
-        self.use_diffusion_t = use_diffusion_t
-        if use_diffusion_t:
-            self.diffusion_t_embedding = nn.Linear(1, emb_dim)
-        self.ff = nn.Sequential(
-            nn.Linear(emb_dim, emb_dim * mlp_ratio),
-            nn.GELU(),
-            nn.Linear(emb_dim * mlp_ratio, emb_dim),
-        )
-        self.norm = nn.LayerNorm(emb_dim)
-
-    def forward(self, data):
-        """
-        Args:
-            data (dict of str to torch.Tensor): A dictionary containing at least the following keys:
-            * coords : A tensor of shape (B, 3) containing the coordinates.
-            * dt : A tensor of shape (B,) containing the time delta.
-        Returns:
-            embedded_coords: torch.Tensor of shape (B, 1, emb_dim).
-        """
-        coords, landmask, dt = data["coords"], data["landmask"], data["dt"]
-        B = coords.size(0)
-        dt = dt.view(B, 1)
-        embedded_dt = self.time_embedding(dt)  # (B, emb_dim)
-        # Concatenate the landmask to the coordinates
-        coords = torch.cat([coords, landmask.unsqueeze(1)], dim=1)  # (B, 4)
-        embedded_coords = self.coords_embedding(coords)  # (B, emb_dim)
-        embedded_coords += embedded_dt
+        # Conditioning tensor
+        available_conditioning = []
+        b, c, h, w = values.shape
         if self.use_diffusion_t:
-            diffusion_t = data["diffusion_t"].view(B, 1)
-            embedded_diffusion_t = self.diffusion_t_embedding(diffusion_t)
-            embedded_coords += embedded_diffusion_t
-        embedded_coords = self.ff(embedded_coords) + embedded_coords
-        embedded_coords = self.norm(embedded_coords)  # (B, emb_dim)
-        return embedded_coords.unsqueeze(1)  # (B, 1, emb_dim)
+            diffusion_t = data["diffusion_t"].view(b, 1, 1, 1)
+            embedded_diff_t = self.diffusion_t_embedding(diffusion_t)
+            available_conditioning.append(embedded_diff_t)
+        if "characs" in data and data["characs"] is not None:
+            embedded_characs = self.characs_embedding(data["characs"])
+            embedded_characs = embedded_characs.view(b, 1, 1, -1)
+            available_conditioning.append(embedded_characs)
+        if len(available_conditioning) > 0:
+            conditioning = sum(available_conditioning)
+        else:
+            conditioning = None
 
-
-class SourceSpecificEmbedding0d(nn.Module):
-    """A module that embeds a single source into a sequence of patches.
-    Made for 0D sources, which means that the pixels tensor has shape (B, C).
-    An additional channel containing the availability mask is added to the source.
-    The input is embedded into a single token of shape (B, 1, emb_dim).
-    """
-
-    def __init__(self, channels, values_dim):
-        """
-        Args:
-            channels (int): The number of channels in the source, not counting
-                the availability mask.
-            values_dim (int): The dimension of the embedding space for the values.
-        """
-        super().__init__()
-        # Values embedding: embeds the pixels using a linear layer
-        self.values_embedding = LinearEmbedding(channels + 1, values_dim)
-
-    def forward(self, data):
-        """
-        Args:
-            data (dict of str to torch.Tensor): A dictionary containing at least the following keys:
-                * 'values': torch.Tensor of shape (B, C) containing the pixels of the source.
-                * 'avail_mask': torch.Tensor of shape (B,) containing the availability mask.
-        Returns:
-            embedded_values: torch.Tensor of shape (B, num_patches, values_dim).
-        """
-        # Add the availability mask as an additional channel
-        values = data["values"]
-        avail_mask = data["avail_mask"].unsqueeze(1)
-        values = torch.cat([values, avail_mask], dim=1)
-        embedded_values = self.values_embedding(values)  # (B, values_dim)
-        return embedded_values.unsqueeze(1)  # (B, 1, values_dim)
+        return embedded_values, embedded_coords, conditioning
