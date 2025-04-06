@@ -49,7 +49,7 @@ class MultisourcesAnchoredCrossAttention(nn.Module):
             values_dim, coords_dim, self.inner_dim, num_heads, dropout
         )
 
-    def forward(self, inputs, attention_mask=None):
+    def forward(self, inputs):
         """
         Args:
             inputs (dict of str: dict of str: tensor): Dictionary of inputs, such that
@@ -64,15 +64,13 @@ class MultisourcesAnchoredCrossAttention(nn.Module):
         """
         # For each source:
         # - Read the length of that source's sequence
-        # - Gather the anchor tokens from the values and coordinates (and
-        #   attention masks if provided)
+        # - Gather the anchor tokens from the values and coordinates
         # - Save the indices of the anchor tokens
-        anchor_values, anchor_coords, anchor_masks = {}, {}, {}
+        anchor_values, anchor_coords = {}, {}
         anchor_indices, n_anchors_list = {}, []
         for source_name, source_inputs in inputs.items():
             V, C = source_inputs["embedded_values"], source_inputs["embedded_coords"]
             spatial_dims = V.shape[1:-1]
-            B, Dv, Dc = V.shape[0], V.shape[-1], C.shape[-1]
 
             # For 1D sources, simply select the anchor points at regular intervals. 0D sources
             # are just 1D sources of length 1, so we can handle them here as well.
@@ -180,12 +178,17 @@ class SeparateWindowedValuesCoordinatesAttention(nn.Module):
         if block_idx is not None:  # Override the shifted argument if block_idx is specified
             self.shifted = bool(block_idx % 2)
 
-        self.values_qkv = nn.Sequential(
-            nn.Linear(values_dim, self.inner_dim * 3), RMSNorm(self.inner_dim * 3)
+        # Projection to values queries, keys and values.
+        # For the queries and keys, we apply an RMSNorm to stabilize the training.
+        self.values_qk = nn.Sequential(
+            nn.Linear(values_dim, self.inner_dim * 2), RMSNorm(self.inner_dim * 2)
         )
+        self.values_v = nn.Linear(values_dim, self.inner_dim)
+        # Projection to coordinates queries and keys.
         self.coords_qk = nn.Sequential(
             nn.Linear(coords_dim, self.inner_dim * 2), RMSNorm(self.inner_dim * 2)
         )
+
         self.dropout = nn.Dropout(dropout)
 
         self.pos_embeddings = nn.Parameter(torch.randn(window_size * 2 - 1, window_size * 2 - 1))
@@ -199,7 +202,7 @@ class SeparateWindowedValuesCoordinatesAttention(nn.Module):
             nn.Linear(self.inner_dim, values_dim), nn.Dropout(dropout)
         )
 
-    def forward(self, x, attention_mask=None):
+    def forward(self, x):
         """
         Args:
             x (dict of str: dict of str: tensor): Dictionary of inputs, such that
@@ -218,7 +221,8 @@ class SeparateWindowedValuesCoordinatesAttention(nn.Module):
                 continue
             h, w = spatial_dims
             # Project the values to queries, keys and values
-            v = self.values_qkv(source_inputs["embedded_values"])
+            v = source_inputs["embedded_values"]
+            v = torch.cat([self.values_qk(v), self.values_v(v)], dim=-1)
             v = rearrange(v, "b h w (d k) -> b h w d k", k=3)
             # Project the coordinates to queries and keys
             c = self.coords_qk(source_inputs["embedded_coords"])
@@ -292,42 +296,4 @@ class SeparateWindowedValuesCoordinatesAttention(nn.Module):
             # Remove the padding
             y = y[:, :h, :w, :]
             outputs[source_name] = self.output_proj(y)  # Back to values_dim
-        return outputs
-
-
-class SeparateValuesCoordinatesAttention(nn.Module):
-    """Attention block that computes the attention over each source independently."""
-
-    def __init__(self, values_dim, coords_dim, inner_dim, num_heads=8, dropout=0.0, **kwargs):
-        """
-        Args:
-            values_dim (int): Embedding dimension of the values.
-            coords_dim (int): Embedding dimension of the coordinates.
-            inner_dim (int): Inner dimension of the attention block.
-            num_heads (int): Number of heads in the attention block.
-            dropout (float): Dropout rate.
-        """
-        super().__init__()
-        self.attention = ValuesCoordinatesAttentionInternal(
-            values_dim, coords_dim, inner_dim, num_heads, dropout
-        )
-
-    def forward(self, inputs, attention_mask=None):
-        """
-        Args:
-            inputs (dict of str: dict of str: tensor): Dictionary of inputs, such that
-                inputs[source_name] contains the keys "embedded_coords" and "embedded_values".
-            attention_mask (dict of str: tensor): Dictionary of attention masks for each source,
-                such that attention_mask[source_name] has shape (b, n).
-
-        Returns:
-            dict of str: tensor: Dictionary of outputs, such that
-                outputs[source_name] contains the predicted values of the tokens.
-        """
-        outputs = {}
-        for source_name, source_inputs in inputs.items():
-            mask = attention_mask[source_name] if attention_mask is not None else None
-            outputs[source_name] = self.attention(
-                source_inputs["embedded_values"], source_inputs["embedded_coords"], mask
-            )
         return outputs
