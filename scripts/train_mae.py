@@ -65,13 +65,10 @@ def main(cfg: DictConfig):
     val_dir = Path(cfg["paths"]["validation"]) / run_id
     val_dir.mkdir(parents=True, exist_ok=True)
 
-    # Create the backbone
-    backbone = instantiate(cfg["model"]["backbone"])
     # Create the lightning module
     pl_module = instantiate(
         cfg["lightning_module"],
         train_dataset.sources,
-        backbone,
         cfg,
         validation_dir=val_dir,
     )
@@ -127,7 +124,7 @@ def main(cfg: DictConfig):
     # Create the trainer
     trainer = pl.Trainer(
         logger=logger,
-        log_every_n_steps=5,
+        log_every_n_steps=500,
         callbacks=callbacks,
         **cfg["trainer"],
     )

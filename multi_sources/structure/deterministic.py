@@ -5,7 +5,7 @@ the masked tokens."""
 import torch
 import torch.nn as nn
 
-from multi_sources.structure.base_module import MultisourceAbstractReconstructor
+from multi_sources.structure.base_reconstructor import MultisourceAbstractReconstructor
 
 # Visualization imports
 from multi_sources.utils.visualization import display_realizations
@@ -29,17 +29,14 @@ class MultisourceDeterministicReconstructor(MultisourceAbstractReconstructor):
     - "dist_to_center" is a tensor of shape (B, ...) containing the distance
         to the center of the storm at each pixel, in km.
 
-    Besides the sources, D['id'] is a list of strings of length (B,) uniquely identifying the
-    samples.
-
     The structure outputs a dict {source_name: tensor} containing the predicted values for each source.
     """
 
     def __init__(
         self,
         sources,
-        backbone,
         cfg,
+        backbone,
         n_sources_to_mask,
         patch_size,
         values_dim,
@@ -55,9 +52,9 @@ class MultisourceDeterministicReconstructor(MultisourceAbstractReconstructor):
         """
         Args:
             sources (list of Source): Source objects defining the dataset's sources.
-            backbone (nn.Module): Backbone of the model.
             cfg (dict): The whole configuration of the experiment. This will be saved
                 within the checkpoints and can be used to rebuild the exact experiment.
+            backbone (nn.Module): Backbone model to train.
             n_sources_to_mask (int): Number of sources to mask in each sample.
             patch_size (int): Size of the patches to split the images into.
             values_dim (int): Dimension of the values embeddings.
@@ -82,19 +79,19 @@ class MultisourceDeterministicReconstructor(MultisourceAbstractReconstructor):
         self.use_diffusion_t = False
         super().__init__(
             sources,
-            backbone,
             cfg,
+            backbone,
             n_sources_to_mask,
             patch_size,
             values_dim,
             coords_dim,
             adamw_kwargs,
             lr_scheduler_kwargs,
-            loss_max_distance_from_center,
-            ignore_land_pixels_in_loss,
-            normalize_coords_across_sources,
-            validation_dir,
-            metrics,
+            loss_max_distance_from_center=loss_max_distance_from_center,
+            ignore_land_pixels_in_loss=ignore_land_pixels_in_loss,
+            normalize_coords_across_sources=normalize_coords_across_sources,
+            validation_dir=validation_dir,
+            metrics=metrics,
         )
 
         # [MASK] token that will replace the embeddings of the masked tokens
@@ -110,17 +107,12 @@ class MultisourceDeterministicReconstructor(MultisourceAbstractReconstructor):
         y = super().embed(x)
         # We know need to replace the masked values with a [MASK] token (specific to the
         # deterministic case).
-        output = {}
         for source, data in y.items():
             v = data["embedded_values"]
             where_masked = x[source]["avail"] == 0
             v[where_masked] = self.mask_token.view((1,) * (v.dim() - 1) + (-1,))
-            output[source] = {
-                "embedded_values": v,
-                "embedded_coords": data["embedded_coords"],
-            }
 
-        return output
+        return y
 
     def mask(self, x, masking_seed=None):
         """Masks a portion of the sources. A missing source cannot be chosen to be masked.
@@ -161,11 +153,8 @@ class MultisourceDeterministicReconstructor(MultisourceAbstractReconstructor):
         avail_flag = {source: data["avail"] for source, data in masked_batch.items()}
 
         # Filter the predictions and true values
-        true_y = {source: batch[source]["values"] for source in batch}
-        avail_mask = {source: batch[source]['avail_mask'] for source in batch}
-        dist_to_center = {source: batch[source]['dist_to_center'] for source in batch}
-        landmask = {source: batch[source]['landmask'] for source in batch}
-        pred, true_y = super().apply_loss_mask(pred, true_y, avail_flag, avail_mask, dist_to_center, landmask)
+        y_true = {source: batch[source]["values"] for source in batch}
+        pred, true_y = super().apply_loss_mask(pred, y_true, batch, avail_flag)
 
         # Compute the loss
         losses = {}
@@ -181,29 +170,38 @@ class MultisourceDeterministicReconstructor(MultisourceAbstractReconstructor):
         loss = sum(losses.values()) / len(losses)
         return loss
 
-    def training_step(self, batch, batch_idx):
-        batch_size = batch[list(batch.keys())[0]]["values"].shape[0]
-        batch = self.preproc_input(batch)
+    def training_step(self, input_batch, batch_idx):
+        batch_size = input_batch[list(input_batch.keys())[0]]["values"].shape[0]
+        batch = self.preproc_input(input_batch)
         # Mask the sources
         masked_x = self.mask(batch)
         # Make predictions
         pred = self.forward(masked_x)
         # Compute the loss
         loss = self.compute_loss(pred, batch, masked_x)
+
         # If the loss is NaN or infinite, raise an error and display the input batch
         # so that we can debug.
-        if not torch.isfinite(loss) or loss.item() > 1e5:
-            avail_flags = {source: masked_x[source]["avail"] for source in masked_x}
-            if self.validation_dir is not None:
-                # For every 10 batches, make a prediction and display it.
-                display_realizations(
-                    pred,
-                    batch,
-                    avail_flags,
-                    self.validation_dir / f"realizations_debug_{batch_idx}",
-                    deterministic=True,
-                )
-            raise ValueError(f"Loss is {loss.item()}")
+        # if not torch.isfinite(loss) or loss.item() > 0.4:
+        #     avail_flags = {source: masked_x[source]["avail"] for source in masked_x}
+        #     if self.validation_dir is not None:
+        #         # For every 10 batches, make a prediction and display it.
+        #         display_realizations(
+        #             pred,
+        #             input_batch,
+        #             avail_flags,
+        #             self.validation_dir / f"realizations_debug_{batch_idx}",
+        #             deterministic=True,
+        #         )
+        #         # Save the input batch to disk
+        #         for src, data in input_batch.items():
+        #             for key, tensor in data.items():
+        #                 torch.save(tensor, self.validation_dir / f"{src}_{key}_{batch_idx}.pt")
+        #         # Save the preprocessed batch to disk
+        #         for src, data in batch.items():
+        #             for key, tensor in data.items():
+        #                 torch.save(tensor, self.validation_dir / f"{src}_{key}_preproc_{batch_idx}.pt")
+        #     raise ValueError(f"Loss is {loss.item()}")
 
         self.log(
             f"train_loss",
@@ -259,7 +257,15 @@ class MultisourceDeterministicReconstructor(MultisourceAbstractReconstructor):
                 sync_dist=True,
             )
         return loss
+    
+    def predict(self, input_batch):
+        batch = self.preproc_input(input_batch)
+        # Mask the sources
+        masked_batch = self.mask(batch)
+        # Make predictions
+        pred = self.forward(masked_batch)
+        return pred
 
-    def predict_step(self, batch, batch_idx):
-        # TODO
-        pass
+    def predict_step(self, input_batch, batch_idx):
+        pred = self.predict(input_batch)
+        return pred
