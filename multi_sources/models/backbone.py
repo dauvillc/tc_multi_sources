@@ -51,7 +51,6 @@ class MultisourceGeneralBackbone(nn.Module):
                     AdapativeConditionalNormalization(
                         layer_class(self.values_dim, self.coords_dim, **kwargs),
                         self.values_dim,
-                        self.coords_dim,
                     )
                 )
             self.blocks.append(block)
@@ -82,13 +81,18 @@ class MultisourceGeneralBackbone(nn.Module):
 
 
 class AdapativeConditionalNormalization(nn.Module):
-    """Wraps a torch module to apply adaptive conditional normalization."""
+    """Wraps a torch module to apply adaptive conditional normalization, as in DiT.
+    The module expects the data to include a key "conditioning", of same shape
+    as the values. If that key is absent, no conditioning is applied and the input
+    is just passed through a LayerNorm, and a residual connection is applied to
+    the wrapped module's output.
+    """
 
-    def __init__(self, module, input_dim, cond_dim):
+    def __init__(self, module, dim):
         super().__init__()
         self.module = module
-        self.input_norm = nn.LayerNorm(input_dim)
-        self.cond_proj = nn.Sequential(nn.SiLU(), nn.Linear(cond_dim, input_dim * 3))
+        self.input_norm = nn.LayerNorm(dim)
+        self.cond_proj = nn.Sequential(nn.SiLU(), nn.Linear(dim, dim * 3))
         # Initialize the weights of the conditional normalization to zero (no effect)
         nn.init.zeros_(self.cond_proj[1].weight)
         nn.init.zeros_(self.cond_proj[1].bias)
@@ -96,8 +100,8 @@ class AdapativeConditionalNormalization(nn.Module):
     def forward(self, data, *args, **kwargs):
         """Args:
             data (dict of str: tensor): Dictionary of inputs, such that
-                data[source_name] contains the keys "embedded_coords" and
-                "embedded_values".
+                data[source_name] contains the keys
+                "embedded_values" and "conditioning".
             args, kwargs: Additional arguments for the wrapped module.
         Returns:
             dict of str: tensor: Dictionary of outputs, such that
@@ -105,20 +109,31 @@ class AdapativeConditionalNormalization(nn.Module):
                 of shape (B, ..., values_dim).
         """
         skips, gates = {}, {}
-        for source_name, source_data in data.items():
-            skip, cond = source_data["embedded_values"], source_data["embedded_coords"]
+        modulated_data = {}
+        for src, source_data in data.items():
+            # Create a new dict to avoid modifying the input one in-place
+            modulated_data[src] = {k: v for k, v in source_data.items()}
+
+            skip, cond = source_data["embedded_values"], source_data["conditioning"]
             x = self.input_norm(skip)
-            shift, scale, gate = self.cond_proj(cond).chunk(3, dim=-1)
-            x = x * (scale + 1) + shift
+            skips[src] = skip
+
+            if cond is not None:
+                shift, scale, gate = self.cond_proj(cond).chunk(3, dim=-1)
+                x = x * (scale + 1) + shift
+                # Save the skip connection and gate for after the module
+                gates[src] = gate
+
             # Save the module's input for that source
-            source_data["embedded_values"] = x
-            # Save the skip connection and gate for after the module
-            skips[source_name] = skip
-            gates[source_name] = gate
+            modulated_data[src]["embedded_values"] = x
+
         # Apply the wrapped module with the updated inputs
-        module_output = self.module(data, *args, **kwargs)
+        module_output = self.module(modulated_data, *args, **kwargs)
         # Multiply by the gate and the skip connections
         output = {}
-        for source_name, source_output in module_output.items():
-            output[source_name] = source_output * gates[source_name] + skips[source_name]
+        for src, source_output in module_output.items():
+            if src in gates:
+                output[src] = source_output * gates[src] + skips[src]
+            else:
+                output[src] = source_output + skips[src]
         return output
