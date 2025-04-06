@@ -52,6 +52,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         exclude_seasons=None,
         randomly_drop_sources={},
         mask_spatial_coords=[],
+        subset_fraction=None,
         data_augmentation=None,
         seed=42,
     ):
@@ -104,6 +105,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                 with less than min_available_sources sources.
             mask_spatial_coords (list of str): If not None, names of sources whose spatial
                 coordinates will be masked (set to zeros).
+            subset_fraction (float): If not None, the fraction of the dataset to use.
             data_augmentation (None or MultiSourceDataAugmentation): If not None, instance
                 of MultiSourceDataAugmentation to apply to the data.
             seed (int): The seed to use for the random number generator.
@@ -217,6 +219,11 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         # Finally, avoid duplicated samples if two observations are at the exact same time
         self.reference_df = self.reference_df.drop_duplicates(["sid", "time"])
         self.reference_df = self.reference_df.reset_index(drop=True)
+
+        # Optionally, keep only a fraction of the dataset
+        if subset_fraction is not None:
+            self.reference_df = self.reference_df.sample(frac=subset_fraction, random_state=seed)
+            self.reference_df = self.reference_df.reset_index(drop=True)
 
         # ========================================================================================
         # Pre-computation to speed up the data loading
@@ -438,6 +445,8 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                 normalized_characs = characs * (max - min) + min
             else:
                 normalized_characs = (characs - min) / (max - min)
+        else:
+            normalized_characs = None
 
         data_vars = source.data_vars
         if dist_to_center:
