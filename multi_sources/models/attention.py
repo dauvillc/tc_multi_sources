@@ -6,6 +6,7 @@ import torch.nn.functional as F
 from einops import rearrange
 from multi_sources.models.small_layers import RMSNorm
 
+
 class AttentionMap(nn.Module):
     """Computes the attention map from the embedded keys and queries.
     Using this intermediary Module allows to retrieve the attention maps
@@ -64,9 +65,9 @@ class ValuesCoordinatesAttentionInternal(nn.Module):
         self.values_qnorm = RMSNorm(inner_dim)
         self.values_knorm = RMSNorm(inner_dim)
 
-        self.coords_to_qk = nn.Linear(coords_dim, inner_dim * 2, bias=False)
-        self.coords_qnorm = RMSNorm(inner_dim)
-        self.coords_knorm = RMSNorm(inner_dim)
+        self.coords_to_qk = nn.Sequential(
+            nn.Linear(coords_dim, inner_dim * 2, bias=False), RMSNorm(inner_dim * 2)
+        )
 
         dim_head = inner_dim // num_heads
         self.attention_map = AttentionMap(dim_head, relative_pos=True, rel_pos_dim_head=dim_head)
@@ -85,7 +86,6 @@ class ValuesCoordinatesAttentionInternal(nn.Module):
         qv, kv, vv = self.values_to_qkv(values).chunk(3, dim=-1)
         qv, kv = self.values_qnorm(qv), self.values_knorm(kv)  # RMSNorm
         qc, kc = self.coords_to_qk(coords).chunk(2, dim=-1)
-        qc, kc = self.coords_qnorm(qc), self.coords_knorm(kc)
 
         # Reshape to split into multiple heads
         qv, kv, vv = map(
