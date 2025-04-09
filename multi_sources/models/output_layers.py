@@ -84,8 +84,8 @@ class SourcetypeProjection0d(nn.Module):
 
     def forward(self, values, cond, **unused_kwargs):
         """Args:
-            values (torch.Tensor): Embedded values of shape (B, L=1, D).
-            cond (torch.Tensor): Embedded conditioning of shape (B, L=1, D).
+            values (torch.Tensor): Embedded values of shape (B, D).
+            cond (torch.Tensor): Embedded conditioning of shape (B, D).
         Returns:
             torch.Tensor of shape (B, C) containing the projected output.
         """
@@ -93,5 +93,5 @@ class SourcetypeProjection0d(nn.Module):
         shift, scale = self.modulation(cond).chunk(2, dim=-1)
         v = (1 + scale) * self.norm(values) + shift
         # Project to output space
-        v = self.output_proj(v)[:, 0]  # (B, C)
+        v = self.output_proj(v)
         return v

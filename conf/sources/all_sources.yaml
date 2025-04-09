@@ -38,4 +38,6 @@ tc_primed:
     input_only: ["sst"]
   infrared:
     variables: ['IRWIN']
+  storm_metadata:
+    variables: ['intensity']
 

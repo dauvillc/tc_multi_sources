@@ -251,13 +251,10 @@ def display_realizations(sol, batch, avail_flags, save_filepath_prefix, determin
                         )
                         ax.set_yticklabels([f"{val:.2f}" for val in y_vals[0::step_y]])
                     else:  # For 0D or 1D data
-                        pred = pred[0].detach().cpu().numpy()
-                        ax.bar(range(len(pred)), pred)
-                        (
-                            ax.set_ylim([0, 1.2 * pred.max()])
-                            if pred.max() > 0
-                            else ax.set_ylim([1.2 * pred.min(), 0])
-                        )
+                        if len(pred.shape) == 1:
+                            pred = pred[0]
+                        pred = pred.item()
+                        ax.bar([0], [pred], color="orange")
 
                     ax.set_title(f"Prediction {r_idx+1}")
                 else:
@@ -281,14 +278,11 @@ def display_realizations(sol, batch, avail_flags, save_filepath_prefix, determin
                 ax.set_yticks(range(0, h, step_y))
                 ax.set_xticklabels([f"{val:.2f}" for val in x_vals[0::step_x]], rotation=45)
                 ax.set_yticklabels([f"{val:.2f}" for val in y_vals[0::step_y]])
-            else:  # For 0D or 1D data
-                true = true[0].detach().cpu().numpy()
-                ax.bar(range(len(true)), true)
-                (
-                    ax.set_ylim([0, 1.2 * true.max()])
-                    if true.max() > 0
-                    else ax.set_ylim([1.2 * true.min(), 0])
-                )
+            else:
+                if len(true.shape) == 1:
+                    true = true[0]
+                true = true.item()
+                ax.bar([0], [true], color="orange")
 
             ax.set_title(f"Ground Truth")
 

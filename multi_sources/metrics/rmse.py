@@ -24,10 +24,11 @@ def multisource_rmse(y_pred, batch, avail_flags, **unused_kwargs):
         y_true_s = batch[source]["values"]
         avail_flag_s = avail_flags[source] == 0
         avail_mask_s = batch[source]["avail_mask"].unsqueeze(1)  # (B, 1, ...)
-        avail_mask_s = avail_mask_s[avail_flag_s] > -1  # True at every available point
 
         y_true_s = y_true_s[avail_flag_s]
         y_pred_s = y_pred_s[avail_flag_s]
+        avail_mask_s = avail_mask_s[avail_flag_s] >= 0
+        avail_mask_s = avail_mask_s.expand_as(y_pred_s)  # (B, C, ...)
 
         # If the avail_flag was never 0, we can skip the computation
         if y_true_s.numel() == 0:
@@ -35,7 +36,7 @@ def multisource_rmse(y_pred, batch, avail_flags, **unused_kwargs):
 
         # Squared error
         se_s = torch.pow(y_pred_s - y_true_s, 2)  # (B, C, ...)
-        se_s[~avail_mask_s] = 0 # Ignore the values that were unavailable
+        se_s[~avail_mask_s] = 0  # Ignore the values that were unavailable
         # Compute the mean over each sample. We can't just call mean() as the
         # points set to zero would bias the result. We need to compute the sum
         # and divide by the number of non-masked values.

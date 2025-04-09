@@ -367,11 +367,13 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                     V = np.stack([load_nc_with_nan(ds[var]) for var in source.data_vars], axis=0)
                     V = torch.tensor(V, dtype=torch.float32)
 
-                    # The values can contain borders that are fully NaN (due to the sources
-                    # originally having multiple channels that are not aligned geographically).
-                    # Compute how much we can crop them, and apply that cropping to all spatial
-                    # tensors to keep the spatial alignment.
-                    V, C, LM, D = crop_nan_border(V, [V, C, LM, D])
+                    if source.dim == 2:
+                        # For images only.
+                        # The values can contain borders that are fully NaN (due to the sources
+                        # originally having multiple channels that are not aligned geographically).
+                        # Compute how much we can crop them, and apply that cropping to all spatial
+                        # tensors to keep the spatial alignment.
+                        V, C, LM, D = crop_nan_border(V, [V, C, LM, D])
 
                     # Normalize the characs and values tensors
                     CA, V = self.normalize(V, source, CA)

@@ -72,16 +72,11 @@ class MultisourcesAnchoredCrossAttention(nn.Module):
             V, C = source_inputs["embedded_values"], source_inputs["embedded_coords"]
             spatial_dims = V.shape[1:-1]
 
-            # For 1D sources, simply select the anchor points at regular intervals. 0D sources
-            # are just 1D sources of length 1, so we can handle them here as well.
-            if len(spatial_dims) == 1:
-                n = spatial_dims[0]  # Number of tokens in the sequence
-                n_anchor_points = n // self.anchor_points_spacing
-                indices = torch.linspace(0, n - 1, n_anchor_points).long().to(V.device)
-                anchor_values[source_name] = V[:, indices]
-                anchor_coords[source_name] = C[:, indices]
-                # Save the indices for later
-                anchor_indices[source_name] = indices
+            # For 0D sources, there's a single token, which will be the anchor point.
+            if len(spatial_dims) == 0:
+                anchor_values[source_name] = V.unsqueeze(1)  # "Sequence" of 1 token
+                anchor_coords[source_name] = C.unsqueeze(1)
+                n_anchor_points = 1 
 
             # For 2D sources, we want to select the anchor points in a grid pattern.
             elif len(spatial_dims) == 2:
@@ -119,10 +114,9 @@ class MultisourcesAnchoredCrossAttention(nn.Module):
             V = source_inputs["embedded_values"].clone()
             spatial_dims = V.shape[1:-1]
 
-            if len(spatial_dims) == 1:
-                indices = anchor_indices[source_name]
-                anchor_values_i = anchor_values[i]
-                V[:, indices] += anchor_values_i
+            if len(spatial_dims) == 0:
+                # For 0D sources, just sum the updated anchor token to the original token
+                V += anchor_values[i].squeeze(1) # (B, 1, Dv) to (B, Dv)
 
             elif len(spatial_dims) == 2:
                 anchor_rows, anchor_cols = anchor_indices[source_name]
