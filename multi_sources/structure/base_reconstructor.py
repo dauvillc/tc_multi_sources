@@ -9,7 +9,7 @@ import torch.nn as nn
 
 # Local module imports
 from multi_sources.structure.base_module import MultisourceAbstractModule
-from multi_sources.models.embedding_layers import SourcetypeEmbedding2d
+from multi_sources.models.embedding_layers import SourcetypeEmbedding2d, SourcetypeEmbedding0d
 from multi_sources.models.output_layers import (
     SourcetypeProjection0d,
     SourcetypeProjection2d,
@@ -134,10 +134,22 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
                     )
                     self.sourcetype_output_projs[source.type] = SourcetypeProjection2d(
                         self.values_dim,
-                        self.coords_dim,
                         n_output_channels,
                         self.patch_size,
                     )
+                elif source.dim == 0:
+                    self.sourcetype_embeddings[source.type] = SourcetypeEmbedding0d(
+                        source.n_data_variables(),
+                        self.values_dim,
+                        self.coords_dim,
+                        source.n_charac_variables(),
+                        use_diffusion_t=self.use_diffusion_t,
+                    )
+                    self.sourcetype_output_projs[source.type] = SourcetypeProjection0d(
+                        self.values_dim,
+                        n_output_channels,
+                    )
+
             else:
                 # Check that the number of characs variables is the same for all sources
                 # of the same type
@@ -237,12 +249,12 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
         pred = self.backbone(x)
 
         for source, v in pred.items():
-            # Embedded coords for the final modulation
-            c = x[source]["embedded_coords"]
+            # Embedded conditioning for the final modulation
+            cond = x[source]["conditioning"]
             # Project from latent values space to output space using the output layer
             # corresponding to the source type
             src_type = self.sources[source].type
-            pred[source] = self.sourcetype_output_projs[src_type](v, c)
+            pred[source] = self.sourcetype_output_projs[src_type](v, cond)
         # For 2D sources, remove the padding
         for source, spatial_shape in spatial_shapes.items():
             pred[source] = pred[source][..., : spatial_shape[0], : spatial_shape[1]]

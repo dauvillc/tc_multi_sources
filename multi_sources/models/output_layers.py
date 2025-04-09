@@ -8,17 +8,16 @@ from einops.layers.torch import Rearrange
 
 
 class SourcetypeProjection2d(nn.Module):
-    """Receives the embedded values and coordinates of a source and projects them to
+    """Receives the embedded values and conditioning of a source and projects them to
     that source's original space. Meant to be shared across all sources of the same type.
     """
 
     def __init__(
-        self, values_dim, coords_dim, out_channels, patch_size, **unused_kwargs
+        self, values_dim, out_channels, patch_size, **unused_kwargs
     ):
         """
         Args:
             values_dim (int): Dimension of the values embeddings.
-            coords_dim (int): Dimension of the coordinates embeddings.
             out_channels (int): Number of channels in the output space.
             patch_size (int): Size of the embedding patches.
         """
@@ -26,7 +25,7 @@ class SourcetypeProjection2d(nn.Module):
         self.patch_size = patch_size
 
         self.norm = nn.LayerNorm(values_dim)
-        self.modulation = nn.Sequential(nn.SiLU(), nn.Linear(coords_dim, 2 * values_dim))
+        self.modulation = nn.Sequential(nn.SiLU(), nn.Linear(values_dim, 2 * values_dim))
         # Subpixel convolution to project the latent space to the output space
         self.conv = nn.Conv2d(
             in_channels=values_dim,
@@ -46,16 +45,16 @@ class SourcetypeProjection2d(nn.Module):
         )
         self.conv.weight.data.copy_(weight)
 
-    def forward(self, values, coords, **unused_kwargs):
+    def forward(self, values, cond, **unused_kwargs):
         """
         Args:
             values (torch.Tensor): Embedded values of shape (B, h, w, Dv).
-            coords (torch.Tensor): Embedded coordinates of shape (B, h, w, Dc).
+            cond (torch.Tensor): Embedded conditioning of shape (B, h, w, Dv).
         Returns:
             torch.Tensor of shape (B, channels, H, W) containing the projected output.
         """
         # Apply the modulation to the values embeddings
-        shift, scale = self.modulation(coords).chunk(2, dim=-1)
+        shift, scale = self.modulation(cond).chunk(2, dim=-1)
         v = (1 + scale) * self.norm(values) + shift
         # Transpose x from (B, h, w, Dv) to (B, Dv, h, w)
         v = v.permute(0, 3, 1, 2)
@@ -69,30 +68,29 @@ class SourcetypeProjection2d(nn.Module):
 
 
 class SourcetypeProjection0d(nn.Module):
-    """Receives the embedded values and coordinates of a 0D source and projects them to
+    """Receives the embedded values and conditioning of a 0D source and projects them to
     that source's original space. Meant to be shared across all sources of the same type."""
 
-    def __init__(self, values_dim, coords_dim, out_channels, patch_size=None):
+    def __init__(self, values_dim, out_channels, **unused_kwargs):
         """Args:
         values_dim (int): Dimension of the values embeddings.
-        coords_dim (int): Dimension of the coordinates embeddings.
         out_channels (int): Number of channels in the output space.
-        patch_size (int, optional): Not used for 0D sources, kept for API consistency.
+        **unused_kwargs: Unused arguments.
         """
         super().__init__()
         self.norm = nn.LayerNorm(values_dim)
-        self.modulation = nn.Sequential(nn.SiLU(), nn.Linear(coords_dim, 2 * values_dim))
+        self.modulation = nn.Sequential(nn.SiLU(), nn.Linear(values_dim, 2 * values_dim))
         self.output_proj = nn.Linear(values_dim, out_channels)
 
-    def forward(self, values, coords, **unused_kwargs):
+    def forward(self, values, cond, **unused_kwargs):
         """Args:
             values (torch.Tensor): Embedded values of shape (B, L=1, D).
-            coords (torch.Tensor): Embedded coordinates of shape (B, L=1, D).
+            cond (torch.Tensor): Embedded conditioning of shape (B, L=1, D).
         Returns:
             torch.Tensor of shape (B, C) containing the projected output.
         """
         # Apply the modulation to the values embeddings
-        shift, scale = self.modulation(coords).chunk(2, dim=-1)
+        shift, scale = self.modulation(cond).chunk(2, dim=-1)
         v = (1 + scale) * self.norm(values) + shift
         # Project to output space
         v = self.output_proj(v)[:, 0]  # (B, C)
