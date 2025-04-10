@@ -126,6 +126,7 @@ def main(cfg: DictConfig):
         logger=logger,
         log_every_n_steps=500,
         callbacks=callbacks,
+        deterministic=True,
         **cfg["trainer"],
     )
 
