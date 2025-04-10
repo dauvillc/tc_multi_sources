@@ -47,7 +47,6 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         select_most_recent=False,
         forecasting_lead_time=None,
         forecasting_sources=None,
-        forecasting_source=None,
         include_seasons=None,
         exclude_seasons=None,
         randomly_drop_sources={},
@@ -175,12 +174,14 @@ class MultiSourceDataset(torch.utils.data.Dataset):
             raise ValueError("No elements available for the selected sources and seasons.")
 
         if forecasting_lead_time is not None:
-            if forecasting_source is not None:
-                forecasting_sources = [forecasting_source]
             if forecasting_sources is None:
                 raise ValueError("forecasting_lead_time must be used with forecasting_sources.")
+            if not isinstance(forecasting_sources, list):
+                forecasting_sources = [forecasting_sources]
             self.forecasting_lead_time = pd.Timedelta(forecasting_lead_time, unit="h")
             self.forecasting_sources = [s for s in forecasting_sources if s in source_names]
+            print("Forecasting sources: ", self.forecasting_sources)
+            print("Forecasting lead time: ", self.forecasting_lead_time)
         else:
             self.forecasting_lead_time = pd.Timedelta(0, unit="h")
             self.forecasting_sources = None
