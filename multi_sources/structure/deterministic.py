@@ -114,7 +114,9 @@ class MultisourceDeterministicReconstructor(MultisourceAbstractReconstructor):
         for source, data in y.items():
             v = data["embedded_values"]
             where_masked = x[source]["avail"] == 0
-            v[where_masked] = self.mask_token.view((1,) * (v.dim() - 1) + (-1,))
+            where_masked = where_masked.view((where_masked.shape[0],) + (1,) * (v.dim() - 1))
+            token = self.mask_token.view((1,) * (v.dim() - 1) + (-1,))
+            data['embedded_values'] = torch.where(where_masked, token, v)
 
         return y
 
@@ -151,7 +153,7 @@ class MultisourceDeterministicReconstructor(MultisourceAbstractReconstructor):
             masked_data["avail_mask"][avail_flag == 0] = 0
             masked_x[source] = masked_data
         return masked_x
-    
+
     def compute_loss(self, pred, batch, masked_batch):
         # Retrieve the availability flag for each source updated after masking
         avail_flag = {source: data["avail"] for source, data in masked_batch.items()}
@@ -245,7 +247,7 @@ class MultisourceDeterministicReconstructor(MultisourceAbstractReconstructor):
                     avail_flags,
                     self.validation_dir / f"realizations_{batch_idx}",
                     deterministic=True,
-                    display_fraction=0.25
+                    display_fraction=0.25,
                 )
 
         # Evaluate the metrics
@@ -261,7 +263,7 @@ class MultisourceDeterministicReconstructor(MultisourceAbstractReconstructor):
                 sync_dist=True,
             )
         return loss
-    
+
     def predict(self, input_batch):
         batch = self.preproc_input(input_batch)
         # Mask the sources
