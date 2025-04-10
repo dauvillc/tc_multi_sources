@@ -46,6 +46,7 @@ class MultisourceDeterministicReconstructor(MultisourceAbstractReconstructor):
         loss_max_distance_from_center=None,
         ignore_land_pixels_in_loss=False,
         normalize_coords_across_sources=False,
+        mask_only_sources=None,
         validation_dir=None,
         metrics={},
     ):
@@ -70,6 +71,8 @@ class MultisourceDeterministicReconstructor(MultisourceAbstractReconstructor):
                 will be normalized across all sources in the batch so that the minimum
                 latitude and longitude in each example is 0 and maximum is 1.
                 If False, the coordinates will be normalized as sinusoïds.
+            mask_only_sources (str or list of str): List of sources to mask. If None, all sources
+                may be masked.
             validation_dir (optional, str or Path): Directory where to save the validation plots.
                 If None, no plots will be saved.
             metrics (dict of str: callable): Metrics to compute during training and validation.
@@ -90,6 +93,7 @@ class MultisourceDeterministicReconstructor(MultisourceAbstractReconstructor):
             loss_max_distance_from_center=loss_max_distance_from_center,
             ignore_land_pixels_in_loss=ignore_land_pixels_in_loss,
             normalize_coords_across_sources=normalize_coords_across_sources,
+            mask_only_sources=mask_only_sources,
             validation_dir=validation_dir,
             metrics=metrics,
         )
@@ -232,7 +236,7 @@ class MultisourceDeterministicReconstructor(MultisourceAbstractReconstructor):
         )
 
         avail_flags = {source: masked_batch[source]["avail"] for source in masked_batch}
-        if self.validation_dir is not None and batch_idx % 5 == 0:
+        if self.validation_dir is not None and batch_idx % 15 == 0:
             # For every 30 batches, make a prediction and display it.
             if batch_idx % 30 == 0:
                 display_realizations(

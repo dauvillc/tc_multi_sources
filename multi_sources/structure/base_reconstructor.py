@@ -52,6 +52,7 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
         loss_max_distance_from_center=None,
         ignore_land_pixels_in_loss=False,
         normalize_coords_across_sources=False,
+        mask_only_sources=None,
         validation_dir=None,
         metrics={},
     ):
@@ -76,6 +77,8 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
                 will be normalized across all sources in the batch so that the minimum
                 latitude and longitude in each example is 0 and maximum is 1.
                 If False, the coordinates will be normalized as sinusoïds.
+            mask_only_sources (str or list of str): List of sources to mask. If None, all sources
+                may be masked.
             validation_dir (optional, str or Path): Directory where to save the validation plots.
                 If None, no plots will be saved.
             metrics (dict of str: callable): Metrics to compute during training and validation.
@@ -106,6 +109,11 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
 
         # Initialize the embedding layers
         self.init_embedding_layers()
+
+        if mask_only_sources is not None:
+            if isinstance(mask_only_sources, str):
+                mask_only_sources = [mask_only_sources]
+            self.mask_only_sources = set(mask_only_sources)
 
     def init_embedding_layers(self):
         """Initializes the weights of the embedding layers."""
@@ -198,30 +206,48 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
         batch_size = any_elem.shape[0]
         device = any_elem.device
 
-        if masking_seed is not None:
-            self.source_select_gen.manual_seed(int(masking_seed))
-        # Select the sources to mask, which can differ between samples in the batch.
-        # Missing sources cannot be masked.
-        # Strategy: we'll generate a random noise tensor of shape (B, n_sources)
-        # and for each row, mask the sources with the highest noise.
-        noise = torch.rand((batch_size, n_sources), generator=self.source_select_gen).to(device)
-        for i, (source, data) in enumerate(x.items()):
-            # Multiply the noise by the availability mask (-1 for missing sources, 1 otherwise)
-            noise[:, i] = noise[:, i] * data["avail"].squeeze(-1)
-        # Gather the indices of the sources to mask for each sample
-        _, sources_to_mask = noise.topk(self.n_sources_to_mask, dim=1)  # (B, n_sources_to_mask)
-        # Deduce a matrix M of shape (B, n_sources) such that M[b, i] = 1 if the source i
-        # should be masked for the sample b, and 0 otherwise.
-        masked_sources_matrix = torch.zeros(
-            (batch_size, n_sources), dtype=torch.bool, device=device
-        )  # (B, n_sources)
-        masked_sources_matrix.scatter_(1, sources_to_mask, True)
-        # Deduce the availability flags for each source
-        avail_flags = {}
-        for i, (source, data) in enumerate(x.items()):
-            avail_flag = data["avail"].clone()
-            avail_flag[masked_sources_matrix[:, i]] = 0
-            avail_flags[source] = avail_flag
+        if self.mask_only_sources is not None:
+            # Case where there are pre-determined sources to mask. In this case,
+            # we mask those whenever they are available.
+            avail_flags = {}
+            for source, data in x.items():
+                avail_flag = data["avail"].clone()
+                if source in self.mask_only_sources:
+                    avail_flag[avail_flag == 1] = 0
+                avail_flags[source] = avail_flag
+            # We need to check that for each sample, at least one source has been masked.
+            total_avail_flag = sum([flag == 0 for flag in avail_flags.values()])
+            if (total_avail_flag == 0).any():
+                raise ValueError(
+                    "At least one sample has no sources to mask. "
+                    "Please check the mask_only_sources argument."
+                )
+
+        else:
+            if masking_seed is not None:
+                self.source_select_gen.manual_seed(int(masking_seed))
+            # Select the sources to mask, which can differ between samples in the batch.
+            # Missing sources cannot be masked.
+            # Strategy: we'll generate a random noise tensor of shape (B, n_sources)
+            # and for each row, mask the sources with the highest noise.
+            noise = torch.rand((batch_size, n_sources), generator=self.source_select_gen).to(device)
+            for i, (source, data) in enumerate(x.items()):
+                # Multiply the noise by the availability mask (-1 for missing sources, 1 otherwise)
+                noise[:, i] = noise[:, i] * data["avail"].squeeze(-1)
+            # Gather the indices of the sources to mask for each sample
+            _, sources_to_mask = noise.topk(self.n_sources_to_mask, dim=1)  # (B, n_sources_to_mask)
+            # Deduce a matrix M of shape (B, n_sources) such that M[b, i] = 1 if the source i
+            # should be masked for the sample b, and 0 otherwise.
+            masked_sources_matrix = torch.zeros(
+                (batch_size, n_sources), dtype=torch.bool, device=device
+            )  # (B, n_sources)
+            masked_sources_matrix.scatter_(1, sources_to_mask, True)
+            # Deduce the availability flags for each source
+            avail_flags = {}
+            for i, (source, data) in enumerate(x.items()):
+                avail_flag = data["avail"].clone()
+                avail_flag[masked_sources_matrix[:, i]] = 0
+                avail_flags[source] = avail_flag
         return avail_flags
 
     @abstractmethod
