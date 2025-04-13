@@ -1,6 +1,5 @@
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.nn.utils.spectral_norm import spectral_norm
 from .utils import pair
 
 
@@ -32,6 +31,40 @@ class FeedForward(nn.Module):
             values = data["embedded_values"]
             outputs[source_name] = self.net(values)
         return outputs
+
+
+class MLP(nn.Module):
+    def __init__(
+        self, input_dim, n_hidden_layers, inner_ratio, dropout=0.0, act_layer=nn.GELU, **kwargs
+    ):
+        super().__init__()
+        inner_dim = input_dim * inner_ratio
+        self.input_layer = nn.Sequential(
+            nn.Linear(input_dim, inner_dim),
+            act_layer(),
+            nn.Dropout(dropout),
+        )
+        self.hidden_layers = nn.ModuleList(
+            [
+                nn.Sequential(
+                    nn.Linear(inner_dim, inner_dim),
+                    act_layer(),
+                    nn.Dropout(dropout),
+                )
+                for _ in range(n_hidden_layers)
+            ]
+        )
+        self.output_layer = nn.Sequential(
+            nn.Linear(inner_dim, input_dim),
+            nn.Dropout(dropout),
+        )
+
+    def forward(self, x):
+        x = self.input_layer(x)
+        for layer in self.hidden_layers:
+            x = layer(x)
+        x = self.output_layer(x)
+        return x
 
 
 class SwiGLU(nn.Module):
@@ -132,36 +165,3 @@ class RMSNorm(nn.Module):
             x
         )
         return x_normed * self.scale
-
-
-class PatchMerging(nn.Module):
-    """Implements the patch merging of Swin Transformer."""
-
-    def __init__(self, input_dim):
-        super().__init__()
-        self.norm = nn.LayerNorm(4 * input_dim)
-        self.reduction = nn.Linear(4 * input_dim, 2 * input_dim, bias=False)
-
-    def forward(self, x):
-        """
-        Args:
-            x (torch.Tensor): Input tensor of shape (B, H, W, C).
-        Returns:
-            torch.Tensor: Output tensor of shape (B, H//2, W//2, C*2).
-        """
-        # Pad the input tensor to have spatial dims divisible by 2
-        B, H, W, C = x.shape
-        if H % 2 != 0 or W % 2 != 0:
-            x = F.pad(x, (0, 0, 0, W % 2, 0, H % 2), mode="constant", value=0)
-
-        # Stack the corners of each 4x4 patch
-        x0 = x[:, 0::2, 0::2, :]
-        x1 = x[:, 1::2, 0::2, :]
-        x2 = x[:, 0::2, 1::2, :]
-        x3 = x[:, 1::2, 1::2, :]
-        x = torch.cat([x0, x1, x2, x3], dim=-1)  # (B, H//2, W//2, 4*C)
-
-        # Reduce the dimensionality and normalize
-        x = self.norm(x)
-        x = self.reduction(x)
-        return x
