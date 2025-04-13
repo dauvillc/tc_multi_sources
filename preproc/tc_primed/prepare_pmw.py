@@ -54,6 +54,7 @@ IGNORE = [
     "F19_S1",
     "F19_S3",
     "TRMM_S1",
+    "MHS_METOPA_S1",  # To be removed for 89GHz experiments
 ]
 
 
@@ -270,6 +271,7 @@ def main(cfg):
     # Resolution of the target grid, in degrees
     regridding_res = cfg["regridding_resolution"]
     check_exist = cfg.get("check_exist", False)
+    process_only = cfg.get("process_only", None)
 
     # Get PMW sources only
     sources, source_files, source_groups = list_tc_primed_sources(
@@ -277,6 +279,11 @@ def main(cfg):
     )
     pmw_files = {s: files for s, files in source_files.items() if s.startswith("pmw_")}
     pmw_groups = {s: source_groups[s] for s in pmw_files.keys()}
+
+    # Optionally: process only a specific source
+    if process_only:
+        pmw_files = {process_only: pmw_files[process_only]}
+        pmw_groups = {process_only: pmw_groups[process_only]}
 
     # Remove ignored sources
     for source_name_part in IGNORE:
