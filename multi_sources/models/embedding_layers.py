@@ -256,7 +256,7 @@ class SourcetypeEmbedding0d(nn.Module):
         self.coords_norm = nn.LayerNorm(coords_dim)
         
         # Conditioning embedding layers
-        self.cond_embedding = nn.Linear(1, coords_dim)
+        self.cond_embedding = nn.Linear(1, values_dim)
         if self.use_diffusion_t:
             self.diffusion_t_embedding = nn.Linear(1, values_dim)
         if n_charac_vars > 0:

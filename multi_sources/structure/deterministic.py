@@ -264,14 +264,14 @@ class MultisourceDeterministicReconstructor(MultisourceAbstractReconstructor):
             )
         return loss
 
-    def predict(self, input_batch):
+    def predict_step(self, input_batch, batch_idx):
         batch = self.preproc_input(input_batch)
         # Mask the sources
         masked_batch = self.mask(batch)
         # Make predictions
         pred = self.forward(masked_batch)
-        return pred
-
-    def predict_step(self, input_batch, batch_idx):
-        pred = self.predict(input_batch)
-        return pred
+        # Fetch the availability flags for each source, so that
+        # whatever processes the output can know which elements
+        # were masked.
+        avail_flags = {source: masked_batch[source]["avail"] for source in masked_batch}
+        return pred, avail_flags

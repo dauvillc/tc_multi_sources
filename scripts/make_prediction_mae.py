@@ -1,12 +1,14 @@
 import lightning.pytorch as pl
 import hydra
+import torch
+
 from torch.utils.data import DataLoader
 from pathlib import Path
 from hydra.utils import get_class, instantiate
 from omegaconf import DictConfig, OmegaConf
-from multi_sources.data_processing.writer_mae import MultiSourceWriter
+
+from multi_sources.data_processing.writer import MultiSourceWriter
 from multi_sources.data_processing.collate_fn import multi_source_collate_fn
-from multi_sources.models.recorder import AttentionRecorder
 from utils.checkpoints import load_experiment_cfg_from_checkpoint
 
 
@@ -28,21 +30,18 @@ def main(cfg: DictConfig):
     split = "val"
     if "split" in cfg and cfg["split"] is not None:
         split = cfg["split"]
-    if split == "test" and "test" not in exp_cfg["dataset"]:
-        exp_cfg["dataset"]["test"] = exp_cfg["dataset"]["val"]
-        exp_cfg['dataset']["test"]["split"] = "test"
     exp_cfg["dataset"][split]["dataset_dir"] = cfg["paths"]["preprocessed_dataset"]
     # Seed everything with the seed used in the experiment
     pl.seed_everything(exp_cfg["seed"], workers=True)
 
-    # Create the validation dataset and dataloader
-    val_dataset = hydra.utils.instantiate(
+    # Create the dataset and dataloader
+    dataset = hydra.utils.instantiate(
         exp_cfg["dataset"][split],
     )
-    val_dataloader = DataLoader(
-        val_dataset, **exp_cfg["dataloader"], shuffle=False, collate_fn=multi_source_collate_fn
+    dataloader = DataLoader(
+        dataset, **exp_cfg["dataloader"], shuffle=False, collate_fn=multi_source_collate_fn
     )
-    print("Validation dataset size:", len(val_dataset))
+    print("Dataset size:", len(dataset), f" ({split} split)")
 
     # Create the results directory
     run_results_dir = Path(cfg["paths"]["predictions"]) / run_id
@@ -51,31 +50,26 @@ def main(cfg: DictConfig):
         (run_results_dir / "info.csv").unlink()
 
     # Instantiate the model and the lightning module
-    backbone = instantiate(exp_cfg["model"]["backbone"])
-
-    lightning_module_class = get_class(exp_cfg["lightning_module"]["_target_"])
-    module = lightning_module_class.load_from_checkpoint(
-        checkpoint_path,
-        sources=val_dataset.sources,
-        backbone=backbone,
-        cfg=exp_cfg,
+    pl_module = instantiate(
+        exp_cfg["lightning_module"],
+        dataset.sources,
+        exp_cfg,
+        validation_dir=None
     )
+    ckpt = torch.load(checkpoint_path)
+    pl_module.load_state_dict(ckpt["state_dict"])
 
-    # If we are saving the attention maps, wrap the decoder with the AttentionRecorder class
-    if cfg["save_attention_maps"]:
-        maps_dir = run_results_dir / "attention_maps"
-        maps_dir.mkdir(parents=True, exist_ok=True)
-        module.backbone = AttentionRecorder(module.backbone, maps_dir)
+    # Custom BasePredictionWriter to save the preds and targets with metadata (eg coords).
+    writer = MultiSourceWriter(run_results_dir, dataset.dt_max, dataset=dataset)
 
-    # Make predictions using the MultiSourceWriter class, which is a custom implementation of
-    # BasePredictionWriter.
-    module.eval()
-    writer = MultiSourceWriter(run_results_dir, val_dataset.dt_max, dataset=val_dataset)
     trainer = pl.Trainer(
         **cfg["trainer"],
         callbacks=[writer],
+        deterministic=True,
+        logger=False,
+        max_epochs=1,
     )
-    trainer.predict(module, val_dataloader)
+    trainer.predict(pl_module, dataloader)
 
 
 if __name__ == "__main__":
