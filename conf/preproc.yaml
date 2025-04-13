@@ -14,4 +14,4 @@ max_mem_per_worker: "3.8GB"
 
 # Seed for the train-val-test splitting
 splitting_seed: 42
-train_val_test_fraction: [0.8, 0.1, 0.1]
+train_val_test_fraction: [0.7, 0.15, 0.15]
