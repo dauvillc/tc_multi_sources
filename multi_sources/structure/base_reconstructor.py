@@ -110,6 +110,7 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
         # Initialize the embedding layers
         self.init_embedding_layers()
 
+        self.mask_only_sources = None
         if mask_only_sources is not None:
             if isinstance(mask_only_sources, str):
                 mask_only_sources = [mask_only_sources]
