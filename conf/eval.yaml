@@ -2,26 +2,11 @@
 
 defaults:
   - paths: jz
+  - eval_class: null
   - _self_
 
 run_id: ???
 num_workers: 9
-
-evaluation_classes:
-  visual:
-    _target_: multi_sources.eval.visualization.VisualEvaluation
-    eval_fraction: 0.05
-  # quantitative:
-  #   _target_: multi_sources.eval.quantitative.QuantitativeEvaluation
-  #   displayed_names:
-  #     tc_primed_storm_metadata: 'Best Track'
-  #   displayed_units:
-  #     tc_primed_storm_metadata: 'kts'
-  # storm_metadata:
-  #   _target_: multi_sources.eval.scalar_evaluation.ScalarEvaluation
-  #   source_name: tc_primed_storm_metadata
-  #   var_names: ['intensity']
-  #   var_units: ['knots']
 
 
 

@@ -1,0 +1,6 @@
+quantitative:
+  _target_: multi_sources.eval.quantitative.QuantitativeEvaluation
+  displayed_names:
+    tc_primed_storm_metadata: 'Best Track'
+  displayed_units:
+    tc_primed_storm_metadata: 'kts'

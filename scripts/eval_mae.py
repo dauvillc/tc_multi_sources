@@ -69,11 +69,11 @@ def main(cfg: DictConfig):
     results_dir.mkdir(parents=True, exist_ok=True)
 
     # Instantiate the evaluation classes
-    evaluation_classes = cfg["evaluation_classes"]
+    evaluation_classes = cfg["eval_class"]
     evaluators = {}
     print("Building evaluation classes")
-    for eval_name, evaluator_cfg in evaluation_classes.items():
-        evaluator = instantiate(evaluator_cfg, predictions_dir=root_dir, results_dir=results_dir)
+    for eval_name, eval_class in evaluation_classes.items():
+        evaluator = instantiate(eval_class, predictions_dir=root_dir, results_dir=results_dir)
         evaluators[eval_name] = evaluator
 
     # For each evaluator, evaluate each source
