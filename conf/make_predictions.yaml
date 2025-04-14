@@ -10,6 +10,5 @@ trainer:
 dataloader:
   num_workers: 9
 
-save_attention_maps: True
 use_groundtruth_for_unmasked_tokens: True
 run_id: ???
