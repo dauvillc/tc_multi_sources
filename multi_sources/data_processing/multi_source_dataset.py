@@ -117,7 +117,6 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         self.dt_max = pd.Timedelta(dt_max, unit="h")
         self.select_most_recent = select_most_recent
         self.min_available_sources = min_available_sources
-        self.randomly_drop_sources = randomly_drop_sources
         self.mask_spatial_coords = mask_spatial_coords
         self.data_augmentation = data_augmentation
         self.rng = np.random.default_rng(seed)
@@ -172,12 +171,34 @@ class MultiSourceDataset(torch.utils.data.Dataset):
             self.df = self.df[~self.df["season"].isin(exclude_seasons)]
         if len(self.df) == 0:
             raise ValueError("No elements available for the selected sources and seasons.")
+        
+        # Random dropping of sources: the user can use "prefix*" to indicate all
+        # sources starting with a given prefix.
+        self.randomly_drop_sources = {}
+        for source_name, p in randomly_drop_sources.items():
+            if source_name.endswith("*"):
+                # Get the prefix
+                prefix = source_name[:-1]
+                # Get all sources starting with the prefix
+                sources_to_drop = [s.name for s in self.sources if s.name.startswith(prefix)]
+                for source_to_drop in sources_to_drop:
+                    self.randomly_drop_sources[source_to_drop] = p
+            else:
+                self.randomly_drop_sources[source_name] = p
+
 
         if forecasting_lead_time is not None:
             if forecasting_sources is None:
                 raise ValueError("forecasting_lead_time must be used with forecasting_sources.")
             if not isinstance(forecasting_sources, list):
                 forecasting_sources = [forecasting_sources]
+            # Check that none of the forecast sources are in the randomly dropped sources
+            for source in forecasting_sources:
+                if source in self.randomly_drop_sources:
+                    raise ValueError(
+                        f"Cannot randomly drop the forecasting source {source}."
+                        " It must be available for the sample."
+                    )
             self.forecasting_lead_time = pd.Timedelta(forecasting_lead_time, unit="h")
             self.forecasting_sources = [s for s in forecasting_sources if s in source_names]
             print("Forecasting sources: ", self.forecasting_sources)
@@ -287,16 +308,22 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         sid, t0 = sample["sid"], sample["time"]
         # Isolate the rows of self.df corresponding to the sample sid
         sample_df = self.sid_to_df[sid]
+
+        # Max number of sources that can be dropped
+        max_dropped_sources = sample['n_available_sources'] - self.min_available_sources
+        # Counter for the number of sources that have been randomly dropped
+        n_dropped_sources = 0
+        # If randomly dropping sources, shuffle the sources so that the dropping
+        # is uniform across the sources.
+        sources = self.sources
+        if len(self.randomly_drop_sources) > 0:
+            # Shuffle the sources so that the dropping is uniform across the sources.
+            self.rng.shuffle(sources)
+
         # For each source, try to load the element at the given time
         output = {}
-        for source in self.sources:
+        for source in sources:
             source_name = source.name
-            # Random dropping: check if the source should be dropped
-            if source_name in self.randomly_drop_sources:
-                p = self.randomly_drop_sources[source_name]
-                if np.random.rand() < p:
-                    # Skip the source
-                    continue
 
             # If forecast source: if it is the reference source, include it;
             # otherwise, skip it.
@@ -330,6 +357,17 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                 df = df.sample(frac=1)
             # Check if there is at least one element available for this source
             if len(df) > 0:
+                # Check if the source should be randomly dropped. The source
+                # cannot be randomly dropped if it would result in a sample with less than
+                # min_available_sources sources.
+                if source_name in self.randomly_drop_sources:
+                    # Get the probability of dropping the source
+                    p = self.randomly_drop_sources[source_name]
+                    # Randomly drop (ie skip) the source with probability p
+                    if n_dropped_sources < max_dropped_sources and self.rng.random() < p:
+                        n_dropped_sources += 1
+                        continue 
+
                 time = df["time"].iloc[0]
                 dt = t0 - self.forecasting_lead_time - time
                 DT = torch.tensor(

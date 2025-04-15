@@ -14,7 +14,10 @@ train:
   min_available_sources: ???
   # Number of workers for the data loading
   num_workers: ${dataloader.num_workers}
-  # By default, don't drop any sources
+  # Dict {source_name: drop_probability} to randomly drop sources
+  # with the given probability. Sources won't be dropped if
+  # the sample has less than min_available_sources sources.
+  # Writing "prefix*" will be valid for all sources starting with "prefix".
   randomly_drop_sources: {}
   # By default, don't select the most recent sources
   select_most_recent: false
