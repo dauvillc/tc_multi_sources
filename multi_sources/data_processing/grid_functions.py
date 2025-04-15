@@ -85,9 +85,9 @@ def crop_nan_border(src_image, tgt_images):
     row_full_nan = torch.isnan(src_image).all(dim=(0, 2)).int()
     col_full_nan = torch.isnan(src_image).all(dim=(0, 1)).int()
     first_row = torch.argmax(~row_full_nan).item()
-    last_row = row_full_nan.size(0) - torch.argmax(~row_full_nan.flip(dims=[0])).item()
+    last_row = row_full_nan.size(0) - torch.argmax(~row_full_nan.flip(dims=[0])).item() + 1
     first_col = torch.argmax(~col_full_nan).item()
-    last_col = col_full_nan.size(0) - torch.argmax(~col_full_nan.flip(dims=[0])).item()
+    last_col = col_full_nan.size(0) - torch.argmax(~col_full_nan.flip(dims=[0])).item() + 1
 
     tgt_images_cropped = []
     for tgt_image in tgt_images:
@@ -95,6 +95,43 @@ def crop_nan_border(src_image, tgt_images):
             tgt_image_cropped = tgt_image[:, first_row:last_row, first_col:last_col]
         else:
             tgt_image_cropped = tgt_image[first_row:last_row, first_col:last_col]
+        tgt_images_cropped.append(tgt_image_cropped)
+    return tgt_images_cropped
+
+
+def crop_nan_border_numpy(src_image, tgt_images):
+    """Computes the smallest rectangle to which a source image can be
+    cropped without losing any non-NaN values; then crops the target images
+    to that rectangle. NumPy implementation.
+
+    Args:
+        src_image (numpy.ndarray): The source image of shape (H, W).
+        tgt_images (list of numpy.ndarray): Target images of shape (H, W).
+
+    Returns:
+        list of numpy.ndarray: The cropped target images.
+    """
+    # Find rows and columns that are all NaN
+    row_full_nan = np.all(np.isnan(src_image), axis=1)
+    col_full_nan = np.all(np.isnan(src_image), axis=0)
+    
+    # Find first and last non-NaN rows and columns
+    non_nan_rows = np.where(~row_full_nan)[0]
+    non_nan_cols = np.where(~col_full_nan)[0]
+    
+    if len(non_nan_rows) == 0 or len(non_nan_cols) == 0:
+        # Return originals if all NaN
+        return tgt_images
+    
+    first_row = non_nan_rows[0]
+    last_row = non_nan_rows[-1] + 1  # Add 1 for exclusive upper bound in slicing
+    first_col = non_nan_cols[0]
+    last_col = non_nan_cols[-1] + 1  # Add 1 for exclusive upper bound in slicing
+
+    # Crop target images
+    tgt_images_cropped = []
+    for tgt_image in tgt_images:
+        tgt_image_cropped = tgt_image[first_row:last_row, first_col:last_col]
         tgt_images_cropped.append(tgt_image_cropped)
     return tgt_images_cropped
 

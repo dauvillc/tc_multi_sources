@@ -70,6 +70,10 @@ def main(cfg: DictConfig):
 
     # Instantiate the evaluation classes
     evaluation_classes = cfg["eval_class"]
+    if evaluation_classes is None:
+        raise ValueError(
+            "No evaluation classes specified. Please specify the evaluation_classes in the config."
+        )
     evaluators = {}
     print("Building evaluation classes")
     for eval_name, eval_class in evaluation_classes.items():

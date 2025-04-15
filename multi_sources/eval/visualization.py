@@ -12,6 +12,7 @@ from concurrent.futures import ProcessPoolExecutor
 from tqdm import tqdm
 from multi_sources.eval.abstract_evaluation_metric import AbstractMultisourceEvaluationMetric
 import matplotlib.gridspec as gridspec
+from multi_sources.data_processing.grid_functions import crop_nan_border_numpy
 
 
 # A little code snippet from Shawn Chin & Peter Mortensen
@@ -168,6 +169,11 @@ def plot_sample(sample_df, targets, preds, results_dir, batch_idx, sample_idx):
         target_ds = targets[source]
         first_channel = list(target_ds.data_vars.keys())[0]
         target = target_ds[first_channel].values
+
+        # Crop NaN borders from target based on the coordinates
+        lat, lon = target_ds.lat.values, target_ds.lon.values
+        target, lat, lon = crop_nan_border_numpy(lat, [target, lat, lon])
+
         dt = sample_df[sample_df["source_name"] == source]["dt"].iloc[0]
         ax.imshow(target, cmap="viridis")
 
@@ -175,7 +181,7 @@ def plot_sample(sample_df, targets, preds, results_dir, batch_idx, sample_idx):
         displayed_name += " - " + first_channel
         title = f"{displayed_name}\n$\delta_t=${strfdelta(dt, '%H:%M:%S')}"
         ax.set_title(title)
-        set_axis_ticks(ax, target_ds.lat.values, target_ds.lon.values)
+        set_axis_ticks(ax, lat, lon)
 
     # Add vertical separator line
     fig.add_subplot(gs[0, num_avail])
@@ -189,9 +195,13 @@ def plot_sample(sample_df, targets, preds, results_dir, batch_idx, sample_idx):
     pred_ds = preds[masked_source]
     pred = pred_ds[first_channel].values
     
+    # Crop NaN borders from target and prediction based on the coordinates
+    lat, lon = target_ds.lat.values, target_ds.lon.values
+    target, pred, lat, lon = crop_nan_border_numpy(lat, [target, pred, lat, lon])
+    
     # Calculate shared min/max values
-    vmin = min(target.min(), pred.min())
-    vmax = max(target.max(), pred.max())
+    vmin = min(np.nanmin(target), np.nanmin(pred))
+    vmax = max(np.nanmax(target), np.nanmax(pred))
 
     # Plot masked source target
     ax = fig.add_subplot(gs[0, -2])
@@ -202,7 +212,8 @@ def plot_sample(sample_df, targets, preds, results_dir, batch_idx, sample_idx):
     displayed_name += " - " + first_channel
     title = f"{displayed_name}\n$\delta_t=${strfdelta(dt, '%H:%M:%S')}\n(MASKED)"
     ax.set_title(title)
-    set_axis_ticks(ax, target_ds.lat.values, target_ds.lon.values)
+    # We don't use the original lat/lon for the cropped image
+    set_axis_ticks(ax, lat, lon)
 
     # Plot prediction
     ax = fig.add_subplot(gs[0, -1])
@@ -211,7 +222,8 @@ def plot_sample(sample_df, targets, preds, results_dir, batch_idx, sample_idx):
     ax.imshow(pred, cmap="viridis", vmin=vmin, vmax=vmax)
     title = f"{displayed_name}\n$\delta_t=${strfdelta(dt, '%H:%M:%S')}{title_suffix}"
     ax.set_title(title)
-    set_axis_ticks(ax, pred_ds.lat.values, pred_ds.lon.values)
+    # We don't use the original lat/lon for the cropped image
+    set_axis_ticks(ax, lat, lon)
 
     # Save the figure
     plt.tight_layout(h_pad=0.2, w_pad=0.4)  # Add specific padding parameters
