@@ -85,8 +85,8 @@ def process_storm_data_file(file, dest_dir, check_exist=False):
             storm_lon = (storm_lon + 180) % 360 - 180
             storm_intensity = ds["intensity"].item()
             ds = ds[DATA_VARS]
-            ds['latitude'] = storm_lat
-            ds['longitude'] = storm_lon
+            ds["latitude"] = storm_lat
+            ds["longitude"] = storm_lon
 
             sample_metadata = {
                 "source_name": "tc_primed_storm_metadata",
@@ -106,7 +106,8 @@ def process_storm_data_file(file, dest_dir, check_exist=False):
 
             # Check if the file already exists. If it does, skip processing.
             if check_exist and dest_file.exists():
-                return sample_metadata
+                samples_metadata.append(sample_metadata)
+                continue
 
             # Compute the land-sea mask
             land_mask = globe.is_land(
@@ -119,8 +120,15 @@ def process_storm_data_file(file, dest_dir, check_exist=False):
             ds["land_mask"] = land_mask
             ds["dist_to_center"] = dist_to_center
 
-            # Save processed data in the netCDF format
+            # Select only the relevant variables
             ds = ds[DATA_VARS + ["latitude", "longitude", "land_mask", "dist_to_center"]]
+            
+            # If any entry is NaN, discard the sample.
+            if ds.isnull().any():
+                print(f"Discarding sample {sid} at time {time} due to NaN values.")
+                continue
+
+            # Save the dataset to a NetCDF file
             ds.to_netcdf(dest_file)
 
             samples_metadata.append(sample_metadata)
@@ -153,6 +161,8 @@ def main(cfg):
     # Resolution of the target grid, in degrees
     regridding_res = cfg["regridding_resolution"]
     check_exist = cfg.get("check_exist", False)
+    # Option to process a single file
+    process_file = cfg.get("process_file", None)
 
     # Get PMW sources only
     sources, source_files, source_groups = list_tc_primed_sources(
@@ -160,6 +170,15 @@ def main(cfg):
         source_type="environmental",
     )
     era5_files = source_files.get("era5", [])
+
+    # If process_file is specified, only process that file
+    if process_file is not None:
+        process_file_path = Path(process_file)
+        if not process_file_path.is_absolute():
+            process_file_path = tc_primed_path / process_file_path
+
+        print(f"Processing only file: {process_file_path}")
+        era5_files = [str(process_file_path)]
 
     source_dest_dir = dest_path / f"tc_primed_storm_metadata"
     # Create destination directory
