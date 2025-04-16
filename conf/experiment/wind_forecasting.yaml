@@ -14,7 +14,7 @@ wandb:
 dataset:
   train:
     dt_max: 24
-    min_available_sources: 3  # ERA5, IR and at least one PMW
+    min_available_sources: 1
     # Parameter to randomly drop the IR and ERA5 sources. Since those are almost
     # always present, we drop them half the time so that the model can still learn
     # not to rely on those.
