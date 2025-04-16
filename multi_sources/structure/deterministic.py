@@ -186,29 +186,6 @@ class MultisourceDeterministicReconstructor(MultisourceAbstractReconstructor):
         # Compute the loss
         loss = self.compute_loss(pred, batch, masked_x)
 
-        # If the loss is NaN or infinite, raise an error and display the input batch
-        # so that we can debug.
-        # if not torch.isfinite(loss) or loss.item() > 0.4:
-        #     avail_flags = {source: masked_x[source]["avail"] for source in masked_x}
-        #     if self.validation_dir is not None:
-        #         # For every 10 batches, make a prediction and display it.
-        #         display_realizations(
-        #             pred,
-        #             input_batch,
-        #             avail_flags,
-        #             self.validation_dir / f"realizations_debug_{batch_idx}",
-        #             deterministic=True,
-        #         )
-        #         # Save the input batch to disk
-        #         for src, data in input_batch.items():
-        #             for key, tensor in data.items():
-        #                 torch.save(tensor, self.validation_dir / f"{src}_{key}_{batch_idx}.pt")
-        #         # Save the preprocessed batch to disk
-        #         for src, data in batch.items():
-        #             for key, tensor in data.items():
-        #                 torch.save(tensor, self.validation_dir / f"{src}_{key}_preproc_{batch_idx}.pt")
-        #     raise ValueError(f"Loss is {loss.item()}")
-
         self.log(
             f"train_loss",
             loss,
