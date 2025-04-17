@@ -23,7 +23,8 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 # Local imports
 from preproc.utils import list_tc_primed_sources
 
-DATA_VARS = ["intensity", "central_min_pressure", "storm_speed", "storm_heading"]
+DATA_VARS = ["intensity"]
+FILL_VALUES = {"intensity": -999.}
 
 
 def initialize_metadata(dest_dir):
@@ -123,9 +124,14 @@ def process_storm_data_file(file, dest_dir, check_exist=False):
             # Select only the relevant variables
             ds = ds[DATA_VARS + ["latitude", "longitude", "land_mask", "dist_to_center"]]
             
-            # If any entry is NaN, discard the sample.
-            if ds.isnull().any():
-                print(f"Discarding sample {sid} at time {time} due to NaN values.")
+            # If any data variable is NaN or its fill value, discard the sample
+            found_nan = False
+            for data_var in DATA_VARS:
+                if np.isnan(ds[data_var].values).any() or np.any(ds[data_var].values == FILL_VALUES[data_var]):
+                    print(f"Discarding sample {sid} at time {time} due to NaN values.")
+                    found_nan = True
+                    continue
+            if found_nan:
                 continue
 
             # Save the dataset to a NetCDF file
