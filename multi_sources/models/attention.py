@@ -73,6 +73,9 @@ class ValuesCoordinatesAttentionInternal(nn.Module):
         self.attention_map = AttentionMap(dim_head, relative_pos=True, rel_pos_dim_head=dim_head)
         self.output_proj = nn.Sequential(nn.Linear(inner_dim, values_dim), nn.Dropout(dropout))
 
+        # Dropout on the attention map
+        self.att_dropout = nn.Dropout(dropout)
+
     def forward(self, values, coords, attention_mask=None):
         """
         Args:
@@ -96,6 +99,8 @@ class ValuesCoordinatesAttentionInternal(nn.Module):
         # Compute the attention map using two sets of keys and queries, one from the values
         # and one from the coordinates.
         attn = self.attention_map(kv, qv, kc, qc, mask=attention_mask)
+        # Apply dropout to the attention map
+        attn = self.att_dropout(attn)
         out = torch.matmul(attn, vv)
         out = rearrange(out, "b h n d -> b n (h d)")
         out = self.output_proj(out)

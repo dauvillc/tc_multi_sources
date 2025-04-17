@@ -183,6 +183,7 @@ class SeparateWindowedValuesCoordinatesAttention(nn.Module):
             nn.Linear(coords_dim, self.inner_dim * 2), RMSNorm(self.inner_dim * 2)
         )
 
+        # Dropout layer for the attention map
         self.dropout = nn.Dropout(dropout)
 
         self.pos_embeddings = nn.Parameter(torch.randn(window_size * 2 - 1, window_size * 2 - 1))
@@ -278,7 +279,9 @@ class SeparateWindowedValuesCoordinatesAttention(nn.Module):
                 dots[:, :, -1, :] += row_mask
                 dots[:, :, :, -1] += column_mask
             # Deduce the attention weights
-            y = F.softmax(dots, dim=-1) @ vv  # (b H Wh Ww w**2 d)
+            att_weights = F.softmax(dots, dim=-1)
+            att_weights = self.dropout(att_weights)
+            y = att_weights @ vv  # (b H Wh Ww w**2 d)
             # Reshape back to the original spatial layout of the tokens
             y = rearrange(
                 y,
