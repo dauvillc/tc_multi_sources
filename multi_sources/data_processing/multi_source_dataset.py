@@ -42,7 +42,8 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         split,
         included_variables_dict,
         dt_max=24,
-        min_available_sources=2,
+        min_available_sources=0,
+        source_types_min_avail={},
         num_workers=0,
         select_most_recent=False,
         forecasting_lead_time=None,
@@ -82,6 +83,9 @@ class MultiSourceDataset(torch.utils.data.Dataset):
             min_available_sources (int): The minimum number of sources that must be available
                 for a sample to be included in the dataset. Does NOT include the forecasting source
                 if it is enabled.
+            source_types_min_avail (dict of str to int): A dictionary D = {source_type: availability}
+                such that if D[source_type] is the minimum number of sources of type source_type
+                that must be available for a sample to be included in the dataset.
             num_workers (int): If > 1, number of workers to use for parallel loading of the data.
             select_most_recent (bool): If True, selects the most recent element for each source
                 when multiple elements are available. If False, selects a random element.
@@ -98,10 +102,8 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                 If None, all years are included.
             exclude_seasons (list of int): The years to exclude from the dataset.
                 If None, no years are excluded.
-            randomly_drop_sources (dict of str to float): A dictionary {source_name: p}
-                where p is the probability of dropping the source from the sample when
-                it is available. A source cannot be dropped if it would result in a sample
-                with less than min_available_sources sources.
+            randomly_drop_sources (dict of str to float): A dictionary {source_type: p} such that
+                every source of type source_type will be randomly dropped with probability p.
             mask_spatial_coords (list of str): If not None, names of sources whose spatial
                 coordinates will be masked (set to zeros).
             subset_fraction (float): If not None, the fraction of the dataset to use.
@@ -116,9 +118,9 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         self.split = split
         self.dt_max = pd.Timedelta(dt_max, unit="h")
         self.select_most_recent = select_most_recent
-        self.min_available_sources = min_available_sources
         self.mask_spatial_coords = mask_spatial_coords
         self.data_augmentation = data_augmentation
+        self.randomly_drop_sources = randomly_drop_sources
         self.rng = np.random.default_rng(seed)
 
         print(f"{split}: Browsing requested sources and loading metadata...")
@@ -156,6 +158,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         # in self.sources
         source_names = [source.name for source in self.sources]
         self.source_variables = {source.name: source.data_vars for source in self.sources}
+        self.source_types = list(set([source.type for source in self.sources]))
         self.df = self.df[self.df["source_name"].isin(source_names)]
         self.df = self.df.reset_index(drop=True)
 
@@ -171,21 +174,6 @@ class MultiSourceDataset(torch.utils.data.Dataset):
             self.df = self.df[~self.df["season"].isin(exclude_seasons)]
         if len(self.df) == 0:
             raise ValueError("No elements available for the selected sources and seasons.")
-        
-        # Random dropping of sources: the user can use "prefix*" to indicate all
-        # sources starting with a given prefix.
-        self.randomly_drop_sources = {}
-        for source_name, p in randomly_drop_sources.items():
-            if source_name.endswith("*"):
-                # Get the prefix
-                prefix = source_name[:-1]
-                # Get all sources starting with the prefix
-                sources_to_drop = [s.name for s in self.sources if s.name.startswith(prefix)]
-                for source_to_drop in sources_to_drop:
-                    self.randomly_drop_sources[source_to_drop] = p
-            else:
-                self.randomly_drop_sources[source_name] = p
-
 
         if forecasting_lead_time is not None:
             if forecasting_sources is None:
@@ -217,20 +205,51 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         available_sources = compute_sources_availability(
             self.df, self.dt_max, lead_time=self.forecasting_lead_time, num_workers=num_workers
         )
-        # If forecasting, don't include the forecast in the available sources, since they
+        # If forecasting, don't include the forecast sources in the available sources, since they
         # won't be included in the samples.
         if self.forecasting_sources is not None:
             available_sources = available_sources.drop(columns=self.forecasting_sources)
-        # - From this, we can filter the samples to only keep the ones where at least
-        # min_available_sources sources are available.
-        available_sources_count = available_sources.sum(axis=1)
         # We can now build the reference dataframe:
         # - self.df contains the metadata for all elements from all sources,
         # - self.reference_df is a subset of self.df containing every (sid, time) pair
-        #   that defines a sample for which at least min_available_sources sources are available.
-        mask = available_sources_count >= min_available_sources
+        #   that defines a sample which matches the availability criteria.
+        # There are two such criteria to check: the overall number of available sources
+        # and the number of available sources of each type.
+        # The criteria will fill a list of boolean masks, which will be combined
+        # with a logical AND to filter the dataframe.
+        masks = []
+        # First: only keep the samples where at least min_available_sources sources are available
+        available_sources_count = available_sources.sum(axis=1)
+        masks.append(available_sources_count >= min_available_sources)
+        self.min_available_sources = min_available_sources
+        # Second: check the availability of the sources of each type specifically.
+        # If a source type is in the source types of self.sources but was not specified in the
+        # source_types_min_avail dict, we'll interpret it as a minimum availability of 0.
+        self.source_types_min_avail = {
+            source_type: source_types_min_avail.get(source_type, 0)
+            for source_type in self.source_types
+        }
+        # For each source type, compute the number of available sources in each sample
+        source_types_availability = {}  # {source_type: n available sources of this type}
+        for source_type, required_avail in self.source_types_min_avail.items():
+            # Get the sources of the given type
+            sources_of_type = [
+                source.name
+                for source in self.sources
+                if source.type == source_type and source.name in available_sources.columns
+            ]
+            # Compute the number of available sources of this type
+            st_avail_count = available_sources[sources_of_type].sum(axis=1)
+            # Compute the mask for the samples that have at least required_avail sources
+            masks.append(st_avail_count >= required_avail)
+            source_types_availability[source_type] = st_avail_count
+        # Combine the masks with a logical AND
+        mask = np.logical_and.reduce(masks)
+        # We can now build the reference dataframe:
         self.reference_df = self.df[mask][["sid", "time", "source_name"]]
         self.reference_df["n_available_sources"] = available_sources_count[mask]
+        for source_type, st_avail_count in source_types_availability.items():
+            self.reference_df["n_available_sources_" + source_type] = st_avail_count[mask]
 
         # If forecasting, only use the forecasting sources as references
         if self.forecasting_sources is not None:
@@ -309,20 +328,24 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         # Isolate the rows of self.df corresponding to the sample sid
         sample_df = self.sid_to_df[sid]
 
-        # Max number of sources that can be dropped
-        max_dropped_sources = sample['n_available_sources'] - self.min_available_sources
-        # Counter for the number of sources that have been randomly dropped
-        n_dropped_sources = 0
+        # Max number of sources that can still be dropped for each source type
+        max_dropped_sources_per_type = {
+            st: sample["n_available_sources_" + st] - self.source_types_min_avail[st]
+            for st in self.source_types
+        }
+        dropped_sources_per_type_cnt = defaultdict(int)
+        # Max number of sources that can still be dropped overall
+        max_dropped_sources = sample["n_available_sources"] - self.min_available_sources
+        dropped_sources_cnt = 0 
         # If randomly dropping sources, shuffle the sources so that the dropping
         # is uniform across the sources.
-        sources = self.sources
         if len(self.randomly_drop_sources) > 0:
             # Shuffle the sources so that the dropping is uniform across the sources.
-            self.rng.shuffle(sources)
+            self.rng.shuffle(self.sources)
 
         # For each source, try to load the element at the given time
         output = {}
-        for source in sources:
+        for source in self.sources:
             source_name = source.name
 
             # If forecast source: if it is the reference source, include it;
@@ -357,16 +380,21 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                 df = df.sample(frac=1)
             # Check if there is at least one element available for this source
             if len(df) > 0:
-                # Check if the source should be randomly dropped. The source
-                # cannot be randomly dropped if it would result in a sample with less than
-                # min_available_sources sources.
-                if source_name in self.randomly_drop_sources:
+                # Check if the source should be randomly dropped. The source can be dropped
+                # only if we haven't dropped too many sources already overall and of that type.
+                if source.type in self.randomly_drop_sources:
                     # Get the probability of dropping the source
-                    p = self.randomly_drop_sources[source_name]
+                    p = self.randomly_drop_sources[source.type]
                     # Randomly drop (ie skip) the source with probability p
-                    if n_dropped_sources < max_dropped_sources and self.rng.random() < p:
-                        n_dropped_sources += 1
-                        continue 
+                    if (
+                        dropped_sources_cnt < max_dropped_sources
+                        and dropped_sources_per_type_cnt[source.type] < max_dropped_sources_per_type[source.type]
+                        and self.rng.random() < p
+                    ):
+                        # Drop the source
+                        dropped_sources_cnt += 1
+                        dropped_sources_per_type_cnt[source.type] += 1
+                        continue
 
                 time = df["time"].iloc[0]
                 dt = t0 - self.forecasting_lead_time - time

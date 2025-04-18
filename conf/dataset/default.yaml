@@ -12,12 +12,18 @@ train:
   # Minimum number of sources that must be available in a sample
   # for it to be included in the dataset.
   min_available_sources: ???
+  # Minimum number of sources of each type that must be available in a sample
+  # for it to be included in the dataset.
+  # Unspecified source types means at least 0 sources of that type (no restriction).
+  source_type_min_avail: {}
   # Number of workers for the data loading
   num_workers: ${dataloader.num_workers}
-  # Dict {source_name: drop_probability} to randomly drop sources
-  # with the given probability. Sources won't be dropped if
-  # the sample has less than min_available_sources sources.
-  # Writing "prefix*" will be valid for all sources starting with "prefix".
+  # Dict {source_type: proba} to randomly drop sources
+  # of a given type with a given probability.
+  # For example, to drop the IR and ERA5 sources half the time:
+  # randomly_drop_sources:
+  #   tc_primed_era5: 0.5
+  #   tc_primed_infrared: 0.5
   randomly_drop_sources: {}
   # By default, don't select the most recent sources
   select_most_recent: false
