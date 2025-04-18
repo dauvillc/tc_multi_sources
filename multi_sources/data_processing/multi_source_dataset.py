@@ -51,6 +51,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         include_seasons=None,
         exclude_seasons=None,
         randomly_drop_sources={},
+        force_drop_sources=[],
         mask_spatial_coords=[],
         subset_fraction=None,
         data_augmentation=None,
@@ -102,8 +103,13 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                 If None, all years are included.
             exclude_seasons (list of int): The years to exclude from the dataset.
                 If None, no years are excluded.
-            randomly_drop_sources (dict of str to float): A dictionary {source_type: p} such that
-                every source of type source_type will be randomly dropped with probability p.
+            randomly_drop_sources (dict of str to float): A dictionary {source_type: p} such
+                that every source of type source_type will be randomly dropped with probability p.
+            force_drop_sources (list of str): Source types that will forcily be dropped.
+                Overrides randomly_drop_sources, and doesn't check for minimum availability during
+                _getitem_.
+                This should be used to filter the dataset based on the availability of
+                sources that should not be yielded (for evaluation purposes).
             mask_spatial_coords (list of str): If not None, names of sources whose spatial
                 coordinates will be masked (set to zeros).
             subset_fraction (float): If not None, the fraction of the dataset to use.
@@ -121,6 +127,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         self.mask_spatial_coords = mask_spatial_coords
         self.data_augmentation = data_augmentation
         self.randomly_drop_sources = randomly_drop_sources
+        self.force_drop_sources = force_drop_sources
         self.rng = np.random.default_rng(seed)
 
         print(f"{split}: Browsing requested sources and loading metadata...")
@@ -380,9 +387,15 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                 df = df.sample(frac=1)
             # Check if there is at least one element available for this source
             if len(df) > 0:
+                # Check if the source should be forced dropped
+                if source.type in self.force_drop_sources:
+                    # Drop the source
+                    dropped_sources_cnt += 1
+                    dropped_sources_per_type_cnt[source.type] += 1
+                    continue
                 # Check if the source should be randomly dropped. The source can be dropped
                 # only if we haven't dropped too many sources already overall and of that type.
-                if source.type in self.randomly_drop_sources:
+                elif source.type in self.randomly_drop_sources:
                     # Get the probability of dropping the source
                     p = self.randomly_drop_sources[source.type]
                     # Randomly drop (ie skip) the source with probability p
