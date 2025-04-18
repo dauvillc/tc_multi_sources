@@ -83,22 +83,29 @@ class VisualEvaluation(AbstractMultisourceEvaluationMetric):
                 # Display the targets and predictions
                 display_batch(batch_info, batch_idx, targets, preds, self.results_dir)
         else:
+            # Split batches into chunks for parallel processing
+            batch_chunks = np.array_split(unique_batch_indices, num_workers)
+            print(f"Dividing {len(unique_batch_indices)} batches into {len(batch_chunks)} chunks")
             futures = []
+            
             with ProcessPoolExecutor(max_workers=num_workers) as executor:
-                for batch_idx in unique_batch_indices:
-                    # Get the sources included in the batch
-                    batch_info = info_df[info_df["batch_idx"] == batch_idx]
-                    sources = batch_info["source_name"].unique()
-                    # For each source, load the targets and predictions
-                    targets, preds = {}, {}
-                    for source in sources:
-                        targets[source], preds[source] = self.load_batch(source, batch_idx)
-                    futures.append(
-                        executor.submit(
-                            display_batch, batch_info, batch_idx, targets, preds, self.results_dir
+                for i, chunk in enumerate(batch_chunks):
+                    # Create chunks of batch indices
+                    chunk_df = info_df[info_df["batch_idx"].isin(chunk)]
+                    if not chunk_df.empty:
+                        futures.append(
+                            executor.submit(
+                                process_batch_chunk, 
+                                chunk_df, 
+                                chunk, 
+                                self.load_batch, 
+                                self.results_dir, 
+                                verbose,
+                                i  # Pass the process ID (chunk index)
+                            )
                         )
-                    )
-                for future in tqdm(futures, desc="Batches", disable=not verbose):
+                
+                for future in tqdm(futures, desc="Processing chunks", disable=not verbose):
                     future.result()
 
 
@@ -229,6 +236,37 @@ def plot_sample(sample_df, targets, preds, results_dir, batch_idx, sample_idx):
     plt.tight_layout(h_pad=0.2, w_pad=0.4)  # Add specific padding parameters
     fig.savefig(results_dir / f"{batch_idx}_{sample_idx}.png", bbox_inches="tight")
     plt.close(fig)
+
+
+def process_batch_chunk(chunk_df, batch_indices, load_batch_fn, results_dir, verbose=True, process_id=None):
+    """Process a chunk of batches in a single worker process.
+    
+    Args:
+        chunk_df (pd.DataFrame): DataFrame containing information for a chunk of batches
+        batch_indices (np.array): Array of batch indices to process
+        load_batch_fn (callable): Function to load batch data (from VisualEvaluation.load_batch)
+        results_dir (Path): Directory where results will be saved
+        verbose (bool): Whether to display progress information
+        process_id (int, optional): ID of the process. If provided, only process 0 will display progress.
+    """
+    # Only show progress for process_id=0 or if process_id is None
+    show_progress = verbose and (process_id is None or process_id == 0)
+    
+    for batch_idx in tqdm(batch_indices, desc=f"Batches in chunk {process_id if process_id is not None else ''}", 
+                          disable=not show_progress, leave=False):
+        # Get the sources included in the batch
+        batch_info = chunk_df[chunk_df["batch_idx"] == batch_idx]
+        sources = batch_info["source_name"].unique()
+        
+        # For each source, load the targets and predictions
+        targets, preds = {}, {}
+        for source in sources:
+            targets[source], preds[source] = load_batch_fn(source, batch_idx)
+        
+        # Display the targets and predictions
+        display_batch(batch_info, batch_idx, targets, preds, results_dir)
+    
+    return True  # Return value to indicate completion
 
 
 def set_axis_ticks(ax, lat, lon):
