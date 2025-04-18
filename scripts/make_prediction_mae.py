@@ -4,12 +4,13 @@ import torch
 
 from torch.utils.data import DataLoader
 from pathlib import Path
-from hydra.utils import get_class, instantiate
+from hydra.utils import instantiate
 from omegaconf import DictConfig, OmegaConf
 
 from multi_sources.data_processing.writer import MultiSourceWriter
 from multi_sources.data_processing.collate_fn import multi_source_collate_fn
 from utils.checkpoints import load_experiment_cfg_from_checkpoint
+from utils.utils import update
 
 
 @hydra.main(version_base=None, config_path="../conf", config_name="make_predictions")
@@ -31,6 +32,12 @@ def main(cfg: DictConfig):
     if "split" in cfg and cfg["split"] is not None:
         split = cfg["split"]
     exp_cfg["dataset"][split]["dataset_dir"] = cfg["paths"]["preprocessed_dataset"]
+
+    # Finally, the user can use the "change" domain in the config to modify the parameters
+    # of the experiment (e.g. +change.dataset.dt_max=xxx)
+    if "change" in cfg:
+        update(exp_cfg, cfg["change"])
+
     # Seed everything with the seed used in the experiment
     pl.seed_everything(exp_cfg["seed"], workers=True)
 
