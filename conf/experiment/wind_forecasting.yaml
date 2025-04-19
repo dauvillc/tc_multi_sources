@@ -15,13 +15,12 @@ dataset:
   train:
     dt_max: 24
     min_available_sources: 1
-    # Parameter to randomly drop the IR and ERA5 sources. Since those are almost
-    # always present, we drop them half the time so that the model can still learn
-    # not to rely on those.
-    randomly_drop_sources:
-      tc_primed_era5: 0.5  # source: proba
-      tc_primed_infrared: 0.5 
-      tc_primed_pmw*: 0.5
+    # Minimum number of sources to be available for each source type:
+    # we only keep samples with at least one source of each type.
+    source_types_min_avail:
+      era5: 1
+      infrared: 1
+      pmw: 1 
     # Parameters to perform a forecasting task specifically.
     # Those are automatically propagated to the val and test datasets.
     forecasting_lead_time: 24

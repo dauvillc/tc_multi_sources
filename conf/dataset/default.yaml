@@ -15,7 +15,7 @@ train:
   # Minimum number of sources of each type that must be available in a sample
   # for it to be included in the dataset.
   # Unspecified source types means at least 0 sources of that type (no restriction).
-  source_type_min_avail: {}
+  source_types_min_avail: {}
   # Number of workers for the data loading
   num_workers: ${dataloader.num_workers}
   # Dict {source_type: proba} to randomly drop sources
@@ -25,6 +25,9 @@ train:
   #   tc_primed_era5: 0.5
   #   tc_primed_infrared: 0.5
   randomly_drop_sources: {}
+  # List of source types to forcefully drop. Source types listed here
+  # can be dropped even below their values in source_types_min_avail.
+  force_drop_sources: []
   # By default, don't select the most recent sources
   select_most_recent: false
   # Whether to mask the spatial coordinates of the sources
@@ -45,8 +48,10 @@ val:
     variables_dict: ${sources}
   dt_max: ${dataset.train.dt_max}
   min_available_sources: ${dataset.train.min_available_sources}
+  source_types_min_avail: ${dataset.train.source_types_min_avail}
   num_workers: ${dataset.train.num_workers}
   randomly_drop_sources: ${dataset.train.randomly_drop_sources}
+  force_drop_sources: ${dataset.train.force_drop_sources}
   select_most_recent: ${dataset.train.select_most_recent}
   forecasting_lead_time: ${dataset.train.forecasting_lead_time}
   forecasting_sources: ${dataset.train.forecasting_sources}
@@ -63,8 +68,10 @@ test:
     variables_dict: ${sources}
   dt_max: ${dataset.train.dt_max}
   min_available_sources: ${dataset.train.min_available_sources}
+  source_types_min_avail: ${dataset.train.source_types_min_avail}
   num_workers: ${dataset.train.num_workers}
   randomly_drop_sources: ${dataset.train.randomly_drop_sources}
+  force_drop_sources: ${dataset.train.force_drop_sources}
   select_most_recent: ${dataset.train.select_most_recent}
   forecasting_lead_time: ${dataset.train.forecasting_lead_time}
   forecasting_sources: ${dataset.train.forecasting_sources}
