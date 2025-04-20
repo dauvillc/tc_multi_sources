@@ -435,6 +435,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                         C = torch.zeros_like(C)
                         LM = torch.zeros_like(LM)
                         D = torch.zeros_like(D)
+                        DT = torch.zeros_like(DT)
 
                     # Characterstic variables
                     if source.n_charac_variables() == 0:
@@ -469,7 +470,12 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                     output[source_name] = output_entry
         # (Optional) Data augmentation
         if isinstance(self.data_augmentation, MultisourceDataAugmentation):
+            for source_name in output:
+                output[source_name]["source_type"] = self.sources_dict[source_name].type
             output = self.data_augmentation(output)
+            for source_name in output:
+                # Remove the source type from the output
+                del output[source_name]["source_type"]
 
         if len(output) <= 1:
             raise ValueError(

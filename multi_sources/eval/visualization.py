@@ -274,8 +274,8 @@ def set_axis_ticks(ax, lat, lon):
     H, W = lat.shape
     lat_ticks = np.linspace(0, H - 1, num=10).astype(int)
     lon_ticks = np.linspace(0, W - 1, num=10).astype(int)
-    lat_labels = lat[lat_ticks, 0].round(2)
-    lon_labels = lon[0, lon_ticks].round(2)
+    lat_labels = np.nanmean(lat[lat_ticks]).round(2)
+    lon_labels = np.nanmean(lon[lon_ticks]).round(2)
     ax.set_xticks(lon_ticks)
     ax.set_xticklabels(lon_labels)
     ax.set_yticks(lat_ticks)

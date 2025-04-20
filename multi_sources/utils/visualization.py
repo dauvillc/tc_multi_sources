@@ -240,8 +240,8 @@ def display_realizations(sol, batch, avail_flags, save_filepath_prefix, determin
                         im = ax.imshow(pred, cmap="viridis")
                         # Add coords as axis labels
                         h, w = pred.shape
-                        x_vals = coords[1, 0, :w]
-                        y_vals = coords[0, :h, 0]
+                        x_vals = np.nanmean(coords[1, :, :w].detach().cpu().numpy(), axis=0)
+                        y_vals = np.nanmean(coords[0, :h, :].detach().cpu().numpy(), axis=1)
                         step_x = max(1, w // 5)
                         step_y = max(1, h // 5)
                         ax.set_xticks(range(0, w, step_x))
@@ -270,8 +270,8 @@ def display_realizations(sol, batch, avail_flags, save_filepath_prefix, determin
                 true = true.detach().cpu().numpy()
                 im = ax.imshow(true, cmap="viridis")
                 h, w = true.shape
-                x_vals = coords[1, 0, :w]
-                y_vals = coords[0, :h, 0]
+                x_vals = np.nanmean(coords[1, :, :w].detach().cpu().numpy(), axis=0)
+                y_vals = np.nanmean(coords[0, :h, :].detach().cpu().numpy(), axis=1)
                 step_x = max(1, w // 5)
                 step_y = max(1, h // 5)
                 ax.set_xticks(range(0, w, step_x))
