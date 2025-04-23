@@ -13,14 +13,14 @@ wandb:
 
 dataset:
   train:
-    dt_max: 24
+    dt_max: 18
     min_available_sources: 1
     # Minimum number of sources to be available for each source type:
     # we only keep samples with at least one source of each type.
     source_types_min_avail:
       era5: 1
       infrared: 1
-      pmw: 1 
+      pmw: 1
     # Parameters to perform a forecasting task specifically.
     # Those are automatically propagated to the val and test datasets.
     forecasting_lead_time: 24
