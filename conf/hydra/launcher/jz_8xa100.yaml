@@ -14,4 +14,4 @@ setup:
   - module purge
   - source ${oc.env:HOME}/.bash_profile
   - module load arch/a100
-  - module load pytorch-gpu/py3/2.3.0
+  - module load pytorch-gpu/py3/2.6.0
