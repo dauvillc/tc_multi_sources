@@ -1,14 +1,14 @@
-import lightning.pytorch as pl
-import hydra
-import torch
-
-from torch.utils.data import DataLoader
 from pathlib import Path
+
+import hydra
+import lightning.pytorch as pl
+import torch
 from hydra.utils import instantiate
 from omegaconf import DictConfig, OmegaConf
+from torch.utils.data import DataLoader
 
-from multi_sources.data_processing.writer import MultiSourceWriter
 from multi_sources.data_processing.collate_fn import multi_source_collate_fn
+from multi_sources.data_processing.writer import MultiSourceWriter
 from utils.checkpoints import load_experiment_cfg_from_checkpoint
 from utils.utils import update
 
@@ -61,10 +61,7 @@ def main(cfg: DictConfig):
 
     # Instantiate the model and the lightning module
     pl_module = instantiate(
-        exp_cfg["lightning_module"],
-        dataset.sources,
-        exp_cfg,
-        validation_dir=None
+        exp_cfg["lightning_module"], dataset.sources, exp_cfg, validation_dir=None
     )
     ckpt = torch.load(checkpoint_path, weights_only=False)
     pl_module.load_state_dict(ckpt["state_dict"])

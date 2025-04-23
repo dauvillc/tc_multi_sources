@@ -2,19 +2,21 @@
 tokenizes them, masks a portion of the tokens, and trains a model to predict
 the masked tokens."""
 
-import lightning.pytorch as pl
+from pathlib import Path
+
 import torch
-import torch.nn as nn
 
 # Flow matching imports
 from flow_matching.path import CondOTProbPath
+from hydra.utils import instantiate
 
 # Local module imports
-from multi_sources.structure.base_module import MultisourceAbstractReconstructor
+from multi_sources.structure.base_reconstructor import MultisourceAbstractReconstructor
 from multi_sources.utils.solver import MultisourceEulerODESolver
 
 # Visualization imports
 from multi_sources.utils.visualization import display_realizations
+from utils.checkpoints import load_experiment_cfg_from_checkpoint
 
 
 class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
@@ -22,8 +24,9 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
     some of the sources and trains its backbone to reconstruct the missing data.
     The sources may have different dimensionalities (e.g. 2D, 1D, 0D) and come with
     spatiotemporal coordinates.
-    The structure expects its input as a dict D {source_name: map}, where D[source] contains the
-    following key-value pairs (all shapes excluding the batch dimension):
+    The structure expects its input as a dict D {(source_name, index): map},
+    where D[(source_name, index)] contains the following key-value pairs
+    (all shapes excluding the batch dimension):
     - "id" is a list of strings of length (B,) each uniquely identifying the elements.
     - "avail" is a scalar tensor of shape (B,) containing 1 if the element is available
         and -1 otherwise.
@@ -35,25 +38,22 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
     - "dist_to_center" is a tensor of shape (B, ...) containing the distance
         to the center of the storm at each pixel, in km.
 
-    Besides the sources, D['id'] is a list of strings of length (B,) uniquely identifying the
-    samples.
-
-    The structure outputs a dict {source_name: tensor} containing the predicted values for each source.
+    The structure outputs a dict {(source_name, index): tensor} containing
+    the predicted values for each source.
     """
 
     def __init__(
         self,
         sources,
-        backbone,
         cfg,
+        backbone,
         n_sources_to_mask,
         patch_size,
         values_dim,
         coords_dim,
         adamw_kwargs,
         lr_scheduler_kwargs,
-        predict_residuals=False,
-        pretrained_det=None,
+        predict_residuals_from_run=None,
         n_sampling_diffusion_steps=25,
         loss_max_distance_from_center=None,
         ignore_land_pixels_in_loss=False,
@@ -64,19 +64,17 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
         """
         Args:
             sources (list of Source): Source objects defining the dataset's sources.
-            backbone (nn.Module): Backbone of the model.
             cfg (dict): The whole configuration of the experiment. This will be saved
                 within the checkpoints and can be used to rebuild the exact experiment.
+            backbone (torch.nn.Module): Multi-sources backbone model.
             n_sources_to_mask (int): Number of sources to mask in each sample.
             patch_size (int): Size of the patches to split the images into.
             values_dim (int): Dimension of the values embeddings.
             coords_dim (int): Dimension of the coordinates embeddings.
             adamw_kwargs (dict): Arguments to pass to torch.optim.AdamW (other than params).
             lr_scheduler_kwargs (dict): Arguments to pass to the learning rate scheduler.
-            predict_residuals (bool): If True, the model will use a deterministic model
-                to predict the mean, and the FM to predict the residuals.
-            pretrained_det (str or Path): Path to a pretrained deterministic model.
-                Can only be used if predict_residuals is True.
+            predict_residuals_from_run (str): Path to a checkpoint of a deterministic model
+                to predict the residuals from.
             n_sampling_diffusion_steps (int): Number of diffusion steps when sampling.
             loss_max_distance_from_center (int or None): If specified, only pixels within this
                 distance from the center of the storm (in km) will be considered
@@ -97,8 +95,8 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
         self.use_diffusion_t = True
         super().__init__(
             sources,
-            backbone,
             cfg,
+            backbone,
             n_sources_to_mask,
             patch_size,
             values_dim,
@@ -111,9 +109,25 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
             validation_dir,
             metrics,
         )
+
         # Flow matching ingredients
         self.n_sampling_diffusion_steps = n_sampling_diffusion_steps
         self.fm_path = CondOTProbPath()
+
+        # Optional: residual prediction
+        self.predict_residuals = predict_residuals_from_run is not None
+        if predict_residuals_from_run is not None:
+            ckpt_dir = Path(cfg["paths"]["checkpoints"]) / predict_residuals_from_run
+            det_cfg, ckpt_path = load_experiment_cfg_from_checkpoint(
+                ckpt_dir, predict_residuals_from_run
+            )
+            self.det_model = instantiate(
+                det_cfg["lightning_module"], sources, det_cfg, validation_dir=validation_dir
+            )
+            state_dict = torch.load(ckpt_path, map_location="cpu")["state_dict"]
+            self.det_model.load_state_dict(state_dict, strict=False)
+            self.det_model.eval()
+            self.det_model.requires_grad_(False)
 
     def mask(self, x, pure_noise=False, masking_seed=None):
         """Masks a portion of the sources. A missing source cannot be chosen to be masked.
@@ -122,18 +136,19 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
         Masked sources have their values mixed with random noise following the noise schedule.
         The availability flag is set to 0 where the source is masked.
         Args:
-            x (dict of str to dict of str to tensor): The input sources.
+            x (dict): The input sources with (source_name, index) tuples as keys,
+                where index counts observations (0 = most recent).
             pure_noise (bool): If True, the sources are masked with pure noise, without
                 following the noise schedule.
             masking_seed (int, optional): Seed for the random number generator used to select
                 which sources to mask.
         Returns:
-            masked_x (dict of str to dict of str to tensor): The input sources with a portion
+            masked_x (dict): The input sources with a portion
                 of the sources masked. If not determnistic, an entry "diffusion_t" is added
                 to the dict of each source, which is a tensor of shape (B,) such that:
                 diffusion_t[b] is the diffusion timestep at which the source was masked
                 for the sample b if the source was masked, and -1 otherwise.
-            path_samples (dict of str to PathSample): the ProbSample objects used to generate the
+            path_samples (dict): the ProbSample objects used to generate the
                 noised values.
         """
 
@@ -144,13 +159,13 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
         device = next(self.parameters()).device
 
         masked_x, path_samples = {}, {}
-        for source, data in x.items():
+        for source_index_pair, data in x.items():
             # Copy the data to avoid modifying the original dict
             masked_data = {k: v.clone() if torch.is_tensor(v) else v for k, v in data.items()}
             # Update the availability flag to that after masking.
-            masked_data["avail"] = avail_flags[source]
+            masked_data["avail"] = avail_flags[source_index_pair]
             # The sources should be noised if they are masked.
-            should_mask = avail_flags[source] == 0
+            should_mask = avail_flags[source_index_pair] == 0
 
             # NOISING
             if pure_noise:
@@ -163,7 +178,7 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
             noise = torch.randn_like(masked_data["values"])
             # Compute the noised values associated with the diffusion timesteps
             path_sample = self.fm_path.sample(t=t, x_0=noise, x_1=data["values"].detach().clone())
-            path_samples[source] = path_sample
+            path_samples[source_index_pair] = path_sample
             noised_values = path_sample.x_t.detach().clone()
             masked_data["values"][should_mask] = noised_values[should_mask]
             # Save the diffusion timesteps at which the source was masked. For unnoised sources,
@@ -174,29 +189,67 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
             # Set the availability mask to 0 everywhere for noised sources.
             # (!= from the avail flag, it's a mask of same shape
             masked_data["avail_mask"][should_mask] = 0
-            masked_x[source] = masked_data
+            masked_x[source_index_pair] = masked_data
 
         return masked_x, path_samples
 
+    def forward(self, x, residual_mean=None):
+        """Computes the forward pass of the model.
+        Args:
+            x (dict): The input sources, masked, with (source_name, index) tuples as keys.
+        Returns:
+            y (dict): The predicted values for each source.
+        """
+        # Save the shape of the tokens before they're embedded, so that we can
+        # later remove the padding.
+        spatial_shapes = {
+            source_index_pair: data["values"].shape[2:]
+            for source_index_pair, data in x.items()
+            if len(data["values"].shape) > 2
+        }
+        # Embed and mask the sources
+        x = self.embed(x)
+
+        # Run the transformer backbone
+        pred = self.backbone(x)
+
+        for source_index_pair, v in pred.items():
+            # Embedded coords for the final modulation
+            c = x[source_index_pair]["embedded_coords"]
+            # Project from latent values space to output space using the output layer
+            # corresponding to the source type
+            source_name = source_index_pair[0]  # Extract source name from tuple
+            src_type = self.sources[source_name].type
+            pred[source_index_pair] = self.sourcetype_output_projs[src_type](v, c)
+        # For 2D sources, remove the padding
+        for source_index_pair, spatial_shape in spatial_shapes.items():
+            pred[source_index_pair] = pred[source_index_pair][
+                ..., : spatial_shape[0], : spatial_shape[1]
+            ]
+        return pred
+
     def compute_loss(self, pred, batch, masked_batch, path_samples):
         # Retrieve the availability flag for each source updated after masking
-        avail_flag = {source: data["avail"] for source, data in masked_batch.items()}
+        avail_flag = {
+            source_index_pair: data["avail"] for source_index_pair, data in masked_batch.items()
+        }
 
         # Filter the predictions and true values
         # For FM, the true values are the velocity fields
-        true_y = {source: path_samples[source].dx_t for source in path_samples}
-        avail_mask = {source: batch[source]["avail_mask"] for source in batch}
-        dist_to_center = {source: batch[source]["dist_to_center"] for source in batch}
-        landmask = {source: batch[source]["landmask"] for source in batch}
-        pred, true_y = super().apply_loss_mask(
-            pred, true_y, avail_flag, avail_mask, dist_to_center, landmask
-        )
+        y_true = {
+            source_index_pair: path_samples[source_index_pair].dx_t
+            for source_index_pair in path_samples
+        }
+
+        pred, y_true = super().apply_loss_mask(pred, y_true, batch, avail_flag)
 
         # Compute the loss: MSE between the predicted and true velocity fields
         losses = {}
-        for source in pred:
+        for source_index_pair in pred:
             # Compute the loss for each source
-            losses[source] = (pred[source] - true_y[source]).pow(2).mean()
+            losses[source_index_pair] = (
+                (pred[source_index_pair] - y_true[source_index_pair]).pow(2).mean()
+            )
         # If len(losses) == 0, i.e. for all masked sources the tokens were missing,
         # raise an error.
         if len(losses) == 0:
@@ -210,15 +263,15 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
         """Samples the model using multiple steps of the ODE solver. All sources
         that have an availability flag set to 0 or -1 are solved.
         Args:
-            batch (dict of str to dict of str to tensor): The input batch, preprocessed.
+            batch (dict): The input batch, preprocessed, with (source_name, index) tuples as keys.
             n_realizations_per_sample (int): Number Np of realizations to sample for each
                 element in the batch.
         Returns:
-            avail_flags (dict of str to tensor): The availability flags for each source,
+            avail_flags (dict): The availability flags for each source,
                 after masking, as tensors of shape (B,).
             time_grid (torch.Tensor): The time grid at which the ODE solver sampled the solution,
                 of shape (T,).
-            sol (dict of str to torch.Tensor): The solution of the ODE solver for each source,
+            sol (dict): The solution of the ODE solver for each source,
                 as tensors of shape (Np, B, C, ...).
         """
         with torch.no_grad():
@@ -232,7 +285,8 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
                 masked_batch, path_samples = self.mask(batch, pure_noise=True, masking_seed=seed)
 
                 x_0 = {
-                    source: data["values"] for source, data in masked_batch.items()
+                    source_index_pair: data["values"]
+                    for source_index_pair, data in masked_batch.items()
                 }  # pure noise
 
                 def vf_func(x_t, t):
@@ -240,20 +294,20 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
                     included in x."""
                     # Don't modify masked_x in-place
                     batch_t = {
-                        source: {k: v for k, v in data.items()}
-                        for source, data in masked_batch.items()
+                        source_index_pair: {k: v for k, v in data.items()}
+                        for source_index_pair, data in masked_batch.items()
                     }
                     # Update the values and diffusion timesteps of the sources that are solved.
-                    for source, x_ts in x_t.items():
-                        is_solved = batch_t[source]["avail"] == 0
-                        batch_t[source]["values"][is_solved] = x_ts[is_solved]
-                        batch_t[source]["diffusion_t"][is_solved] = t
+                    for source_index_pair, x_ts in x_t.items():
+                        is_solved = batch_t[source_index_pair]["avail"] == 0
+                        batch_t[source_index_pair]["values"][is_solved] = x_ts[is_solved]
+                        batch_t[source_index_pair]["diffusion_t"][is_solved] = t
                     # Run the model
                     vf = self.forward(batch_t)
                     # Where the sources are not being solved, we'll set the velocity field to zero,
                     # so that those examples don't change in the solution.
-                    for source in vf:
-                        vf[source][batch_t[source]["avail"] != 0] = 0
+                    for source_index_pair in vf:
+                        vf[source_index_pair][batch_t[source_index_pair]["avail"] != 0] = 0
                     return vf
 
                 # Solve the ODE
@@ -262,14 +316,22 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
                 sol = solver.solve(x_0, time_grid)  # Dict of tensors of shape (B, C, ...)
                 all_sols.append(sol)
 
-            avail_flags = {source: data["avail"] for source, data in masked_batch.items()}
-            all_sols = {source: torch.stack([sol[source] for sol in all_sols]) for source in batch}
+            avail_flags = {
+                source_index_pair: data["avail"]
+                for source_index_pair, data in masked_batch.items()
+            }
+            all_sols = {
+                source_index_pair: torch.stack([sol[source_index_pair] for sol in all_sols])
+                for source_index_pair in batch
+            }
             return avail_flags, time_grid, all_sols
 
     def training_step(self, batch, batch_idx):
         batch_size = batch[list(batch.keys())[0]]["values"].shape[0]
+        # If predicting residuals, call a forward pass of the deterministic model
+        if self.predict_residuals:
+            means = self.det_model.predict(batch)
         batch = self.preproc_input(batch)
-        # Mask the sources
         masked_x, path_samples = self.mask(batch)
         # Make predictions
         pred = self.forward(masked_x)
@@ -277,7 +339,7 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
         loss = self.compute_loss(pred, batch, masked_x, path_samples)
 
         self.log(
-            f"train_loss",
+            "train_loss",
             loss,
             prog_bar=True,
             on_epoch=True,
@@ -296,7 +358,7 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
         # Compute the loss
         loss = self.compute_loss(pred, batch, masked_x, path_samples)
         self.log(
-            f"val_loss",
+            "val_loss",
             loss,
             prog_bar=True,
             on_epoch=True,
@@ -305,15 +367,16 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
         )
 
         if self.validation_dir is not None and batch_idx % 5 == 0:
-            # For every 10 batches, make multiple realizations of the solution
+            # For every 30 batches, make multiple realizations of the solution
             # for each sample in the batch and display them.
-            if batch_idx % 10 == 0:
+            if batch_idx % 30 == 0:
                 avail_flags, time_grid, sol = self.sample(batch, n_realizations_per_sample=5)
                 display_realizations(
                     sol,
                     input_batch,
                     avail_flags,
                     self.validation_dir / f"realizations_{batch_idx}",
+                    display_fraction=0.25,
                 )
             else:
                 # We'll only compute the metrics on one realization of the solution.

@@ -1,7 +1,8 @@
 """Implements small utility functions for loading checkpoints."""
 
-import torch
 from pathlib import Path
+
+import torch
 
 
 def load_experiment_cfg_from_checkpoint(checkpoints_dir, run_id):

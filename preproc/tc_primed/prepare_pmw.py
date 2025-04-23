@@ -5,30 +5,30 @@ Prepare passive microwave (PMW) data from TC-PRIMED dataset.
 This script processes PMW data and saves it in a standardized format with metadata.
 """
 
-import hydra
-import yaml
-import pandas as pd
-import xarray as xr
 import json
 import warnings
-from tqdm import tqdm
-from netCDF4 import Dataset
-from xarray.backends import NetCDF4DataStore
-from tqdm import tqdm
-from pathlib import Path
-from omegaconf import OmegaConf
-from global_land_mask import globe
-import numpy as np
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from pathlib import Path
+
+import hydra
+import numpy as np
+import pandas as pd
+import xarray as xr
+import yaml
+from global_land_mask import globe
+from netCDF4 import Dataset
+from omegaconf import OmegaConf
+from tqdm import tqdm
+from xarray.backends import NetCDF4DataStore
+
+from multi_sources.data_processing.grid_functions import (
+    ResamplingError,
+    grid_distance_to_point,
+    regrid,
+)
 
 # Local imports
 from preproc.utils import list_tc_primed_sources
-from multi_sources.data_processing.grid_functions import (
-    regrid,
-    grid_distance_to_point,
-    ResamplingError,
-)
-
 
 CROSS_TRACK_INSTRUMENTS = ["AMSU", "ATMS", "MHS"]
 # List of swaths that won't be used in the experiments and should be ignored.
@@ -54,7 +54,7 @@ IGNORE = [
     "F19_S1",
     "F19_S3",
     "TRMM_S1",
-    "MHS_METOPA_S1",  # To be removed for 89GHz experiments
+    "MHS",  # To remove for 89GHz experiments
 ]
 
 
@@ -265,8 +265,6 @@ def main(cfg):
     # Setup paths
     tc_primed_path = Path(cfg["paths"]["raw_datasets"]) / "tc_primed"
     ifovs_path = Path(cfg["paths"]["raw_datasets"]) / "tc_primed_ifovs.yaml"
-    with open(ifovs_path, "r") as f:
-        ifovs = yaml.safe_load(f)
     dest_path = Path(cfg["paths"]["preprocessed_dataset"]) / "prepared"
     # Resolution of the target grid, in degrees
     regridding_res = cfg["regridding_resolution"]

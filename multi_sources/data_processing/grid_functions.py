@@ -1,18 +1,19 @@
 """Implements functions to manipulate gridded data."""
 
-import xarray as xr
-import warnings
-import numpy as np
 import logging
 import traceback
+import warnings
+from math import ceil
+
+import numpy as np
+import torch
+import xarray as xr
 from haversine import haversine_vector
 from numpy import nan as NA
-from math import ceil
-from pyresample.bilinear import NumpyBilinearResampler
 from pyresample import SwathDefinition
 from pyresample.area_config import create_area_def
+from pyresample.bilinear import NumpyBilinearResampler
 from pyresample.utils import check_and_wrap
-import torch
 
 
 class DisableLogger:
@@ -114,15 +115,15 @@ def crop_nan_border_numpy(src_image, tgt_images):
     # Find rows and columns that are all NaN
     row_full_nan = np.all(np.isnan(src_image), axis=1)
     col_full_nan = np.all(np.isnan(src_image), axis=0)
-    
+
     # Find first and last non-NaN rows and columns
     non_nan_rows = np.where(~row_full_nan)[0]
     non_nan_cols = np.where(~col_full_nan)[0]
-    
+
     if len(non_nan_rows) == 0 or len(non_nan_cols) == 0:
         # Return originals if all NaN
         return tgt_images
-    
+
     first_row = non_nan_rows[0]
     last_row = non_nan_rows[-1] + 1  # Add 1 for exclusive upper bound in slicing
     first_col = non_nan_cols[0]

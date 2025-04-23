@@ -4,30 +4,29 @@
 Prepares the infrared data for the TC Primed dataset.
 """
 
-import hydra
-import yaml
-import pandas as pd
-import xarray as xr
 import json
 import warnings
-from tqdm import tqdm
-from netCDF4 import Dataset
-from xarray.backends import NetCDF4DataStore
-from tqdm import tqdm
-from pathlib import Path
-from omegaconf import OmegaConf
-from global_land_mask import globe
-import numpy as np
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from pathlib import Path
+
+import hydra
+import numpy as np
+import pandas as pd
+import xarray as xr
+from global_land_mask import globe
+from netCDF4 import Dataset
+from omegaconf import OmegaConf
+from tqdm import tqdm
+from xarray.backends import NetCDF4DataStore
+
+from multi_sources.data_processing.grid_functions import (
+    ResamplingError,
+    grid_distance_to_point,
+    regrid,
+)
 
 # Local imports
 from preproc.utils import list_tc_primed_sources
-from multi_sources.data_processing.grid_functions import (
-    regrid,
-    grid_distance_to_point,
-    ResamplingError,
-)
-
 
 
 def initialize_metadata(dest_dir):
@@ -67,7 +66,7 @@ def process_ir_file(file, dest_dir, regridding_res, check_exist=False):
     """
     with Dataset(file) as raw_sample:
         # Access data group
-        ds = raw_sample['infrared']
+        ds = raw_sample["infrared"]
         # Check the infrared availability flag. We only keep the samples
         # for which it is set to 1 (0 means unavailable, 2 means lower-res HURSAT data).
         if ds["infrared_availability_flag"][0].item() != 1:
@@ -75,7 +74,7 @@ def process_ir_file(file, dest_dir, regridding_res, check_exist=False):
 
         # Open the dataset using xarray and select the brightness temperature variable
         ds = xr.open_dataset(NetCDF4DataStore(ds), decode_times=False)
-        ds = ds[['IRWIN', 'latitude', 'longitude']]
+        ds = ds[["IRWIN", "latitude", "longitude"]]
 
         # Assemble the sample's metadata
         raw_overpass_meta = raw_sample["overpass_metadata"]
@@ -146,17 +145,13 @@ def process_ir_file(file, dest_dir, regridding_res, check_exist=False):
 
 
 # Helper function to process a chunk of files in parallel.
-def process_chunk(
-    file_list, source_dest_dir, regridding_res, check_exist, verbose=False
-):
+def process_chunk(file_list, source_dest_dir, regridding_res, check_exist, verbose=False):
     local_metadata = []
     discarded = 0
 
     iterator = tqdm(file_list, desc="Processing chunk") if verbose else file_list
     for file in iterator:
-        meta = process_ir_file(
-            file, source_dest_dir, regridding_res, check_exist
-        )
+        meta = process_ir_file(file, source_dest_dir, regridding_res, check_exist)
         if meta is None:
             discarded += 1
         else:
@@ -182,7 +177,7 @@ def main(cfg):
     )
     ir_files = source_files["infrared"]
 
-    source_dest_dir = dest_path / f"tc_primed_infrared"
+    source_dest_dir = dest_path / "tc_primed_infrared"
     # Create destination directory
     source_dest_dir.mkdir(parents=True, exist_ok=True)
 
@@ -215,10 +210,8 @@ def main(cfg):
                 samples_metadata.extend(meta_chunk)
                 discarded += discarded_chunk
     else:
-        for file in tqdm(ir_files, desc=f"Processing files"):
-            sample_metadata = process_ir_file(
-                file, source_dest_dir, regridding_res, check_exist
-            )
+        for file in tqdm(ir_files, desc="Processing files"):
+            sample_metadata = process_ir_file(file, source_dest_dir, regridding_res, check_exist)
             if sample_metadata is None:
                 discarded += 1
             else:
@@ -230,7 +223,7 @@ def main(cfg):
         for file in source_dest_dir.iterdir():
             file.unlink()
         source_dest_dir.rmdir()
-        print(f"Found no valid samples, removing directory.")
+        print("Found no valid samples, removing directory.")
     else:
         if discarded > 0:
             percent = discarded / len(ir_files) * 100

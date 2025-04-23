@@ -1,8 +1,9 @@
 """Implements small utility functions for data processing."""
 
-import pandas as pd
-import numpy as np
 from concurrent.futures import ProcessPoolExecutor
+
+import numpy as np
+import pandas as pd
 
 
 def _get_leaf_subsources(source_dict, path="", previous_vars=[], previous_input_only=[]):

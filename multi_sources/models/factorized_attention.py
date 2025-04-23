@@ -1,10 +1,11 @@
 """Implements the FactorizedMultisourcesAttention class."""
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import numpy as np
 from einops import rearrange
+
 from multi_sources.models.attention import ValuesCoordinatesAttentionInternal
 from multi_sources.models.small_layers import RMSNorm
 
@@ -52,15 +53,17 @@ class MultisourcesAnchoredCrossAttention(nn.Module):
     def forward(self, inputs):
         """
         Args:
-            inputs (dict of str: dict of str: tensor): Dictionary of inputs, such that
-                inputs[source_name] contains the keys "embedded_coords", "embedded_values".
+            inputs (dict): Dictionary of inputs, such that
+                inputs[(source_name, index)] contains the keys "embedded_coords", "embedded_values".
+                where (source_name, index) is a tuple with the source name and the observation index
+                (0 = most recent).
                 The values are expected of shape (B, ..., Dv) and the coordinates of shape
                 (B, ..., Dc), where ... is the spatial dimensions of the embedded source,
                 e.g. (h, w) for 2D sources.
 
         Returns:
-            dict of str: tensor: Dictionary of outputs, such that
-                outputs[source_name] contains the predicted values of the tokens.
+            dict: Dictionary of outputs, such that
+                outputs[(source_name, index)] contains the predicted values of the tokens.
         """
         # For each source:
         # - Read the length of that source's sequence
@@ -68,15 +71,15 @@ class MultisourcesAnchoredCrossAttention(nn.Module):
         # - Save the indices of the anchor tokens
         anchor_values, anchor_coords = {}, {}
         anchor_indices, n_anchors_list = {}, []
-        for source_name, source_inputs in inputs.items():
+        for source_index_pair, source_inputs in inputs.items():
             V, C = source_inputs["embedded_values"], source_inputs["embedded_coords"]
             spatial_dims = V.shape[1:-1]
 
             # For 0D sources, there's a single token, which will be the anchor point.
             if len(spatial_dims) == 0:
-                anchor_values[source_name] = V.unsqueeze(1)  # "Sequence" of 1 token
-                anchor_coords[source_name] = C.unsqueeze(1)
-                n_anchor_points = 1 
+                anchor_values[source_index_pair] = V.unsqueeze(1)  # "Sequence" of 1 token
+                anchor_coords[source_index_pair] = C.unsqueeze(1)
+                n_anchor_points = 1
 
             # For 2D sources, we want to select the anchor points in a grid pattern.
             elif len(spatial_dims) == 2:
@@ -90,11 +93,11 @@ class MultisourcesAnchoredCrossAttention(nn.Module):
                 anchor_v_s = rearrange(anchor_v_s, "b h w d -> b (h w) d")
                 anchor_c_s = C[:, anchor_rows[:, None], anchor_cols]
                 anchor_c_s = rearrange(anchor_c_s, "b h w d -> b (h w) d")
-                anchor_values[source_name] = anchor_v_s
-                anchor_coords[source_name] = anchor_c_s
+                anchor_values[source_index_pair] = anchor_v_s
+                anchor_coords[source_index_pair] = anchor_c_s
 
                 # Save the indices of the rows and columns for later
-                anchor_indices[source_name] = (anchor_rows, anchor_cols)
+                anchor_indices[source_index_pair] = (anchor_rows, anchor_cols)
                 n_anchor_points = len(anchor_rows) * len(anchor_cols)
 
             # Save the number of anchor points for later
@@ -110,21 +113,21 @@ class MultisourcesAnchoredCrossAttention(nn.Module):
 
         # Split the updated anchor tokens back to the sources and sum them to the original tokens
         outputs = {}
-        for i, (source_name, source_inputs) in enumerate(inputs.items()):
+        for i, (source_index_pair, source_inputs) in enumerate(inputs.items()):
             V = source_inputs["embedded_values"].clone()
             spatial_dims = V.shape[1:-1]
 
             if len(spatial_dims) == 0:
                 # For 0D sources, just sum the updated anchor token to the original token
-                V += anchor_values[i].squeeze(1) # (B, 1, Dv) to (B, Dv)
+                V += anchor_values[i].squeeze(1)  # (B, 1, Dv) to (B, Dv)
 
             elif len(spatial_dims) == 2:
-                anchor_rows, anchor_cols = anchor_indices[source_name]
+                anchor_rows, anchor_cols = anchor_indices[source_index_pair]
                 anchor_v_s = anchor_values[i]
                 anchor_v_s = rearrange(anchor_v_s, "b (h w) d -> b h w d", h=len(anchor_rows))
                 V[:, anchor_rows[:, None], anchor_cols] += anchor_v_s
 
-            outputs[source_name] = V
+            outputs[source_index_pair] = V
         return outputs
 
 
@@ -200,19 +203,21 @@ class SeparateWindowedValuesCoordinatesAttention(nn.Module):
     def forward(self, x):
         """
         Args:
-            x (dict of str: dict of str: tensor): Dictionary of inputs, such that
-                x[source_name] contains the keys "embedded_coords" and "embedded_values".
+            x (dict): Dictionary of inputs, such that
+                x[(source_name, index)] contains the keys "embedded_coords" and "embedded_values",
+                where (source_name, index) is a tuple containing the source name and observation index
+                (0 = most recent).
 
         Returns:
-            dict of str: tensor: Dictionary of outputs, such that
-                outputs[source_name] contains the predicted values of the tokens.
+            dict: Dictionary of outputs, such that
+                outputs[(source_name, index)] contains the predicted values of the tokens.
         """
         outputs = {}
-        for source_name, source_inputs in x.items():
+        for source_index_pair, source_inputs in x.items():
             spatial_dims = source_inputs["embedded_values"].shape[1:-1]
             # If the source is 0D or 1D, do nothing
             if len(spatial_dims) < 2:
-                outputs[source_name] = source_inputs["embedded_values"]
+                outputs[source_index_pair] = source_inputs["embedded_values"]
                 continue
             h, w = spatial_dims
             # Project the values to queries, keys and values
@@ -292,5 +297,5 @@ class SeparateWindowedValuesCoordinatesAttention(nn.Module):
             )
             # Remove the padding
             y = y[:, :h, :w, :]
-            outputs[source_name] = self.output_proj(y)  # Back to values_dim
+            outputs[source_index_pair] = self.output_proj(y)  # Back to values_dim
         return outputs

@@ -33,19 +33,21 @@ The included sources are (for now):
     - infrared
 """
 
-import hydra
-import yaml
-import pandas as pd
-import xarray as xr
 import json
 import shutil
-import numpy as np
 from concurrent.futures import ProcessPoolExecutor
-from netCDF4 import Dataset
-from xarray.backends import NetCDF4DataStore
-from tqdm import tqdm
 from pathlib import Path
+
+import hydra
+import numpy as np
+import pandas as pd
+import xarray as xr
+import yaml
+from netCDF4 import Dataset
 from omegaconf import OmegaConf
+from tqdm import tqdm
+from xarray.backends import NetCDF4DataStore
+
 from preproc.utils import list_tc_primed_sources
 
 
@@ -140,7 +142,7 @@ def initialize_all_sources_metadata(sources, source_files, source_groups, dest_p
                 if group in ds.groups:
                     ds = ds[group]
             ds = xr.open_dataset(NetCDF4DataStore(ds), decode_times=False)
-            ds['time'] = pd.to_datetime(ds['time'], origin='unix', unit='s')
+            ds["time"] = pd.to_datetime(ds["time"], origin="unix", unit="s")
 
             if source != "infrared":
                 ds = preprocess_satellite_source(ds)
@@ -199,7 +201,7 @@ def process_source(source, source_files, source_groups, dest_dir, ifovs, metadat
                     ds = ds[group]
             # Open the dataset as an xarray Dataset
             ds = xr.open_dataset(NetCDF4DataStore(ds), decode_times=False)
-            ds['time'] = pd.to_datetime(ds['time'], origin='unix', unit='s')
+            ds["time"] = pd.to_datetime(ds["time"], origin="unix", unit="s")
             if source != "infrared":
                 ds = preprocess_satellite_source(ds)
 

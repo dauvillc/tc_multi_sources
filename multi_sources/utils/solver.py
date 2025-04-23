@@ -1,4 +1,5 @@
 """Implements classes to solve the flow matching ODE for multi-sources data."""
+
 import torch
 
 
@@ -12,13 +13,14 @@ class MultisourceEulerODESolver:
     u should return a dict {source: u_s} where u_s is a tensor of shape (B, C, ...)
     giving the values of the vector field for the source s at t.
     """
+
     def __init__(self, vf_func):
         """
         Args:
             vf_func (Callable): Function that computes the vector field u(x, t).
         """
         self.vf_func = vf_func
-    
+
     def solve(self, x_0, time_grid, return_intermediate=False):
         """Solves the ODE for the given initial conditions.
         Args:
@@ -52,7 +54,7 @@ class MultisourceEulerODESolver:
                 dt = t1 - t0
                 x[source] = x[source] + dt * u[source]
                 sol[source][k + 1] = x[source]
-        
+
         if not return_intermediate:
             sol = {source: sol[source][-1] for source in sol}
         return sol

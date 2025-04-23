@@ -31,14 +31,14 @@ evaluation class to be used. The class must inherit from
 AbstractEvaluationMetric and implement the method evaluate_source.
 """
 
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
-import matplotlib.pyplot as plt
-import numpy as np
+
 import hydra
 import pandas as pd
-from hydra.utils import get_class, instantiate
+from hydra.utils import instantiate
 from omegaconf import DictConfig, OmegaConf
-from concurrent.futures import ProcessPoolExecutor
+
 from multi_sources.eval.abstract_evaluation_metric import AbstractMultisourceEvaluationMetric
 
 
@@ -59,10 +59,10 @@ def main(cfg: DictConfig):
     info_filepath = root_dir / "info.csv"
     # Load the info dataframe written by the writer.
     info_df = pd.read_csv(info_filepath)
-    info_df['dt'] = pd.to_timedelta(info_df['dt']).dt.round('min')
+    info_df["dt"] = pd.to_timedelta(info_df["dt"]).dt.round("min")
     # Convert the "spatial_shape" from string to tuple
     info_df["spatial_shape"] = info_df["spatial_shape"].apply(
-        lambda x: tuple(map(int, x.strip("()").split(", "))) if x != '()' else ()
+        lambda x: tuple(map(int, x.strip("()").split(", "))) if x != "()" else ()
     )
     # Create the results directory
     results_dir = Path(cfg["paths"]["results"]) / run_id / pred_name

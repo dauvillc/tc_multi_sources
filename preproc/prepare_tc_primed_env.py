@@ -2,17 +2,19 @@
 Formats the TC-Primed ERA5 data into the common preprocessing format.
 """
 
-import hydra
-import pandas as pd
 import json
-import xarray as xr
-from pathlib import Path
-from tqdm import tqdm
-from omegaconf import OmegaConf
-from netCDF4 import Dataset
-from preproc.utils import list_tc_primed_sources
 from concurrent.futures import ProcessPoolExecutor
 from functools import partial
+from pathlib import Path
+
+import hydra
+import pandas as pd
+import xarray as xr
+from netCDF4 import Dataset
+from omegaconf import OmegaConf
+from tqdm import tqdm
+
+from preproc.utils import list_tc_primed_sources
 
 
 def process_file(file, dest_dir, data_vars, source_name):
@@ -183,19 +185,24 @@ def process_storm_file(file, dest_dir, source_name, data_vars, storm_vars, conte
                     "longitude": storm_lon,
                 }
             )
-            dest_data_file = dest_dir / f"{sid}_{pd.to_datetime(time).strftime('%Y%m%dT%H%M%S')}.nc"
+            dest_data_file = (
+                dest_dir / f"{sid}_{pd.to_datetime(time).strftime('%Y%m%dT%H%M%S')}.nc"
+            )
             new_ds.to_netcdf(dest_data_file)
-            metadata_rows.append({
-                "source_name": source_name,
-                "sid": sid,
-                "time": time,
-                "season": season,
-                "storm_latitude": storm_lat,
-                "storm_longitude": storm_lon,
-                "intensity": storm_meta["intensity"][time_idx].item(),
-                "data_path": str(dest_data_file),
-            })
+            metadata_rows.append(
+                {
+                    "source_name": source_name,
+                    "sid": sid,
+                    "time": time,
+                    "season": season,
+                    "storm_latitude": storm_lat,
+                    "storm_longitude": storm_lon,
+                    "intensity": storm_meta["intensity"][time_idx].item(),
+                    "data_path": str(dest_data_file),
+                }
+            )
     return pd.DataFrame(metadata_rows)
+
 
 def process_storm_metadata(source_files, dest_dir, verbose=False, num_workers=0):
     dest_dir.mkdir(parents=True, exist_ok=True)
@@ -225,7 +232,9 @@ def process_storm_metadata(source_files, dest_dir, verbose=False, num_workers=0)
     if num_workers < 1:
         metadata_dfs = []
         for file in iterator:
-            df = process_storm_file(file, dest_dir, source_name, data_vars, storm_vars, context_vars)
+            df = process_storm_file(
+                file, dest_dir, source_name, data_vars, storm_vars, context_vars
+            )
             metadata_dfs.append(df)
     else:
         process_file_partial = partial(
@@ -234,7 +243,7 @@ def process_storm_metadata(source_files, dest_dir, verbose=False, num_workers=0)
             source_name=source_name,
             data_vars=data_vars,
             storm_vars=storm_vars,
-            context_vars=context_vars
+            context_vars=context_vars,
         )
         with ProcessPoolExecutor(max_workers=num_workers) as executor:
             metadata_dfs = list(
@@ -242,7 +251,9 @@ def process_storm_metadata(source_files, dest_dir, verbose=False, num_workers=0)
                     executor.map(process_file_partial, source_files),
                     total=len(source_files),
                     desc="Processing Storm Metadata",
-                ) if verbose else executor.map(process_file_partial, source_files)
+                )
+                if verbose
+                else executor.map(process_file_partial, source_files)
             )
 
     combined_metadata_df = pd.concat(metadata_dfs, ignore_index=True)
@@ -280,7 +291,9 @@ def main(cfg):
         else:
             # Process storm metadata source
             storm_meta_dest_dir = dest_path / "tc_primed_storm_metadata"
-            process_storm_metadata(era5_files, storm_meta_dest_dir, verbose=True, num_workers=num_workers)
+            process_storm_metadata(
+                era5_files, storm_meta_dest_dir, verbose=True, num_workers=num_workers
+            )
 
 
 if __name__ == "__main__":

@@ -4,28 +4,26 @@
 Prepares the ERA5 data for the TC Primed dataset.
 """
 
+import json
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from pathlib import Path
+
 import hydra
-import yaml
+import numpy as np
 import pandas as pd
 import xarray as xr
-import json
-import warnings
-from tqdm import tqdm
-from netCDF4 import Dataset
-from xarray.backends import NetCDF4DataStore
-from tqdm import tqdm
-from pathlib import Path
-from omegaconf import OmegaConf
 from global_land_mask import globe
-import numpy as np
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from netCDF4 import Dataset
+from omegaconf import OmegaConf
+from tqdm import tqdm
+from xarray.backends import NetCDF4DataStore
+
+from multi_sources.data_processing.grid_functions import (
+    grid_distance_to_point,
+)
 
 # Local imports
 from preproc.utils import list_tc_primed_sources
-from multi_sources.data_processing.grid_functions import (
-    grid_distance_to_point,
-    ResamplingError,
-)
 
 DATA_VARS = ["pressure_msl", "u_wind_10m", "v_wind_10m", "sst"]
 
@@ -180,8 +178,6 @@ def main(cfg):
     # Setup paths
     tc_primed_path = Path(cfg["paths"]["raw_datasets"]) / "tc_primed"
     dest_path = Path(cfg["paths"]["preprocessed_dataset"]) / "prepared"
-    # Resolution of the target grid, in degrees
-    regridding_res = cfg["regridding_resolution"]
     check_exist = cfg.get("check_exist", False)
 
     # Get PMW sources only
@@ -191,7 +187,7 @@ def main(cfg):
     )
     era5_files = source_files.get("era5", [])
 
-    source_dest_dir = dest_path / f"tc_primed_era5"
+    source_dest_dir = dest_path / "tc_primed_era5"
     # Create destination directory
     source_dest_dir.mkdir(parents=True, exist_ok=True)
 
@@ -223,7 +219,7 @@ def main(cfg):
                 samples_metadata.extend(meta_chunk)
                 discarded += discarded_chunk
     else:
-        for file in tqdm(era5_files, desc=f"Processing files"):
+        for file in tqdm(era5_files, desc="Processing files"):
             file_times_metadata = process_era5_file(file, source_dest_dir, check_exist)
             if file_times_metadata is None:
                 discarded += 1
@@ -236,7 +232,7 @@ def main(cfg):
         for file in source_dest_dir.iterdir():
             file.unlink()
         source_dest_dir.rmdir()
-        print(f"Found no valid samples, removing directory.")
+        print("Found no valid samples, removing directory.")
     else:
         if discarded > 0:
             percent = discarded / len(era5_files) * 100

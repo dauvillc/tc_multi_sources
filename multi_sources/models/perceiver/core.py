@@ -4,11 +4,11 @@ tasks.
 
 import torch.nn as nn
 
-from multi_sources.models.perceiver.transformer import ValuesCoordinatesTransformer
 from multi_sources.models.perceiver.cross_att import (
-    MultisourcePerceiverEncoder,
     MultisourcePerceiverDecoder,
+    MultisourcePerceiverEncoder,
 )
+from multi_sources.models.perceiver.transformer import ValuesCoordinatesTransformer
 
 
 class MultisourcePerceiver(nn.Module):

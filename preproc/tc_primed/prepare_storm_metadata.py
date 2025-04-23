@@ -4,27 +4,25 @@
 Prepares the storm metadata for the TC Primed dataset.
 """
 
+import json
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from pathlib import Path
+
 import hydra
-import yaml
+import numpy as np
 import pandas as pd
 import xarray as xr
-import json
-import warnings
-from tqdm import tqdm
-from netCDF4 import Dataset
-from xarray.backends import NetCDF4DataStore
-from tqdm import tqdm
-from pathlib import Path
-from omegaconf import OmegaConf
 from global_land_mask import globe
-import numpy as np
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from netCDF4 import Dataset
+from omegaconf import OmegaConf
+from tqdm import tqdm
+from xarray.backends import NetCDF4DataStore
 
 # Local imports
 from preproc.utils import list_tc_primed_sources
 
 DATA_VARS = ["intensity"]
-FILL_VALUES = {"intensity": -999.}
+FILL_VALUES = {"intensity": -999.0}
 
 
 def initialize_metadata(dest_dir):
@@ -123,11 +121,13 @@ def process_storm_data_file(file, dest_dir, check_exist=False):
 
             # Select only the relevant variables
             ds = ds[DATA_VARS + ["latitude", "longitude", "land_mask", "dist_to_center"]]
-            
+
             # If any data variable is NaN or its fill value, discard the sample
             found_nan = False
             for data_var in DATA_VARS:
-                if np.isnan(ds[data_var].values).any() or np.any(ds[data_var].values == FILL_VALUES[data_var]):
+                if np.isnan(ds[data_var].values).any() or np.any(
+                    ds[data_var].values == FILL_VALUES[data_var]
+                ):
                     print(f"Discarding sample {sid} at time {time} due to NaN values.")
                     found_nan = True
                     continue
@@ -164,8 +164,6 @@ def main(cfg):
     # Setup paths
     tc_primed_path = Path(cfg["paths"]["raw_datasets"]) / "tc_primed"
     dest_path = Path(cfg["paths"]["preprocessed_dataset"]) / "prepared"
-    # Resolution of the target grid, in degrees
-    regridding_res = cfg["regridding_resolution"]
     check_exist = cfg.get("check_exist", False)
     # Option to process a single file
     process_file = cfg.get("process_file", None)
@@ -186,7 +184,7 @@ def main(cfg):
         print(f"Processing only file: {process_file_path}")
         era5_files = [str(process_file_path)]
 
-    source_dest_dir = dest_path / f"tc_primed_storm_metadata"
+    source_dest_dir = dest_path / "tc_primed_storm_metadata"
     # Create destination directory
     source_dest_dir.mkdir(parents=True, exist_ok=True)
 
@@ -218,7 +216,7 @@ def main(cfg):
                 samples_metadata.extend(meta_chunk)
                 discarded += discarded_chunk
     else:
-        for file in tqdm(era5_files, desc=f"Processing files"):
+        for file in tqdm(era5_files, desc="Processing files"):
             file_times_metadata = process_storm_data_file(file, source_dest_dir, check_exist)
             if file_times_metadata is None:
                 discarded += 1
@@ -231,7 +229,7 @@ def main(cfg):
         for file in source_dest_dir.iterdir():
             file.unlink()
         source_dest_dir.rmdir()
-        print(f"Found no valid samples, removing directory.")
+        print("Found no valid samples, removing directory.")
     else:
         if discarded > 0:
             percent = discarded / len(era5_files) * 100

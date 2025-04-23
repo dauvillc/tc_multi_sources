@@ -1,11 +1,12 @@
 """To be used after regrid.py. Splits the data into training, validation, and test sets."""
 
+from pathlib import Path
+
 import hydra
 import pandas as pd
 from omegaconf import OmegaConf
-from tqdm import tqdm
-from pathlib import Path
 from sklearn.model_selection import train_test_split
+from tqdm import tqdm
 
 
 @hydra.main(config_path="../conf/", config_name="preproc", version_base=None)

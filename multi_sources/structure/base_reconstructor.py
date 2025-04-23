@@ -7,13 +7,14 @@ from abc import ABC, abstractmethod
 import torch
 import torch.nn as nn
 
-# Local module imports
-from multi_sources.structure.base_module import MultisourceAbstractModule
-from multi_sources.models.embedding_layers import SourcetypeEmbedding2d, SourcetypeEmbedding0d
+from multi_sources.models.embedding_layers import SourcetypeEmbedding0d, SourcetypeEmbedding2d
 from multi_sources.models.output_layers import (
     SourcetypeProjection0d,
     SourcetypeProjection2d,
 )
+
+# Local module imports
+from multi_sources.structure.base_module import MultisourceAbstractModule
 
 
 class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
@@ -21,7 +22,7 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
     some of the sources and trains its backbone to reconstruct the missing data.
     The sources may have different dimensionalities (e.g. 2D, 1D, 0D) and come with
     spatiotemporal coordinates.
-    The structure expects its input as a dict D {source_name: map}, where D[source] contains the
+    The structure expects its input as a dict D {(source_name, index): map}, where D[(source_name, index)] contains the
     following key-value pairs (all shapes excluding the batch dimension):
     - "id" is a list of strings of length (B,) each uniquely identifying the elements.
     - "avail" is a scalar tensor of shape (B,) containing 1 if the element is available
@@ -34,7 +35,7 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
     - "dist_to_center" is a tensor of shape (B, ...) containing the distance
         to the center of the storm at each pixel, in km.
 
-    The structure outputs a dict {source_name: tensor} containing the predicted values
+    The structure outputs a dict {(source_name, index): tensor} containing the predicted values
     for each source.
     """
 
@@ -164,7 +165,7 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
                 # of the same type
                 if self.sourcetypes_characs_vars[source.type] != source.n_charac_variables():
                     raise ValueError(
-                        f"Number of characs variables is not "
+                        "Number of characs variables is not "
                         "the same for all sources of type {source.type}"
                     )
 
@@ -175,12 +176,13 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
             where h = H // patch_size and w = W // patch_size.
         """
         output = {}
-        for source, data in x.items():
-            source_type = self.sources[source].type
+        for source_index_pair, data in x.items():
+            source_name = source_index_pair[0]  # Extract the source name from the tuple
+            source_type = self.sources[source_name].type
             v, c, cond = self.sourcetype_embeddings[source_type](data)
             # v: embedded values, c: coords, cond: conditioning tensor
 
-            output[source] = {
+            output[source_index_pair] = {
                 "embedded_values": v,
                 "embedded_coords": c,
                 "conditioning": cond,
@@ -192,11 +194,11 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
         """Given a multi-sources batch, randomly selects a source to mask in each sample.
         Does not actually perform the masking.
         Args:
-            x (dict of str to dict of str to tensor): The input sources.
+            x (dict of (source_name, index) to dict of str to tensor): The input sources.
             masking_seed (int, optional): Seed for the random number generator used to select
                 which sources to mask.
         Returns:
-            avail_flags (dict of str to tensor): The availability flags for each source,
+            avail_flags (dict of (source_name, index) to tensor): The availability flags for each source,
                 as tensors of shape (B,), such that:
                 * avail_flags[s][i] == 1 if the source s is available for the sample i,
                 * avail_flags[s][i] == 0 if the source s is masked for the sample i,
@@ -211,11 +213,12 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
             # Case where there are pre-determined sources to mask. In this case,
             # we mask those whenever they are available.
             avail_flags = {}
-            for source, data in x.items():
+            for source_index_pair, data in x.items():
+                source_name = source_index_pair[0]  # Extract source name from tuple
                 avail_flag = data["avail"].clone()
-                if source in self.mask_only_sources:
+                if source_name in self.mask_only_sources:
                     avail_flag[avail_flag == 1] = 0
-                avail_flags[source] = avail_flag
+                avail_flags[source_index_pair] = avail_flag
             # We need to check that for each sample, at least one source has been masked.
             total_avail_flag = sum([flag == 0 for flag in avail_flags.values()])
             if (total_avail_flag == 0).any():
@@ -231,12 +234,16 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
             # Missing sources cannot be masked.
             # Strategy: we'll generate a random noise tensor of shape (B, n_sources)
             # and for each row, mask the sources with the highest noise.
-            noise = torch.rand((batch_size, n_sources), generator=self.source_select_gen).to(device)
-            for i, (source, data) in enumerate(x.items()):
+            noise = torch.rand((batch_size, n_sources), generator=self.source_select_gen).to(
+                device
+            )
+            for i, (source_index_pair, data) in enumerate(x.items()):
                 # Multiply the noise by the availability mask (-1 for missing sources, 1 otherwise)
                 noise[:, i] = noise[:, i] * data["avail"].squeeze(-1)
             # Gather the indices of the sources to mask for each sample
-            _, sources_to_mask = noise.topk(self.n_sources_to_mask, dim=1)  # (B, n_sources_to_mask)
+            _, sources_to_mask = noise.topk(
+                self.n_sources_to_mask, dim=1
+            )  # (B, n_sources_to_mask)
             # Deduce a matrix M of shape (B, n_sources) such that M[b, i] = 1 if the source i
             # should be masked for the sample b, and 0 otherwise.
             masked_sources_matrix = torch.zeros(
@@ -245,10 +252,10 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
             masked_sources_matrix.scatter_(1, sources_to_mask, True)
             # Deduce the availability flags for each source
             avail_flags = {}
-            for i, (source, data) in enumerate(x.items()):
+            for i, (source_index_pair, data) in enumerate(x.items()):
                 avail_flag = data["avail"].clone()
                 avail_flag[masked_sources_matrix[:, i]] = 0
-                avail_flags[source] = avail_flag
+                avail_flags[source_index_pair] = avail_flag
         return avail_flags
 
     @abstractmethod
@@ -258,15 +265,15 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
     def forward(self, x):
         """Computes the forward pass of the model.
         Args:
-            x (dict of str to dict of str to tensor): The input sources, masked.
+            x (dict of (source_name, index) to dict of str to tensor): The input sources, masked.
         Returns:
-            y (dict of str to tensor): The predicted values for each source.
+            y (dict of (source_name, index) to tensor): The predicted values for each source.
         """
         # Save the shape of the tokens before they're embedded, so that we can
         # later remove the padding.
         spatial_shapes = {
-            source: data["values"].shape[2:]
-            for source, data in x.items()
+            source_index_pair: data["values"].shape[2:]
+            for source_index_pair, data in x.items()
             if len(data["values"].shape) > 2
         }
         # Embed and mask the sources
@@ -275,16 +282,19 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
         # Run the transformer backbone
         pred = self.backbone(x)
 
-        for source, v in pred.items():
+        for source_index_pair, v in pred.items():
             # Embedded conditioning for the final modulation
-            cond = x[source]["conditioning"]
+            cond = x[source_index_pair]["conditioning"]
             # Project from latent values space to output space using the output layer
             # corresponding to the source type
-            src_type = self.sources[source].type
-            pred[source] = self.sourcetype_output_projs[src_type](v, cond)
+            source_name = source_index_pair[0]  # Extract source name from tuple
+            src_type = self.sources[source_name].type
+            pred[source_index_pair] = self.sourcetype_output_projs[src_type](v, cond)
         # For 2D sources, remove the padding
-        for source, spatial_shape in spatial_shapes.items():
-            pred[source] = pred[source][..., : spatial_shape[0], : spatial_shape[1]]
+        for source_index_pair, spatial_shape in spatial_shapes.items():
+            pred[source_index_pair] = pred[source_index_pair][
+                ..., : spatial_shape[0], : spatial_shape[1]
+            ]
         return pred
 
     @abstractmethod

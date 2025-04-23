@@ -1,8 +1,8 @@
 import numpy as np
-import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange
+
 from multi_sources.models.perceiver.small_layers import RMSNorm
 
 

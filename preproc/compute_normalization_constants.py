@@ -1,14 +1,14 @@
+import json
+from collections import defaultdict
+from concurrent.futures import ProcessPoolExecutor
+from pathlib import Path
+
 import hydra
 import numpy as np
 import pandas as pd
-import json
-import xarray as xr
 from netCDF4 import Dataset
 from omegaconf import OmegaConf
 from tqdm import tqdm
-from concurrent.futures import ProcessPoolExecutor
-from pathlib import Path
-from collections import defaultdict
 
 
 def process_samples_chunk(paths):
@@ -24,7 +24,7 @@ def process_samples_chunk(paths):
                 count, mean, m2 = count_dict[var], means_dict[var], m2_dict[var]
                 data = np.ravel(ds[var][:])
                 # If the data contains missing values, the loaded data is a numpy masked array.
-                if type(data) == np.ma.core.MaskedArray:
+                if type(data) is np.ma.core.MaskedArray:
                     data = data.compressed()  # Keeps only the valid values.
                 count += len(data)
                 delta = data - mean
@@ -99,7 +99,6 @@ def main(cfg):
     # while keeping a minimum number of samples.
     use_fraction = cfg["norm_constants_fraction"]
     min_files = cfg["norm_constants_min_samples"]
-    max_mem_per_worker = cfg["max_mem_per_worker"]
     process_only = cfg.get("process_only", [])
     # Path to the preprocessed dataset directory
     preprocessed_dir = Path(cfg["paths"]["preprocessed_dataset"])
@@ -163,9 +162,8 @@ def main(cfg):
                         max(min_max[charac_var]["max"], np.max(data))
                     )
             # Save the min and max for each charac var in that source's constants directory.
-            with open(constants_dir / src /"charac_vars_min_max.json", "w") as f:
+            with open(constants_dir / src / "charac_vars_min_max.json", "w") as f:
                 json.dump(min_max, f)
-
 
 
 if __name__ == "__main__":

@@ -2,12 +2,12 @@
 a single source.
 """
 
+from typing import Any, Dict, List
+
 import torch
-import random
+import torchvision.transforms.functional as F
 from torchvision import tv_tensors
 from torchvision.transforms.v2 import Transform
-import torchvision.transforms.functional as F
-from typing import Any, Dict, List
 
 
 class MultisourceDataAugmentation:
@@ -145,6 +145,7 @@ class RandomDynamicCrop(Transform):
     top-left corner. The crop size is a fraction of the full image size,
     and is sampled uniformly from a range defined by min_scale and max_scale.
     """
+
     def __init__(self, min_scale: float = 0.5, max_scale: float = 1.0):
         """
         Args:
@@ -177,3 +178,14 @@ class RandomDynamicCrop(Transform):
             return F.crop(inpt, params["i"], params["j"], params["h"], params["w"])
         # Pass through all other inputs (e.g., labels) untouched
         return inpt
+
+
+class CropAroundStormCenter(Transform):
+    """Given the input data of a 2D source, crops the values, coords,
+    landmask, and dist_to_center around the storm center. Returns the
+    largest possible crop centered on the storm center. The storm
+    center is defined as the pixel with the minimum value of the
+    dist_to_center field.
+    """
+
+    pass

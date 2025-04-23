@@ -1,9 +1,9 @@
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
+from pathlib import Path
+
 import matplotlib.pyplot as plt
 import numpy as np
-from pathlib import Path
-from string import Template
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 from multi_sources.data_processing.grid_functions import crop_nan_border
 
@@ -12,9 +12,9 @@ def display_solution_html(batch, sol, time_grid, sample_index=0):
     """Display the solution and groundtruth of the flow matching process using plotly.
 
     Args:
-        batch (dict): The input batch containing the original data
-        sol (dict of str to torch.Tensor): The solution of the flow matching process,
-            as a dict mapping source names to tensors of shape (T, B, C, ...).
+        batch (dict): The input batch containing the original data, with (source_name, index) tuples as keys
+        sol (dict): The solution of the flow matching process, as a dict mapping
+            (source_name, index) tuples to tensors of shape (T, B, C, ...).
         time_grid (torch.Tensor): Time points of shape (T,)
         sample_index (int, optional): Index of the sample to display. Defaults to 0.
 
@@ -26,17 +26,18 @@ def display_solution_html(batch, sol, time_grid, sample_index=0):
 
     # Filter out unavailable sources
     available_sources = {
-        name: data
-        for name, data in batch.items()
+        source_index_pair: data
+        for source_index_pair, data in batch.items()
         if data["avail"][sample_index].item() != -1  # Use sample_index
     }
     n_sources = len(available_sources)
 
     subplot_titles = []
-    for source in available_sources.keys():
-        dt = batch[source]["dt"][sample_index].item()  # Use sample_index
-        subplot_titles.append(f"{source} (dt={dt:.3f}) Prediction")
-        subplot_titles.append(f"{source} (dt={dt:.3f}) Ground Truth")
+    for source_index_pair in available_sources.keys():
+        source_name, index = source_index_pair
+        dt = batch[source_index_pair]["dt"][sample_index].item()  # Use sample_index
+        subplot_titles.append(f"{source_name} (index={index}, dt={dt:.3f}) Prediction")
+        subplot_titles.append(f"{source_name} (index={index}, dt={dt:.3f}) Ground Truth")
 
     # Create figure with subplots
     fig = make_subplots(
@@ -51,9 +52,11 @@ def display_solution_html(batch, sol, time_grid, sample_index=0):
     frames = []
     for t in range(T):
         frame_data = []
-        for i, (source_name, source_data) in enumerate(available_sources.items(), start=1):
+        for i, (source_index_pair, source_data) in enumerate(available_sources.items(), start=1):
             # Get prediction and ground truth
-            pred = sol[source_name][t, sample_index, 0].detach().cpu().numpy()  # Use sample_index
+            pred = (
+                sol[source_index_pair][t, sample_index, 0].detach().cpu().numpy()
+            )  # Use sample_index
             true = (
                 source_data["values"][sample_index, 0].detach().cpu().numpy()
             )  # Use sample_index
@@ -90,8 +93,10 @@ def display_solution_html(batch, sol, time_grid, sample_index=0):
         frames.append(go.Frame(data=frame_data, name=f"t{t}"))
 
     # Add the initial data to the figure
-    for i, (source_name, source_data) in enumerate(available_sources.items(), start=1):
-        pred_init = sol[source_name][0, sample_index, 0].detach().cpu().numpy()  # Use sample_index
+    for i, (source_index_pair, source_data) in enumerate(available_sources.items(), start=1):
+        pred_init = (
+            sol[source_index_pair][0, sample_index, 0].detach().cpu().numpy()
+        )  # Use sample_index
         true = source_data["values"][sample_index, 0].detach().cpu().numpy()  # Use sample_index
 
         if len(pred_init.shape) == 2:
@@ -159,19 +164,20 @@ def display_solution_html(batch, sol, time_grid, sample_index=0):
     return fig
 
 
-def display_realizations(sol, batch, avail_flags, save_filepath_prefix, deterministic=False,
-                         display_fraction=1.0):
+def display_realizations(
+    sol, batch, avail_flags, save_filepath_prefix, deterministic=False, display_fraction=1.0
+):
     """Given multiple solutions of the flow matching process, creates one figure
     per sample to display the solutions and groundtruth.
     Args:
-        sol (dict of torch.Tensor): The solution of the flow matching process,
-            as a dict mapping source names to tensors of shape (Np, B, C, ...)
+        sol (dict): The solution of the flow matching process, as a dict mapping
+            (source_name, index) tuples to tensors of shape (Np, B, C, ...)
             where Np is the number of realizations, B is the batch size, and C
             is the number of channels.
-        batch (dict of dict of torch.Tensor): Dict mapping source names to data dicts.
-            For each source, batch[source] must contains the following entries: "values",
-            of shape (B, C, ...).
-        avail_flags (dict): Dictionary {source: avail_flag_s} where avail_flag_s is a
+        batch (dict): Dict mapping (source_name, index) tuples to data dicts.
+            For each source-index pair, batch[(source_name, index)] must contains
+            the following entries: "values", of shape (B, C, ...).
+        avail_flags (dict): Dictionary {(source_name, index): avail_flag_s} where avail_flag_s is a
             tensor of shape (B,) containing 1 if the value is available, 0 if it was
             available and masked, and -1 if it was not available.
         save_filepath_prefix (str or Path): Prefix of the filepath where the figure will be saved.
@@ -185,51 +191,54 @@ def display_realizations(sol, batch, avail_flags, save_filepath_prefix, determin
 
     # Make the deterministic case compatible with the non-deterministic case
     if deterministic:
-        sol = {src: sol_s.unsqueeze(0) for src, sol_s in sol.items()}
+        sol = {source_index_pair: sol_s.unsqueeze(0) for source_index_pair, sol_s in sol.items()}
 
     # Extract batch size and number of realizations
-    any_source = next(iter(sol.keys()))
-    n_realizations = sol[any_source].shape[0]
-    batch_size = sol[any_source].shape[1]
+    any_source_index_pair = next(iter(sol.keys()))
+    n_realizations = sol[any_source_index_pair].shape[0]
+    batch_size = sol[any_source_index_pair].shape[1]
 
     # Take a fraction of the samples, evenly spaced
-    samples_to_display = np.linspace(0, batch_size - 1, int(display_fraction * batch_size)).astype(int)
+    samples_to_display = np.linspace(0, batch_size - 1, int(display_fraction * batch_size)).astype(
+        int
+    )
 
     # For each sample
     for sample_idx in samples_to_display:
         # Get available sources for this sample (either masked or available)
-        sources = [
-            source
-            for source, flags in avail_flags.items()
+        source_index_pairs = [
+            source_index_pair
+            for source_index_pair, flags in avail_flags.items()
             if flags[sample_idx].item() != -1  # Either masked (0) or available (1)
         ]
 
-        if not sources:
+        if not source_index_pairs:
             continue  # Skip if no sources are available or masked
 
         # Create a figure with n_realizations + 1 columns (realizations + groundtruth)
         # and one row per source
         fig, axs = plt.subplots(
-            nrows=len(sources),
+            nrows=len(source_index_pairs),
             ncols=n_realizations + 1,
-            figsize=(3 * (n_realizations + 1), 3 * len(sources)),
+            figsize=(3 * (n_realizations + 1), 3 * len(source_index_pairs)),
             squeeze=False,
         )
 
-        # For each source
-        for src_idx, source in enumerate(sources):
-            is_masked = avail_flags[source][sample_idx].item() == 0
+        # For each source-index pair
+        for src_idx, source_index_pair in enumerate(source_index_pairs):
+            source_name, index = source_index_pair
+            is_masked = avail_flags[source_index_pair][sample_idx].item() == 0
 
             # For each realization
             for r_idx in range(n_realizations):
                 ax = axs[src_idx, r_idx]
                 # Get original coordinates
-                coords = batch[source]["coords"][sample_idx]  # (2, H, W), lat/lon
+                coords = batch[source_index_pair]["coords"][sample_idx]  # (2, H, W), lat/lon
 
                 # Only show prediction if the source was masked
                 if is_masked:
                     # Get prediction data
-                    pred = sol[source][r_idx, sample_idx, 0]
+                    pred = sol[source_index_pair][r_idx, sample_idx, 0]
 
                     # Display data based on dimensionality
                     if len(pred.shape) == 2:
@@ -256,14 +265,14 @@ def display_realizations(sol, batch, avail_flags, save_filepath_prefix, determin
                         pred = pred.item()
                         ax.bar([0], [pred], color="orange")
 
-                    ax.set_title(f"Prediction {r_idx+1}")
+                    ax.set_title(f"{source_name} (index={index}) Pred {r_idx+1}")
                 else:
-                    ax.set_title(f"Not masked")
+                    ax.set_title(f"{source_name} (index={index}) Not masked")
                     ax.axis("off")
 
             # Display groundtruth in the last column
             ax = axs[src_idx, -1]
-            true = batch[source]["values"][sample_idx, 0]
+            true = batch[source_index_pair]["values"][sample_idx, 0]
 
             if len(true.shape) == 2:
                 true = crop_nan_border(coords, [true.unsqueeze(0)])[0].squeeze(0)
@@ -284,7 +293,7 @@ def display_realizations(sol, batch, avail_flags, save_filepath_prefix, determin
                 true = true.item()
                 ax.bar([0], [true], color="orange")
 
-            ax.set_title(f"Ground Truth")
+            ax.set_title(f"{source_name} (index={index}) Ground Truth")
 
         plt.tight_layout()
         # Save figure

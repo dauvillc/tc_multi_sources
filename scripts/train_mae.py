@@ -1,17 +1,17 @@
-import lightning.pytorch as pl
-import hydra
-import multi_sources
-import torch
-from hydra.utils import get_class, instantiate
 from pathlib import Path
-from lightning.pytorch.loggers import WandbLogger
-from lightning.pytorch.callbacks import ModelCheckpoint, LearningRateMonitor, ModelSummary
-from torch.utils.data import DataLoader
-from omegaconf import DictConfig, OmegaConf
 
-from utils.utils import get_random_code
-from utils.checkpoints import load_experiment_cfg_from_checkpoint
+import hydra
+import lightning.pytorch as pl
+import torch
+from hydra.utils import instantiate
+from lightning.pytorch.callbacks import LearningRateMonitor, ModelCheckpoint, ModelSummary
+from lightning.pytorch.loggers import WandbLogger
+from omegaconf import DictConfig, OmegaConf
+from torch.utils.data import DataLoader
+
 from multi_sources.data_processing.collate_fn import multi_source_collate_fn
+from utils.checkpoints import load_experiment_cfg_from_checkpoint
+from utils.utils import get_random_code
 
 
 @hydra.main(version_base=None, config_path="../conf", config_name="train")
@@ -121,7 +121,7 @@ def main(cfg: DictConfig):
     lr_monitor = LearningRateMonitor()
     model_summary = ModelSummary(max_depth=1)
     callbacks = [epoch_checkpoint_callback, lr_monitor, model_summary]
-                 
+
     # Create the trainer
     trainer = pl.Trainer(
         logger=logger,

@@ -3,16 +3,17 @@ Implements the VisualEvaluation class, which just displays the targets and predi
 for a given source.
 """
 
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
-from string import Template
 from concurrent.futures import ProcessPoolExecutor
-from tqdm import tqdm
-from multi_sources.eval.abstract_evaluation_metric import AbstractMultisourceEvaluationMetric
+from string import Template
+
 import matplotlib.gridspec as gridspec
+import matplotlib.pyplot as plt
+import numpy as np
+import seaborn as sns
+from tqdm import tqdm
+
 from multi_sources.data_processing.grid_functions import crop_nan_border_numpy
+from multi_sources.eval.abstract_evaluation_metric import AbstractMultisourceEvaluationMetric
 
 
 # A little code snippet from Shawn Chin & Peter Mortensen
@@ -26,7 +27,7 @@ def strfdelta(tdelta, fmt):
     d = {"D": tdelta.days}
     d["H"], rem = divmod(tdelta.seconds, 3600)
     d["M"], d["S"] = divmod(rem, 60)
-    d["H"], d["M"], d["S"] = f'{d["H"]:02d}', f'{d["M"]:02d}', f'{d["S"]:02d}'
+    d["H"], d["M"], d["S"] = f"{d['H']:02d}", f"{d['M']:02d}", f"{d['S']:02d}"
     t = DeltaTemplate(fmt)
     return t.substitute(**d)
 
@@ -87,7 +88,7 @@ class VisualEvaluation(AbstractMultisourceEvaluationMetric):
             batch_chunks = np.array_split(unique_batch_indices, num_workers)
             print(f"Dividing {len(unique_batch_indices)} batches into {len(batch_chunks)} chunks")
             futures = []
-            
+
             with ProcessPoolExecutor(max_workers=num_workers) as executor:
                 for i, chunk in enumerate(batch_chunks):
                     # Create chunks of batch indices
@@ -95,16 +96,16 @@ class VisualEvaluation(AbstractMultisourceEvaluationMetric):
                     if not chunk_df.empty:
                         futures.append(
                             executor.submit(
-                                process_batch_chunk, 
-                                chunk_df, 
-                                chunk, 
-                                self.load_batch, 
-                                self.results_dir, 
+                                process_batch_chunk,
+                                chunk_df,
+                                chunk,
+                                self.load_batch,
+                                self.results_dir,
                                 verbose,
-                                i  # Pass the process ID (chunk index)
+                                i,  # Pass the process ID (chunk index)
                             )
                         )
-                
+
                 for future in tqdm(futures, desc="Processing chunks", disable=not verbose):
                     future.result()
 
@@ -201,11 +202,11 @@ def plot_sample(sample_df, targets, preds, results_dir, batch_idx, sample_idx):
     target = target_ds[first_channel].values
     pred_ds = preds[masked_source]
     pred = pred_ds[first_channel].values
-    
+
     # Crop NaN borders from target and prediction based on the coordinates
     lat, lon = target_ds.lat.values, target_ds.lon.values
     target, pred, lat, lon = crop_nan_border_numpy(lat, [target, pred, lat, lon])
-    
+
     # Calculate shared min/max values
     vmin = min(np.nanmin(target), np.nanmin(pred))
     vmax = max(np.nanmax(target), np.nanmax(pred))
@@ -238,9 +239,11 @@ def plot_sample(sample_df, targets, preds, results_dir, batch_idx, sample_idx):
     plt.close(fig)
 
 
-def process_batch_chunk(chunk_df, batch_indices, load_batch_fn, results_dir, verbose=True, process_id=None):
+def process_batch_chunk(
+    chunk_df, batch_indices, load_batch_fn, results_dir, verbose=True, process_id=None
+):
     """Process a chunk of batches in a single worker process.
-    
+
     Args:
         chunk_df (pd.DataFrame): DataFrame containing information for a chunk of batches
         batch_indices (np.array): Array of batch indices to process
@@ -251,21 +254,25 @@ def process_batch_chunk(chunk_df, batch_indices, load_batch_fn, results_dir, ver
     """
     # Only show progress for process_id=0 or if process_id is None
     show_progress = verbose and (process_id is None or process_id == 0)
-    
-    for batch_idx in tqdm(batch_indices, desc=f"Batches in chunk {process_id if process_id is not None else ''}", 
-                          disable=not show_progress, leave=False):
+
+    for batch_idx in tqdm(
+        batch_indices,
+        desc=f"Batches in chunk {process_id if process_id is not None else ''}",
+        disable=not show_progress,
+        leave=False,
+    ):
         # Get the sources included in the batch
         batch_info = chunk_df[chunk_df["batch_idx"] == batch_idx]
         sources = batch_info["source_name"].unique()
-        
+
         # For each source, load the targets and predictions
         targets, preds = {}, {}
         for source in sources:
             targets[source], preds[source] = load_batch_fn(source, batch_idx)
-        
+
         # Display the targets and predictions
         display_batch(batch_info, batch_idx, targets, preds, results_dir)
-    
+
     return True  # Return value to indicate completion
 
 

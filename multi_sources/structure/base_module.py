@@ -7,12 +7,13 @@ from abc import ABC, abstractmethod
 import lightning.pytorch as pl
 import torch
 
+from multi_sources.models.utils import (
+    embed_coords_to_sincos,
+    normalize_coords_across_sources,
+)
+
 # Local module imports
 from multi_sources.utils.scheduler import CosineAnnealingWarmupRestarts
-from multi_sources.models.utils import (
-    normalize_coords_across_sources,
-    embed_coords_to_sincos,
-)
 
 
 class MultisourceAbstractModule(pl.LightningModule, ABC):
@@ -21,7 +22,7 @@ class MultisourceAbstractModule(pl.LightningModule, ABC):
     subclasses and the filtering of the loss.
     The sources may have different dimensionalities (e.g. 2D, 1D, 0D) and come with
     spatiotemporal coordinates.
-    The structure expects its input as a dict D {source_name: map}, where D[source] contains the
+    The structure expects its input as a dict D {(source_name, index): map}, where D[(source_name, index)] contains the
     following key-value pairs (all shapes excluding the batch dimension):
     - "id" is a list of strings of length (B,) each uniquely identifying the elements.
     - "avail" is a scalar tensor of shape (B,) containing 1 if the element is available
@@ -34,7 +35,7 @@ class MultisourceAbstractModule(pl.LightningModule, ABC):
     - "dist_to_center" is a tensor of shape (B, ...) containing the distance
         to the center of the storm at each pixel, in km.
 
-    The structure outputs a dict {source_name: tensor} containing the predicted values
+    The structure outputs a dict {(source_name, index): tensor} containing the predicted values
     for each source.
     """
 
@@ -99,7 +100,7 @@ class MultisourceAbstractModule(pl.LightningModule, ABC):
             normed_coords = normalize_coords_across_sources(normed_coords)
 
         input_ = {}
-        for i, (source, data) in enumerate(x.items()):
+        for i, (source_index_pair, data) in enumerate(x.items()):
             c, v = normed_coords[i].float(), data["values"].float()
             lm, d = data["landmask"].float(), data["dist_to_center"].float()
             dt = data["dt"].float()
@@ -140,7 +141,7 @@ class MultisourceAbstractModule(pl.LightningModule, ABC):
                 "dist_to_center": d,
             }
 
-            input_[source] = {
+            input_[source_index_pair] = {
                 **embed_input,  # Data needed for embedding
                 **loss_info,  # Additional data needed for loss computation
             }
@@ -159,33 +160,34 @@ class MultisourceAbstractModule(pl.LightningModule, ABC):
           of the storm.
         - Optionally exclude the tokens that are on land.
         Args:
-            y_pred (dict of str to tensor): The predictions, of shape (B, C, ...).
-            y_true (dict of str to tensor): The groundtruth, of shape (B, C, ...).
-            batch (dict of str to dict of str to tensor): The input data, such that
-                batch[src] includes the following keys:
-                * avail_mask (dict of str to tensor): The availability mask of
+            y_pred (dict of (source_name, index) to tensor): The predictions, of shape (B, C, ...).
+            y_true (dict of (source_name, index) to tensor): The groundtruth, of shape (B, C, ...).
+            batch (dict of (source_name, index) to dict of str to tensor): The input data, such that
+                batch[(src, index)] includes the following keys:
+                * avail_mask (dict of (source_name, index) to tensor): The availability mask of
                 each source, as tensor of shape (B, ...) containing 1 at
                 spatial points where the element is available.
-                * dist_to_center (dict of str to tensor): The distance to the
+                * dist_to_center (dict of (source_name, index) to tensor): The distance to the
                 center of the storm for each source, as tensor of shape (B, ...).
-                * landmask (dict of str to tensor): The landmask for each source,
+                * landmask (dict of (source_name, index) to tensor): The landmask for each source,
                 as tensor of shape (B, ...).
-            avail_flag (dict of str to tensor): The availability flag of
+            avail_flag (dict of (source_name, index) to tensor): The availability flag of
                each source, as tensor of shape (B,) containing 1 if the
                element is available, 0 if it was masked and -1 if it was
                missing.
         Returns:
-            filtered_preds (dict of str to tensor): The filtered predictions,
+            filtered_preds (dict of (source_name, index) to tensor): The filtered predictions,
             flattened.
-            filtered_true_data (dict of str to tensor): The filtered groundtruth,
+            filtered_true_data (dict of (source_name, index) to tensor): The filtered groundtruth,
             flattened.
         """
         filtered_preds, filtered_gt = {}, {}
-        for source, pred_s in y_pred.items():
-            true_s = y_true[source]
+        for source_index_pair, pred_s in y_pred.items():
+            source_name = source_index_pair[0]  # Extract the source name from the tuple
+            true_s = y_true[source_index_pair]
             # Retrieve the mask of the output-enabled variables for the source,
             # and exclude them from the predictions and groundtruth.
-            output_vars = self.sources[source].get_output_variables_mask()  # (C,)
+            output_vars = self.sources[source_name].get_output_variables_mask()  # (C,)
             output_vars = torch.tensor(output_vars, device=pred_s.device)
             pred_s = pred_s[:, output_vars]
             true_s = true_s[:, output_vars]
@@ -194,24 +196,27 @@ class MultisourceAbstractModule(pl.LightningModule, ABC):
             # such that M[b, ...] = True if and only if the following conditions are met:
             # - The source was masked for the sample b (avail flag == 0);
             # - the value at position ... was not missing (true_data["am"] == True);
-            loss_mask = batch[source]["avail_mask"] >= 1  # (B, ...)
-            loss_mask[avail_flag[source] != 0] = False
+            loss_mask = batch[source_index_pair]["avail_mask"] >= 1  # (B, ...)
+            loss_mask[avail_flag[source_index_pair] != 0] = False
             # If a maximum distance from the center is specified, exclude the pixels
             # that are too far from the center from the loss computation.
             if self.loss_max_distance_from_center is not None:
-                dist_mask = batch[source]["dist_to_center"] <= self.loss_max_distance_from_center
+                dist_mask = (
+                    batch[source_index_pair]["dist_to_center"]
+                    <= self.loss_max_distance_from_center
+                )
                 loss_mask = loss_mask & dist_mask
             # Optionally ignore the pixels that are on land
             if self.ignore_land_pixels_in_loss:
-                loss_mask[batch[source]["landmask"] > 0] = False
+                loss_mask[batch[source_index_pair]["landmask"] > 0] = False
             # Apply the mask to the predictions and groundtruth
             loss_mask = loss_mask.unsqueeze(1).expand_as(pred_s)  # (B, C, ...)
             pred_s = pred_s[loss_mask]
             # If no elements are left, remove the source from the filtered predictions
             if pred_s.numel() == 0:
                 continue
-            filtered_preds[source] = pred_s
-            filtered_gt[source] = true_s[loss_mask]
+            filtered_preds[source_index_pair] = pred_s
+            filtered_gt[source_index_pair] = true_s[loss_mask]
         return filtered_preds, filtered_gt
 
     @abstractmethod

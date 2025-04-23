@@ -1,10 +1,9 @@
 """Implements layers to project the output of a ViT in latent space to the output space."""
 
-import torch.nn.functional as F
 from torch import nn
-from multi_sources.models.icnr import ICNR
+
 from multi_sources.models.conv import ResNet
-from einops.layers.torch import Rearrange
+from multi_sources.models.icnr import ICNR
 
 
 class SourcetypeProjection2d(nn.Module):
@@ -12,9 +11,7 @@ class SourcetypeProjection2d(nn.Module):
     that source's original space. Meant to be shared across all sources of the same type.
     """
 
-    def __init__(
-        self, values_dim, out_channels, patch_size, **unused_kwargs
-    ):
+    def __init__(self, values_dim, out_channels, patch_size, **unused_kwargs):
         """
         Args:
             values_dim (int): Dimension of the values embeddings.

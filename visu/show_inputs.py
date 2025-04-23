@@ -4,26 +4,24 @@ NN is the storm number (e.g. 01), and YYYY is the year, this script will
 display the inputs to the model for that storm.
 """
 
-import matplotlib.pyplot as plt
-import numpy as np
-import hydra
 from datetime import datetime as dt
 from pathlib import Path
+
+import hydra
+import matplotlib.pyplot as plt
+import numpy as np
 from omegaconf import OmegaConf
 
-
 # List of satellite_sensor.SWATH values to display
-SAT_SENSOR_PAIRS = [
-    "GMI_GPM.KuGMI"
-]
+SAT_SENSOR_PAIRS = ["GMI_GPM.KuGMI"]
 
 
 @hydra.main(config_path="../conf/", config_name="preproc", version_base=None)
 def main(cfg):
     cfg = OmegaConf.to_container(cfg, resolve=True)
-    inputs_path = Path(cfg['paths']['preprocessed_dataset'])
+    inputs_path = Path(cfg["paths"]["preprocessed_dataset"])
 
-    sid = cfg['sid']
+    sid = cfg["sid"]
     year, basin = sid[:4], sid[4:6]
     inputs_path = inputs_path / year / basin / sid
 

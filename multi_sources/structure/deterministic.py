@@ -5,6 +5,7 @@ the masked tokens."""
 import torch
 import torch.nn as nn
 
+from multi_sources.losses.perceptual_loss import GeneralPerceptualLoss
 from multi_sources.structure.base_reconstructor import MultisourceAbstractReconstructor
 
 # Visualization imports
@@ -16,8 +17,9 @@ class MultisourceDeterministicReconstructor(MultisourceAbstractReconstructor):
     some of the sources and trains its backbone to reconstruct the missing data.
     The sources may have different dimensionalities (e.g. 2D, 1D, 0D) and come with
     spatiotemporal coordinates.
-    The structure expects its input as a dict D {source_name: map}, where D[source] contains the
-    following key-value pairs (all shapes excluding the batch dimension):
+    The structure expects its input as a dict D {(source_name, index): map},
+    where D[(source_name, index)] contains the following key-value pairs
+    (all shapes excluding the batch dimension):
     - "id" is a list of strings of length (B,) each uniquely identifying the elements.
     - "avail" is a scalar tensor of shape (B,) containing 1 if the element is available
         and -1 otherwise.
@@ -29,7 +31,8 @@ class MultisourceDeterministicReconstructor(MultisourceAbstractReconstructor):
     - "dist_to_center" is a tensor of shape (B, ...) containing the distance
         to the center of the storm at each pixel, in km.
 
-    The structure outputs a dict {source_name: tensor} containing the predicted values for each source.
+    The structure outputs a dict {(source_name, index): tensor} containing
+    the predicted values for each source.
     """
 
     def __init__(
@@ -47,6 +50,7 @@ class MultisourceDeterministicReconstructor(MultisourceAbstractReconstructor):
         ignore_land_pixels_in_loss=False,
         normalize_coords_across_sources=False,
         mask_only_sources=None,
+        perceptual_loss_weight=None,
         validation_dir=None,
         metrics={},
     ):
@@ -73,6 +77,8 @@ class MultisourceDeterministicReconstructor(MultisourceAbstractReconstructor):
                 If False, the coordinates will be normalized as sinusoïds.
             mask_only_sources (str or list of str): List of sources to mask. If None, all sources
                 may be masked.
+            perceptual_loss_weight (float): Weight of the perceptual loss in the total loss.
+                If None, no perceptual loss will be computed.
             validation_dir (optional, str or Path): Directory where to save the validation plots.
                 If None, no plots will be saved.
             metrics (dict of str: callable): Metrics to compute during training and validation.
@@ -101,6 +107,11 @@ class MultisourceDeterministicReconstructor(MultisourceAbstractReconstructor):
         # [MASK] token that will replace the embeddings of the masked tokens
         self.mask_token = nn.Parameter(torch.randn(1, self.values_dim))
 
+        # Optional perceptual loss
+        if perceptual_loss_weight is not None:
+            self.perceptual_loss_weight = perceptual_loss_weight
+            self.perceptual_loss = GeneralPerceptualLoss()
+
     def embed(self, x):
         """Embeds the input sources. The embedded tensors' shapes depend on the dimensionality
         of the source:
@@ -111,12 +122,12 @@ class MultisourceDeterministicReconstructor(MultisourceAbstractReconstructor):
         y = super().embed(x)
         # We know need to replace the masked values with a [MASK] token (specific to the
         # deterministic case).
-        for source, data in y.items():
+        for source_index_pair, data in y.items():
             v = data["embedded_values"]
-            where_masked = x[source]["avail"] == 0
+            where_masked = x[source_index_pair]["avail"] == 0
             where_masked = where_masked.view((where_masked.shape[0],) + (1,) * (v.dim() - 1))
             token = self.mask_token.view((1,) * (v.dim() - 1) + (-1,))
-            data['embedded_values'] = torch.where(where_masked, token, v)
+            data["embedded_values"] = torch.where(where_masked, token, v)
 
         return y
 
@@ -127,14 +138,14 @@ class MultisourceDeterministicReconstructor(MultisourceAbstractReconstructor):
         Masked sources have their values replaced by the [MASK] token.
         The availability flag is set to 0 where the source is masked.
         Args:
-            x (dict of str to dict of str to tensor): The input sources.
+            x (dict of (source_name, index) to dict of str to tensor): The input sources.
             target_source (optional, str): If specified, the source to mask. If None, the source
                 to mask is chosen randomly for each sample in the batch.
             masking_seed (int, optional): Seed for the random number generator used to select
                 which sources to mask.
         Returns:
-            masked_x (dict of str to dict of str to tensor): The input sources with a portion
-                of the sources masked.
+            masked_x (dict of (source_name, index) to dict of str to tensor):
+                The input sources with a portion of the sources masked.
         """
         # Choose the sources to mask.
         avail_flags = super().select_sources_to_mask(x, masking_seed)
@@ -143,34 +154,58 @@ class MultisourceDeterministicReconstructor(MultisourceAbstractReconstructor):
         # We just need to update the avail flag of each source. Where the flag is set to 0,
         # the values will be replaced by the [MASK] token in the embedding step.
         masked_x = {}
-        for source, data in x.items():
+        for source_index_pair, data in x.items():
             # Copy the data to avoid modifying the original dict
             masked_data = {k: v.clone() if torch.is_tensor(v) else v for k, v in data.items()}
-            avail_flag = avail_flags[source]
+            avail_flag = avail_flags[source_index_pair]
             masked_data["avail"] = avail_flag
             # Set the availability mask to 0 everywhere for noised sources.
             # (!= from the avail flag, it's a mask of same shape
             masked_data["avail_mask"][avail_flag == 0] = 0
-            masked_x[source] = masked_data
+            masked_x[source_index_pair] = masked_data
         return masked_x
 
     def compute_loss(self, pred, batch, masked_batch):
-        # Retrieve the availability flag for each source updated after masking
-        avail_flag = {source: data["avail"] for source, data in masked_batch.items()}
+        avail_flag = {
+            source_index_pair: data["avail"] for source_index_pair, data in masked_batch.items()
+        }
+        targets = {
+            source_index_pair: batch[source_index_pair]["values"] for source_index_pair in batch
+        }
 
         # Filter the predictions and true values
-        y_true = {source: batch[source]["values"] for source in batch}
-        pred, true_y = super().apply_loss_mask(pred, y_true, batch, avail_flag)
+        pred_masked, target_masked = super().apply_loss_mask(pred, targets, batch, avail_flag)
 
         # Compute the loss
         losses = {}
-        for source in pred:
+        for source_index_pair in pred_masked:
             # Compute the loss for each source
-            losses[source] = (pred[source] - true_y[source]).pow(2).mean()
+            losses[source_index_pair] = (
+                (pred_masked[source_index_pair] - target_masked[source_index_pair]).pow(2).mean()
+            )
         # If len(losses) == 0, i.e. for all masked sources the tokens were missing,
         # raise an error.
         if len(losses) == 0:
             raise ValueError("No tokens to compute the loss on")
+
+        # Optional perceptual loss
+        if hasattr(self, "perceptual_loss"):
+            for source_index_pair in pred:
+                # Compute the perceptual loss over the masked samples
+                masked = avail_flag[source_index_pair] == 0
+                if not masked.any():
+                    continue
+                pred_masked = pred[source_index_pair][masked]
+                target_masked = targets[source_index_pair][masked]
+                mask_masked = batch[source_index_pair]["avail_mask"][masked].clone()
+                lm_masked = batch[source_index_pair]["landmask"][masked]
+                mask_masked[lm_masked == 1] = -1
+                perceptual_loss = self.perceptual_loss(
+                    pred_masked,
+                    target_masked,
+                    mask_masked,
+                )
+                losses[source_index_pair] += perceptual_loss * self.perceptual_loss_weight
 
         # Compute the total loss
         loss = sum(losses.values()) / len(losses)
@@ -187,7 +222,7 @@ class MultisourceDeterministicReconstructor(MultisourceAbstractReconstructor):
         loss = self.compute_loss(pred, batch, masked_x)
 
         self.log(
-            f"train_loss",
+            "train_loss",
             loss,
             prog_bar=True,
             on_epoch=True,
@@ -206,7 +241,7 @@ class MultisourceDeterministicReconstructor(MultisourceAbstractReconstructor):
         # Compute the loss
         loss = self.compute_loss(pred, batch, masked_batch)
         self.log(
-            f"val_loss",
+            "val_loss",
             loss,
             on_epoch=True,
             on_step=False,
@@ -214,7 +249,10 @@ class MultisourceDeterministicReconstructor(MultisourceAbstractReconstructor):
             sync_dist=True,
         )
 
-        avail_flags = {source: masked_batch[source]["avail"] for source in masked_batch}
+        avail_flags = {
+            source_index_pair: masked_batch[source_index_pair]["avail"]
+            for source_index_pair in masked_batch
+        }
         if self.validation_dir is not None and batch_idx % 15 == 0:
             # For every 30 batches, make a prediction and display it.
             if batch_idx % 30 == 0:
@@ -250,5 +288,8 @@ class MultisourceDeterministicReconstructor(MultisourceAbstractReconstructor):
         # Fetch the availability flags for each source, so that
         # whatever processes the output can know which elements
         # were masked.
-        avail_flags = {source: masked_batch[source]["avail"] for source in masked_batch}
+        avail_flags = {
+            source_index_pair: masked_batch[source_index_pair]["avail"]
+            for source_index_pair in masked_batch
+        }
         return pred, avail_flags

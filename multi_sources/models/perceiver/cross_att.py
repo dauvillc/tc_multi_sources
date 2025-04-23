@@ -3,7 +3,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange
-from multi_sources.models.perceiver.small_layers import RMSNorm, MLP
+
+from multi_sources.models.perceiver.small_layers import MLP, RMSNorm
 
 
 class MultisourcePerceiverEncoder(nn.Module):

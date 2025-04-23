@@ -1,5 +1,5 @@
 import torch.nn as nn
-import torch.nn.functional as F
+
 from .utils import pair
 
 
@@ -127,7 +127,6 @@ class SwiGLU(nn.Module):
 # LICENSE file in the root directory of this source tree.
 
 import torch
-
 from torch import nn
 
 

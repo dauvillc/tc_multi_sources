@@ -1,16 +1,18 @@
 """Tests the MultiSourceDataset class."""
 
-import matplotlib.pyplot as plt
-import hydra
-import numpy as np
 from collections import defaultdict
+
+import hydra
+import matplotlib.pyplot as plt
+import numpy as np
 from omegaconf import DictConfig, OmegaConf
+from pyinstrument import Profiler
 from torch.utils.data import DataLoader
 from tqdm import trange
+
+from multi_sources.data_processing.collate_fn import multi_source_collate_fn
 from multi_sources.data_processing.multi_source_dataset import MultiSourceDataset
 from multi_sources.data_processing.utils import read_variables_dict
-from multi_sources.data_processing.collate_fn import multi_source_collate_fn
-from pyinstrument import Profiler
 
 
 @hydra.main(config_path="../conf/", config_name="test", version_base=None)
@@ -44,8 +46,11 @@ def main(cfg: DictConfig):
     profiler = Profiler()
     profiler.start()
     dataloader = DataLoader(
-        dataset, batch_size=32, num_workers=cfg["num_workers"], shuffle=True,
-        collate_fn=multi_source_collate_fn
+        dataset,
+        batch_size=32,
+        num_workers=cfg["num_workers"],
+        shuffle=True,
+        collate_fn=multi_source_collate_fn,
     )
 
     data_means, data_stds = defaultdict(int), defaultdict(int)
@@ -66,9 +71,7 @@ def main(cfg: DictConfig):
         print(f"Source {source_name}:")
         data_means[source_name] = data_means[source_name] / len(dataloader)
         data_stds[source_name] = data_stds[source_name] / len(dataloader)
-        print(
-            f"Data mean: {data_means[source_name]}, Data std: {data_stds[source_name]}"
-        )
+        print(f"Data mean: {data_means[source_name]}, Data std: {data_stds[source_name]}")
 
 
 if __name__ == "__main__":

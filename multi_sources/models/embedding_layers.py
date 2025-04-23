@@ -125,9 +125,7 @@ class SourcetypeEmbedding2d(nn.Module):
         self.coords_norm = nn.LayerNorm(coords_dim)
 
         # Conditioning embedding layers
-        self.cond_embedding = ConvPatchEmbedding2d(
-            1, patch_size, values_dim, norm=False
-        )
+        self.cond_embedding = ConvPatchEmbedding2d(1, patch_size, values_dim, norm=False)
         if self.use_diffusion_t:
             self.diffusion_t_embedding = nn.Linear(1, values_dim)
         if n_charac_vars > 0:
@@ -204,7 +202,7 @@ class SourcetypeEmbedding0d(nn.Module):
     """A class that embeds the values and time of a 0D source, including optional
     characteristic variables.
 
-    This module handles both time embeddings and values embeddings (channels, masks, 
+    This module handles both time embeddings and values embeddings (channels, masks,
     diffusion timestep), then outputs their embedded representations.
     Additionally, a conditioning tensor is computed that embeds the conditioning
     that isn't the values or the time. This includes:
@@ -242,11 +240,9 @@ class SourcetypeEmbedding0d(nn.Module):
         if use_diffusion_t:
             ch += 1  # diffusion channel
         if use_predicted_mean:
-            ch += 1        
+            ch += 1
         self.values_embedding = nn.Sequential(
-            nn.Linear(ch, values_dim),
-            nn.GELU(),
-            nn.LayerNorm(values_dim)
+            nn.Linear(ch, values_dim), nn.GELU(), nn.LayerNorm(values_dim)
         )
 
         # Coords embedding layers
@@ -254,7 +250,7 @@ class SourcetypeEmbedding0d(nn.Module):
         self.coords_embedding = nn.Linear(3, coords_dim)
         self.time_embedding = nn.Linear(1, coords_dim)
         self.coords_norm = nn.LayerNorm(coords_dim)
-        
+
         # Conditioning embedding layers
         self.cond_embedding = nn.Linear(1, values_dim)
         if self.use_diffusion_t:

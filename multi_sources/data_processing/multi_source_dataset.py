@@ -1,22 +1,29 @@
 """Implements the MultiSourceDataset class."""
 
-import torch
-import pandas as pd
 import json
-import numpy as np
 from collections import defaultdict
-from netCDF4 import Dataset
 from pathlib import Path
+
+import numpy as np
+import pandas as pd
+import torch
+from netCDF4 import Dataset
+
+from multi_sources.data_processing.data_augmentation import MultisourceDataAugmentation
 from multi_sources.data_processing.grid_functions import crop_nan_border
 from multi_sources.data_processing.source import Source
-from multi_sources.data_processing.utils import compute_sources_availability, load_nc_with_nan
-from multi_sources.data_processing.data_augmentation import MultisourceDataAugmentation
+from multi_sources.data_processing.utils import (
+    compute_sources_availability,
+    load_nc_with_nan,
+)
 
 
 class MultiSourceDataset(torch.utils.data.Dataset):
     """A dataset that yields elements from multiple sources.
-    A sample from the dataset is a dict {source_name: map}, where each map contains the
-    following key-value pairs:
+    A sample from the dataset is a dict {(source_name, index): data} where
+    source_name is the name of the source and index is an integer representing
+    the observation index (0 = most recent, 1 = second most recent, etc.).
+    Each data dict contains the following key-value pairs:
     - "avail" is a scalar tensor of shape (1,) containing 1 if the element is available
         and -1 otherwise.
     - "dt" is a scalar tensor of shape (1,) containing the time delta between the reference time
@@ -54,7 +61,6 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         randomly_drop_sources={},
         force_drop_sources=[],
         mask_spatial_coords=[],
-        subset_fraction=None,
         data_augmentation=None,
         seed=42,
     ):
@@ -115,7 +121,6 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                 sources that should not be yielded (for evaluation purposes).
             mask_spatial_coords (list of str): If not None, names of sources whose spatial
                 coordinates will be masked (set to zeros).
-            subset_fraction (float): If not None, the fraction of the dataset to use.
             data_augmentation (None or MultiSourceDataAugmentation): If not None, instance
                 of MultiSourceDataAugmentation to apply to the data.
             seed (int): The seed to use for the random number generator.
@@ -273,12 +278,9 @@ class MultiSourceDataset(torch.utils.data.Dataset):
 
         # Optional intensity filtering
         if min_tc_intensity is not None:
-            self.reference_df = self.reference_df[self.reference_df['intensity'] >= min_tc_intensity]
-
-        # Optionally, keep only a fraction of the dataset
-        if subset_fraction is not None:
-            self.reference_df = self.reference_df.sample(frac=subset_fraction, random_state=seed)
-            self.reference_df = self.reference_df.reset_index(drop=True)
+            self.reference_df = self.reference_df[
+                self.reference_df["intensity"] >= min_tc_intensity
+            ]
 
         # ========================================================================================
         # Pre-computation to speed up the data loading
@@ -334,8 +336,9 @@ class MultiSourceDataset(torch.utils.data.Dataset):
             idx (int): The index of the element to retrieve.
 
         Returns:
-            sample (multi_sources.data_processing.multi_source_batch.MultiSourceBatch): The element
-                at the given index.
+            sample (dict): A dictionary of the form {(source_name, index): data}
+                where index is an integer representing the observation index
+                (0 = most recent, 1 = second most recent, etc.)
         """
         sample = self.reference_df.iloc[idx]
         sid, t0 = sample["sid"], sample["time"]
@@ -350,7 +353,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         dropped_sources_per_type_cnt = defaultdict(int)
         # Max number of sources that can still be dropped overall
         max_dropped_sources = sample["n_available_sources"] - self.min_available_sources
-        dropped_sources_cnt = 0 
+        dropped_sources_cnt = 0
         # If randomly dropping sources, shuffle the sources so that the dropping
         # is uniform across the sources.
         if len(self.randomly_drop_sources) > 0:
@@ -359,6 +362,9 @@ class MultiSourceDataset(torch.utils.data.Dataset):
 
         # For each source, try to load the element at the given time
         output = {}
+        # Track the observations for each source to assign indices
+        source_observations = defaultdict(list)
+
         for source in self.sources:
             source_name = source.name
 
@@ -392,13 +398,13 @@ class MultiSourceDataset(torch.utils.data.Dataset):
             else:
                 # Shuffle the rows so that the first row is random
                 df = df.sample(frac=1)
-            # Check if there is at least one element available for this source
-            if len(df) > 0:
+
+            # Collect all available observations for this source
+            for _, row in df.iterrows():
+                time = row["time"]
                 # Check if the source should be forced dropped
                 if source.type in self.force_drop_sources:
-                    # Drop the source
-                    dropped_sources_cnt += 1
-                    dropped_sources_per_type_cnt[source.type] += 1
+                    # Skip this source entirely
                     continue
                 # Check if the source should be randomly dropped. The source can be dropped
                 # only if we haven't dropped too many sources already overall and of that type.
@@ -408,7 +414,8 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                     # Randomly drop (ie skip) the source with probability p
                     if (
                         dropped_sources_cnt < max_dropped_sources
-                        and dropped_sources_per_type_cnt[source.type] < max_dropped_sources_per_type[source.type]
+                        and dropped_sources_per_type_cnt[source.type]
+                        < max_dropped_sources_per_type[source.type]
                         and self.rng.random() < p
                     ):
                         # Drop the source
@@ -416,7 +423,6 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                         dropped_sources_per_type_cnt[source.type] += 1
                         continue
 
-                time = df["time"].iloc[0]
                 dt = t0 - self.forecasting_lead_time - time
                 DT = torch.tensor(
                     dt.total_seconds() / self.dt_max.total_seconds(),
@@ -424,9 +430,8 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                 )
 
                 # Load the npy file containing the data for the given storm, time, and source
-                filepath = Path(df["data_path"].iloc[0])
+                filepath = Path(row["data_path"])
                 with Dataset(filepath) as ds:
-
                     # Coordinates
                     lat = load_nc_with_nan(ds["latitude"])
                     lon = load_nc_with_nan(ds["longitude"])
@@ -479,13 +484,22 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                         # originally having multiple channels that are not aligned geographically).
                         # Compute how much we can crop them, and apply that cropping to all spatial
                         # tensors to keep the spatial alignment.
-                        V, C = output_source["values"], output_source["coords"]                           
+                        V, C = output_source["values"], output_source["coords"]
                         LM, D = output_source["landmask"], output_source["dist_to_center"]
                         V, C, LM, D = crop_nan_border(V, [V, C, LM, D])
                         output_source["values"], output_source["coords"] = V, C
                         output_source["landmask"], output_source["dist_to_center"] = LM, D
 
-                    output[source_name] = output_source
+                    # Add the processed observation to the list for this source
+                    source_observations[source_name].append((time, output_source))
+
+        # Process each source's observations and assign indices (0 = most recent)
+        for source_name, observations in source_observations.items():
+            # Sort by time in descending order (most recent first)
+            observations.sort(key=lambda x: x[0], reverse=True)
+            # Create entries with (source_name, index) as keys
+            for idx, (_, source_data) in enumerate(observations):
+                output[(source_name, idx)] = source_data
 
         if len(output) <= 1:
             raise ValueError(

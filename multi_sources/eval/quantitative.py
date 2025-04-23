@@ -3,14 +3,16 @@ Implements the QuantitativeEvaluation class, which computes the mean squared err
 between the targets and predictions for a given source, for each channel.
 """
 
+from concurrent.futures import ProcessPoolExecutor
+from string import Template
+
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
 import seaborn as sns
-from string import Template
-from concurrent.futures import ProcessPoolExecutor
-from tqdm import tqdm
 from sklearn.metrics import r2_score
+from tqdm import tqdm
+
 from multi_sources.eval.abstract_evaluation_metric import AbstractMultisourceEvaluationMetric
 
 
@@ -52,15 +54,15 @@ class QuantitativeEvaluation(AbstractMultisourceEvaluationMetric):
         """
         Args:
             info_df (pd.DataFrame): DataFrame with at least the following columns:
-                source_name, avail, batch_idx, index_in_batch, dt.
+                source_name, index, avail, batch_idx, index_in_batch, dt.
             **kwargs: Additional keyword arguments.
         """
         # Browse the batch indices in the DataFrame
         unique_batch_indices = info_df["batch_idx"].unique()
         # Create a DataFrame to store the preds and targets with:
-        # masked_source, pred, target, channel
+        # masked_source, masked_index, pred, target, channel
         # and <source>_time_delta for every source.
-        columns = ["masked_source", "channel", "pred", "target"]
+        columns = ["masked_source", "masked_index", "channel", "pred", "target"]
         unique_sources = info_df["source_name"].unique()
         for source in unique_sources:
             columns.append(f"{source}_time_delta")
@@ -72,11 +74,13 @@ class QuantitativeEvaluation(AbstractMultisourceEvaluationMetric):
             for batch_idx in tqdm(unique_batch_indices, desc="Batches", disable=not verbose):
                 # Get the sources included in the batch
                 batch_info = info_df[info_df["batch_idx"] == batch_idx]
-                sources = batch_info["source_name"].unique()
-                # For each source, load the targets and predictions
+                source_index_pairs = list(zip(batch_info["source_name"], batch_info["index"]))
+                # For each source-index pair, load the targets and predictions
                 targets, preds = {}, {}
-                for source in sources:
-                    targets[source], preds[source] = self.load_batch(source, batch_idx)
+                for source_name, index in source_index_pairs:
+                    targets[(source_name, index)], preds[(source_name, index)] = self.load_batch(
+                        source_name, index, batch_idx
+                    )
                 gather_results(batch_info, batch_idx, targets, preds, unique_sources, results_csv)
         else:
             # Divide the dataframe into chunks based on the number of workers
@@ -113,20 +117,24 @@ class QuantitativeEvaluation(AbstractMultisourceEvaluationMetric):
         for col in results_df.columns:
             if col.endswith("_time_delta"):
                 results_df[col] = pd.to_timedelta(results_df[col])
-        grouped = results_df.groupby(["masked_source", "channel"])
+        grouped = results_df.groupby(["masked_source", "masked_index", "channel"])
         rmse = np.sqrt(grouped.apply(lambda x: np.mean((x["target"] - x["pred"]) ** 2)))
         r2 = grouped.apply(lambda x: r2_score(x["target"], x["pred"]))
         mae = grouped.apply(lambda x: np.mean(np.abs(x["target"] - x["pred"])))
         print("Results:")
         sources = results_df["masked_source"].unique()
         for source in sources:
-            channels = results_df[results_df["masked_source"] == source]["channel"].unique()
-            for channel in channels:
-                print(f"Source: {source}, Channel: {channel}")
-                print(f"RMSE: {rmse[source, channel]:.2f}")
-                print(f"R2: {r2[source, channel]:.2f}")
-                print(f"MAE: {mae[source, channel]:.2f}")
-                print()
+            source_df = results_df[results_df["masked_source"] == source]
+            indices = source_df["masked_index"].unique()
+            for index in indices:
+                index_df = source_df[source_df["masked_index"] == index]
+                channels = index_df["channel"].unique()
+                for channel in channels:
+                    print(f"Source: {source}, Index: {index}, Channel: {channel}")
+                    print(f"RMSE: {rmse[(source, index, channel)]:.2f}")
+                    print(f"R2: {r2[(source, index, channel)]:.2f}")
+                    print(f"MAE: {mae[(source, index, channel)]:.2f}")
+                    print()
 
         aggregate_results(results_df, self.results_dir)
 
@@ -145,24 +153,32 @@ def gather_results(batch_info, batch_idx, targets, preds, all_sources, results_c
     Args:
         batch_info (pd.DataFrame): DataFrame with the information of the batch.
         batch_idx (int): Index of the batch to display.
-        targets (dict): Dictionary with the targets for each source.
-        preds (dict): Dictionary with the predictions for each source.
+        targets (dict): Dictionary with the targets for each source-index pair.
+        preds (dict): Dictionary with the predictions for each source-index pair.
         all_sources (list): List with the unique sources in the dataset.
         results_csv (Path): Path to the CSV file where the results will be saved.
     """
-    sources = batch_info["source_name"].unique()
-    S = len(sources)
     # Unique indices in the batch
     batch_indices = batch_info["index_in_batch"].unique()
+    source_index_pairs = list(zip(batch_info["source_name"], batch_info["index"]))
+
     for idx in batch_indices:
-        for i, source in enumerate(sources):
-            target_ds = targets[source]
-            pred_ds = preds[source]
+        for source_name, index in source_index_pairs:
+            source_index_pair = (source_name, index)
+            target_ds = targets.get(source_index_pair)
+            pred_ds = preds.get(source_index_pair)
+
             if target_ds is not None:
                 # Rows for each source in the sample
                 sample_info = batch_info[batch_info["index_in_batch"] == idx]
-                # Row of the sample corresponding to the source being looked at.
-                sample_source_info = batch_info[batch_info["source_name"] == source].iloc[0]
+                # Row of the sample corresponding to the source being looked at
+                sample_source_info = batch_info[
+                    (batch_info["source_name"] == source_name) & (batch_info["index"] == index)
+                ]
+                if len(sample_source_info) == 0:
+                    continue
+
+                sample_source_info = sample_source_info.iloc[0]
                 # The model only made a prediction when the sample was masked,
                 # which corresponds to avail=0 (-1 for unavailable and 1 for available
                 # but not masked).
@@ -175,7 +191,8 @@ def gather_results(batch_info, batch_idx, targets, preds, all_sources, results_c
                         # Save the results in a single-row DataFrame and append
                         # it to the results CSV
                         row = {
-                            "masked_source": source,
+                            "masked_source": source_name,
+                            "masked_index": index,
                             "channel": channel,
                             "pred": pred,
                             "target": target,
@@ -216,12 +233,15 @@ def process_batch_chunk(
     ):
         # Get the sources included in the batch
         batch_info = info_df[info_df["batch_idx"] == batch_idx]
-        sources = batch_info["source_name"].unique()
+        source_index_pairs = list(zip(batch_info["source_name"], batch_info["index"]))
 
-        # For each source, load the targets and predictions
+        # For each source-index pair, load the targets and predictions
         targets, preds = {}, {}
-        for source in sources:
-            targets[source], preds[source] = evaluator.load_batch(source, batch_idx)
+        for source_name, index in source_index_pairs:
+            source_index_pair = (source_name, index)
+            targets[source_index_pair], preds[source_index_pair] = evaluator.load_batch(
+                source_name, index, batch_idx
+            )
 
         gather_results(batch_info, batch_idx, targets, preds, unique_sources, results_csv)
 
@@ -254,7 +274,7 @@ def aggregate_results(results_df, results_dir):
                 f.write(f"R2: {r2[source, channel]:.2f}\n")
                 f.write(f"MAE: {mae[source, channel]:.2f}\n")
                 f.write("\n")
-        
+
     # Read the content of the text file and print it to the console
     with open(results_txt, "r") as f:
         content = f.read()

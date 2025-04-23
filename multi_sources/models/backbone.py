@@ -1,7 +1,6 @@
 """Implements a general backbone for the mask-autoencoding task,
 which can be used with custom blocks."""
 
-import torch
 import torch.nn as nn
 
 
@@ -58,12 +57,14 @@ class MultisourceGeneralBackbone(nn.Module):
     def forward(self, x):
         """
         Args:
-            x (dict of str: dict of str: tensor): Dictionary of inputs, such that
-                inputs[source_name] contains the keys "embedded_coordinates",
+            x (dict): Dictionary of inputs, such that
+                x[(source_name, index)] contains the keys "embedded_coordinates",
                 "embedded_values" and "tokens_shape".
+                where (source_name, index) is a tuple containing the source name
+                and the index of the observation (0 = most recent).
         Returns:
-            dict of str: tensor: Dictionary of outputs, such that
-                outputs[source_name] contains the predicted values of the tokens.
+            dict: Dictionary of outputs, such that
+                outputs[(source_name, index)] contains the predicted values of the tokens.
         """
         for block in self.blocks:
             # Update the values via the successive layers
@@ -73,11 +74,14 @@ class MultisourceGeneralBackbone(nn.Module):
                 # Check that all sources are present in the output
                 assert set(x.keys()) == set(layer_otp.keys())
                 # Update the values
-                for source_name, source_output in layer_otp.items():
-                    x[source_name]["embedded_values"] = source_output
+                for source_index_pair, source_output in layer_otp.items():
+                    x[source_index_pair]["embedded_values"] = source_output
 
         # Return only the predicted values
-        return {source_name: x[source_name]["embedded_values"] for source_name in x.keys()}
+        return {
+            source_index_pair: x[source_index_pair]["embedded_values"]
+            for source_index_pair in x.keys()
+        }
 
 
 class AdapativeConditionalNormalization(nn.Module):
@@ -99,41 +103,45 @@ class AdapativeConditionalNormalization(nn.Module):
 
     def forward(self, data, *args, **kwargs):
         """Args:
-            data (dict of str: tensor): Dictionary of inputs, such that
-                data[source_name] contains the keys
-                "embedded_values" and "conditioning".
+            data (dict): Dictionary of inputs, such that
+                data[(source_name, index)] contains the keys
+                "embedded_values" and "conditioning", where
+                (source_name, index) is a tuple containing the source name
+                and observation index (0 = most recent).
             args, kwargs: Additional arguments for the wrapped module.
         Returns:
-            dict of str: tensor: Dictionary of outputs, such that
-                outputs[source_name] contains the predicted values of the tokens,
+            dict: Dictionary of outputs, such that
+                outputs[(source_name, index)] contains the predicted values of the tokens,
                 of shape (B, ..., values_dim).
         """
         skips, gates = {}, {}
         modulated_data = {}
-        for src, source_data in data.items():
+        for source_index_pair, source_data in data.items():
             # Create a new dict to avoid modifying the input one in-place
-            modulated_data[src] = {k: v for k, v in source_data.items()}
+            modulated_data[source_index_pair] = {k: v for k, v in source_data.items()}
 
             skip, cond = source_data["embedded_values"], source_data["conditioning"]
             x = self.input_norm(skip)
-            skips[src] = skip
+            skips[source_index_pair] = skip
 
             if cond is not None:
                 shift, scale, gate = self.cond_proj(cond).chunk(3, dim=-1)
                 x = x * (scale + 1) + shift
                 # Save the skip connection and gate for after the module
-                gates[src] = gate
+                gates[source_index_pair] = gate
 
             # Save the module's input for that source
-            modulated_data[src]["embedded_values"] = x
+            modulated_data[source_index_pair]["embedded_values"] = x
 
         # Apply the wrapped module with the updated inputs
         module_output = self.module(modulated_data, *args, **kwargs)
         # Multiply by the gate and the skip connections
         output = {}
-        for src, source_output in module_output.items():
-            if src in gates:
-                output[src] = source_output * gates[src] + skips[src]
+        for source_index_pair, source_output in module_output.items():
+            if source_index_pair in gates:
+                output[source_index_pair] = (
+                    source_output * gates[source_index_pair] + skips[source_index_pair]
+                )
             else:
-                output[src] = source_output + skips[src]
+                output[source_index_pair] = source_output + skips[source_index_pair]
         return output
