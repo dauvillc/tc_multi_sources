@@ -119,7 +119,7 @@ def main(cfg: DictConfig):
         save_top_k=1,
     )
     lr_monitor = LearningRateMonitor()
-    model_summary = ModelSummary(max_depth=1)
+    model_summary = ModelSummary(max_depth=3)
     callbacks = [epoch_checkpoint_callback, lr_monitor, model_summary]
 
     # Create the trainer

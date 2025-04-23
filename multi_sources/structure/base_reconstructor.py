@@ -130,12 +130,13 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
             # Only create the embedding layer for that source type if it doesn't exist yet
             if source.type not in self.sourcetypes_characs_vars:
                 self.sourcetypes_characs_vars[source.type] = source.n_charac_variables()
+                n_input_channels = source.n_input_variables()
                 n_output_channels = source.n_data_variables()
                 # Create the layers for that source type depending on
                 # its dimensionality
                 if source.dim == 2:
                     self.sourcetype_embeddings[source.type] = SourcetypeEmbedding2d(
-                        source.n_data_variables(),
+                        n_input_channels,
                         self.patch_size,
                         self.values_dim,
                         self.coords_dim,
@@ -149,7 +150,7 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
                     )
                 elif source.dim == 0:
                     self.sourcetype_embeddings[source.type] = SourcetypeEmbedding0d(
-                        source.n_data_variables(),
+                        n_input_channels,
                         self.values_dim,
                         self.coords_dim,
                         source.n_charac_variables(),
@@ -178,8 +179,18 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
         output = {}
         for source_index_pair, data in x.items():
             source_name = source_index_pair[0]  # Extract the source name from the tuple
-            source_type = self.sources[source_name].type
-            v, c, cond = self.sourcetype_embeddings[source_type](data)
+            source_obj = self.sources[source_name]
+            # Only keep the current source's input variables from the values.
+            input_mask = torch.tensor(
+                source_obj.get_input_variables_mask(),
+                device=data["values"].device,
+                dtype=torch.bool,
+            )
+            emb_data = {k: v for k, v in data.items() if k != "values"}  # No in-place operation
+            emb_data["values"] = data["values"][:, input_mask]
+
+            source_type = source_obj.type
+            v, c, cond = self.sourcetype_embeddings[source_type](emb_data)
             # v: embedded values, c: coords, cond: conditioning tensor
 
             output[source_index_pair] = {

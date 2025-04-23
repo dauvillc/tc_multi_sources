@@ -19,6 +19,8 @@ augmentation_functions:
         degrees: 45
         translate: [0.25, 0.25]
         fill: ${nan:}
+    - _target_: multi_sources.data_processing.data_augmentation.AddNoiseToTimeDelta
+      relative_noise_std: 0.0416  # 1/24 (1h for dt max of 24h)
   infrared:
   # Same as above
     - _target_: multi_sources.data_processing.data_augmentation.wrap_tv_image_transform
@@ -33,7 +35,7 @@ augmentation_functions:
         translate: [0.25, 0.25]
         fill: ${nan:}
     - _target_: multi_sources.data_processing.data_augmentation.AddNoiseToTimeDelta
-      relative_noise_std: 0.0208  # 0.5 / 24 (30min for dt max of 24h)
+      relative_noise_std: 0.0416
   pmw:
   # Same, but with no scaling as resolutions already vary
     - _target_: multi_sources.data_processing.data_augmentation.wrap_tv_image_transform
@@ -51,4 +53,4 @@ augmentation_functions:
         translate: [0.25, 0.25]
         fill: ${nan:}
     - _target_: multi_sources.data_processing.data_augmentation.AddNoiseToTimeDelta
-      relative_noise_std: 0.0208
+      relative_noise_std: 0.0416

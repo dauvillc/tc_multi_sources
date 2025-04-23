@@ -5,7 +5,7 @@ backbone:
   _target_: multi_sources.models.backbone.MultisourceGeneralBackbone
   values_dim: ${lightning_module.values_dim}
   coords_dim: ${lightning_module.coords_dim}
-  n_blocks: 4
+  n_blocks: 6
   layers:
     cross_attention:
       layer_class:
@@ -13,7 +13,7 @@ backbone:
         path: multi_sources.models.factorized_attention.MultisourcesAnchoredCrossAttention
       inner_ratio: 1
       anchor_points_spacing: 7
-      num_heads: 4
+      num_heads: 1
       dropout: ${model.dropout}
     spatial_attention:
       layer_class:
@@ -21,11 +21,11 @@ backbone:
         path: multi_sources.models.factorized_attention.SeparateWindowedValuesCoordinatesAttention
       inner_ratio: 1
       window_size: 8
-      num_heads: 4
+      num_heads: 1
       dropout: ${model.dropout}
     ff1:
       layer_class:
         _target_: hydra.utils.get_class
         path: multi_sources.models.small_layers.FeedForward
-      inner_ratio: 2
+      inner_ratio: 1
       dropout: ${model.dropout}

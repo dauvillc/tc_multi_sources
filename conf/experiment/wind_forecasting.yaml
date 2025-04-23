@@ -6,6 +6,7 @@ defaults:
   - override /lightning_module: deterministic
   - override /lr_scheduler: cosine_warmup_100epochs
   - override /metrics: default_fm
+  - override /data_augmentation: affine_flip
 
 wandb:
   name: wind_forecasting
@@ -23,7 +24,8 @@ dataset:
       pmw: 1
     # Max number of observations for each source of each type:
     source_types_max_avail:
-      infrared: 3
+      infrared: 1
+      era5: 3
     # Randomly drop sources of each type
     randomly_drop_sources:
       era5: 0.5
@@ -36,19 +38,10 @@ dataset:
     forecasting_sources: tc_primed_storm_metadata
     # Parameter to mask the spatial coordinates of the forecast source
     # (Since we don't know the future location of the storm)
-    mask_spatial_coords: ['tc_primed_storm_metadata']
-    # Data augmentation
-    data_augmentation:
-      _target_: multi_sources.data_processing.data_augmentation.MultisourceDataAugmentation
-      augmentation_functions:
-        infrared:
-          - _target_: multi_sources.data_processing.data_augmentation.AddNoiseToTimeDelta
-            relative_noise_std: 0.0583  # 1.5 / 24 (1h30min for dt max of 24h)
-        pmw:
-          - _target_: multi_sources.data_processing.data_augmentation.AddNoiseToTimeDelta
-            relative_noise_std: 0.0583  # 1.5 / 24 (1h30min for dt max of 24h)
+    mask_spatial_coords: ['tc_primed_storm_metadata, tc_primed_era5, tc_primed_infrared']
   val:
     select_most_recent: true
+    data_augmentation: ${dataset.train.data_augmentation}
   test:
     select_most_recent: true
   

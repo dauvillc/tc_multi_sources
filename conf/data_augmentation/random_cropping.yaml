@@ -13,6 +13,8 @@ augmentation_functions:
         _target_: multi_sources.data_processing.data_augmentation.RandomDynamicCrop
         min_scale: 0.6
         max_scale: 1.0
+    - _target_: multi_sources.data_processing.data_augmentation.AddNoiseToTimeDelta
+      relative_noise_std: 0.0416  # 1/24 (1h for dt max of 24h)
   infrared:
     - _target_: multi_sources.data_processing.data_augmentation.wrap_tv_image_transform
       transform:
@@ -20,9 +22,9 @@ augmentation_functions:
         min_scale: 0.6
         max_scale: 1.0
     - _target_: multi_sources.data_processing.data_augmentation.AddNoiseToTimeDelta
-      relative_noise_std: 0.0208  # 0.5 / 24 (30min for dt max of 24h)
+      relative_noise_std: 0.0416
   pmw:
     # No need for affine transforms on pmw data as it is already at different resolutions,
     # with different scales and geometries.
     - _target_: multi_sources.data_processing.data_augmentation.AddNoiseToTimeDelta
-      relative_noise_std: 0.0208  # 0.5 / 24 (30min for dt max of 24h)
+      relative_noise_std: 0.0416

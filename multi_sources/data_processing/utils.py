@@ -6,17 +6,22 @@ import numpy as np
 import pandas as pd
 
 
-def _get_leaf_subsources(source_dict, path="", previous_vars=[], previous_input_only=[]):
+def _get_leaf_subsources(
+    source_dict, path="", previous_vars=[], previous_input_only=[], previous_output_only=[]
+):
     """Returns the leaf subsources of a source dictionary."""
     # Recursivity stop condition: if no subsource key is found, return the source
     # with its varables as well as the previous ones. Replace
     # the dim key if it is already present.
-    subsource_keys = [key for key in source_dict.keys() if key not in ["variables", "input_only"]]
+    subsource_keys = [
+        key for key in source_dict.keys() if key not in ["variables", "input_only", "output_only"]
+    ]
     if not subsource_keys:
         return {
             path: (
                 previous_vars + source_dict.get("variables", []),
                 previous_input_only + source_dict.get("input_only", []),
+                previous_output_only + source_dict.get("output_only", []),
             )
         }
     # If there are subsource keys, call the function recursively on each subsource.
@@ -28,6 +33,7 @@ def _get_leaf_subsources(source_dict, path="", previous_vars=[], previous_input_
                 path + "_" + subsource_key,  # source_subsource_ ... _lastsubsource
                 previous_vars + source_dict.get("variables", []),
                 previous_input_only + source_dict.get("input_only", []),
+                previous_output_only + source_dict.get("output_only", []),
             )
         )
     return returned_dict
@@ -43,6 +49,7 @@ def read_variables_dict(variables_dict):
                     "subsource1": {
                         "variables": ["var1", "var2", ...],
                         "input_only": ["var1", "var2", ...],
+                        "output_only": ["var1", "var2", ...],
                         "subsource2": {
                             "variables": ["var3", "var4", ...],
                             "input_only": ["var3", "var4", ...],
@@ -62,7 +69,10 @@ def read_variables_dict(variables_dict):
         variables_dict:
             {
                 "source1_subsource1_subsource2_..._lastsubsource":
-                    (["var1", "var2", ...], ['input_only_var_1', 'input_only_var_2', ...]),
+                    (["var1", "var2", ...],
+                    ['input_only_var_1', 'input_only_var_2', ...],
+                    ['output_only_var_1', 'output_only_var_2', ...],
+                    ),
                 ...
             }
     """

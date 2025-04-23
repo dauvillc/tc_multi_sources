@@ -158,10 +158,11 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         }
 
         self.sources, self.sources_dict = [], {}
-        for source_name, (all_vars, input_only_vars) in self.variables_dict.items():
+        for source_name, (all_vars, input_only, output_only) in self.variables_dict.items():
             # Update the source metadata with the included variables
             sources_metadata[source_name]["data_vars"] = all_vars
-            sources_metadata[source_name]["input_only_vars"] = input_only_vars
+            sources_metadata[source_name]["input_only_vars"] = input_only
+            sources_metadata[source_name]["output_only_vars"] = output_only
             # Create the source object
             self.sources.append(Source(**sources_metadata[source_name]))
             self.sources_dict[source_name] = self.sources[-1]
