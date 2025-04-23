@@ -27,6 +27,6 @@ def load_experiment_cfg_from_checkpoint(checkpoints_dir, run_id):
     # The checkpoint includes the whole configuration dict of the experiment, in
     # checkpoint["hyper_parameters"]['cfg']. We'll use this to reproduce
     # the exact configuration of the experiment.
-    checkpoint = torch.load(checkpoint_path)
+    checkpoint = torch.load(checkpoint_path, weights_only=False)
     exp_cfg = checkpoint["hyper_parameters"]["cfg"]
     return exp_cfg, checkpoint_path
