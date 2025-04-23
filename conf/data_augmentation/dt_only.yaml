@@ -1,4 +1,10 @@
+# Data augmentation config file.
+# This cfg leads to the instantiation of a MultisourceDataAugmentation object.
 _target_: multi_sources.data_processing.data_augmentation.MultisourceDataAugmentation
 augmentation_functions:
-  - _target_: multi_sources.data_processing.data_augmentation.Add_noise_to_timedelta
-    relative_noise_std: 0.1
+  infrared:
+    - _target_: multi_sources.data_processing.data_augmentation.AddNoiseToTimeDelta
+      relative_noise_std: 0.0583  # 1.5 / 24 (1h30min for dt max of 24h)
+  pmw:
+    - _target_: multi_sources.data_processing.data_augmentation.AddNoiseToTimeDelta
+      relative_noise_std: 0.0583  # 1.5 / 24 (1h30min for dt max of 24h)

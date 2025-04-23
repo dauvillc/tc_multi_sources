@@ -50,6 +50,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         forecasting_sources=None,
         include_seasons=None,
         exclude_seasons=None,
+        min_tc_intensity=None,
         randomly_drop_sources={},
         force_drop_sources=[],
         mask_spatial_coords=[],
@@ -103,6 +104,8 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                 If None, all years are included.
             exclude_seasons (list of int): The years to exclude from the dataset.
                 If None, no years are excluded.
+            min_tc_intensity (float): If not None, will filter the reference samples to only keep
+                the ones where the TC intensity is above the given threshold at the reference time.
             randomly_drop_sources (dict of str to float): A dictionary {source_type: p} such
                 that every source of type source_type will be randomly dropped with probability p.
             force_drop_sources (list of str): Source types that will forcily be dropped.
@@ -253,7 +256,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         # Combine the masks with a logical AND
         mask = np.logical_and.reduce(masks)
         # We can now build the reference dataframe:
-        self.reference_df = self.df[mask][["sid", "time", "source_name"]]
+        self.reference_df = self.df[mask][["sid", "time", "source_name", "intensity"]]
         self.reference_df["n_available_sources"] = available_sources_count[mask]
         for source_type, st_avail_count in source_types_availability.items():
             self.reference_df["n_available_sources_" + source_type] = st_avail_count[mask]
@@ -264,9 +267,13 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                 self.reference_df["source_name"].isin(self.forecasting_sources)
             ]
 
-        # Finally, avoid duplicated samples if two observations are at the exact same time
+        # Avoid duplicated samples if two observations are at the exact same time
         self.reference_df = self.reference_df.drop_duplicates(["sid", "time"])
         self.reference_df = self.reference_df.reset_index(drop=True)
+
+        # Optional intensity filtering
+        if min_tc_intensity is not None:
+            self.reference_df = self.reference_df[self.reference_df['intensity'] >= min_tc_intensity]
 
         # Optionally, keep only a fraction of the dataset
         if subset_fraction is not None:
@@ -448,17 +455,11 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                     V = np.stack([load_nc_with_nan(ds[var]) for var in source.data_vars], axis=0)
                     V = torch.tensor(V, dtype=torch.float32)
 
-                    if source.dim == 2:
-                        # For images only.
-                        # The values can contain borders that are fully NaN (due to the sources
-                        # originally having multiple channels that are not aligned geographically).
-                        # Compute how much we can crop them, and apply that cropping to all spatial
-                        # tensors to keep the spatial alignment.
-                        V, C, LM, D = crop_nan_border(V, [V, C, LM, D])
-
                     # Normalize the characs and values tensors
-                    CA, V = self.normalize(V, source, CA)
-                    output_entry = {
+                    CA, V = self.normalize(V, source, characs=CA)
+
+                    # Assemble the output dict for that source
+                    output_source = {
                         "dt": DT,
                         "coords": C,
                         "landmask": LM,
@@ -466,16 +467,25 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                         "values": V,
                     }
                     if CA is not None:
-                        output_entry["characs"] = CA
-                    output[source_name] = output_entry
-        # (Optional) Data augmentation
-        if isinstance(self.data_augmentation, MultisourceDataAugmentation):
-            for source_name in output:
-                output[source_name]["source_type"] = self.sources_dict[source_name].type
-            output = self.data_augmentation(output)
-            for source_name in output:
-                # Remove the source type from the output
-                del output[source_name]["source_type"]
+                        output_source["characs"] = CA
+
+                    # (Optional) Data augmentation
+                    if isinstance(self.data_augmentation, MultisourceDataAugmentation):
+                        output_source = self.data_augmentation(output_source, source.type)
+
+                    if source.dim == 2:
+                        # For images only.
+                        # The values can contain borders that are fully NaN (due to the sources
+                        # originally having multiple channels that are not aligned geographically).
+                        # Compute how much we can crop them, and apply that cropping to all spatial
+                        # tensors to keep the spatial alignment.
+                        V, C = output_source["values"], output_source["coords"]                           
+                        LM, D = output_source["landmask"], output_source["dist_to_center"]
+                        V, C, LM, D = crop_nan_border(V, [V, C, LM, D])
+                        output_source["values"], output_source["coords"] = V, C
+                        output_source["landmask"], output_source["dist_to_center"] = LM, D
+
+                    output[source_name] = output_source
 
         if len(output) <= 1:
             raise ValueError(

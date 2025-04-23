@@ -12,43 +12,17 @@ augmentation_functions:
       transform:
         _target_: multi_sources.data_processing.data_augmentation.RandomDynamicCrop
         min_scale: 0.6
-        max_scale: 0.95
-    - _target_: multi_sources.data_processing.data_augmentation.wrap_tv_image_transform
-      transform:
-        _target_: torchvision.transforms.v2.RandomAffine
-        degrees: 45
-        translate: [0.25, 0.25]
-        fill: ${nan:}
+        max_scale: 1.0
   infrared:
-  # Same as above
     - _target_: multi_sources.data_processing.data_augmentation.wrap_tv_image_transform
       transform:
         _target_: multi_sources.data_processing.data_augmentation.RandomDynamicCrop
         min_scale: 0.6
-        max_scale: 0.95
-    - _target_: multi_sources.data_processing.data_augmentation.wrap_tv_image_transform
-      transform:
-        _target_: torchvision.transforms.v2.RandomAffine
-        degrees: 45
-        translate: [0.25, 0.25]
-        fill: ${nan:}
+        max_scale: 1.0
     - _target_: multi_sources.data_processing.data_augmentation.AddNoiseToTimeDelta
       relative_noise_std: 0.0208  # 0.5 / 24 (30min for dt max of 24h)
   pmw:
-  # Same, but with no scaling as resolutions already vary
-    - _target_: multi_sources.data_processing.data_augmentation.wrap_tv_image_transform
-      transform:
-        _target_: torchvision.transforms.v2.RandomHorizontalFlip
-        p: 0.5
-    - _target_: multi_sources.data_processing.data_augmentation.wrap_tv_image_transform
-      transform:
-        _target_: torchvision.transforms.v2.RandomVerticalFlip
-        p: 0.5
-    - _target_: multi_sources.data_processing.data_augmentation.wrap_tv_image_transform
-      transform:
-        _target_: torchvision.transforms.v2.RandomAffine
-        degrees: 45
-        translate: [0.25, 0.25]
-        fill: ${nan:}
+    # No need for affine transforms on pmw data as it is already at different resolutions,
+    # with different scales and geometries.
     - _target_: multi_sources.data_processing.data_augmentation.AddNoiseToTimeDelta
-      relative_noise_std: 0.0208
+      relative_noise_std: 0.0208  # 0.5 / 24 (30min for dt max of 24h)
