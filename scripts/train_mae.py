@@ -5,7 +5,7 @@ import torch
 from hydra.utils import get_class, instantiate
 from pathlib import Path
 from lightning.pytorch.loggers import WandbLogger
-from lightning.pytorch.callbacks import ModelCheckpoint, LearningRateMonitor
+from lightning.pytorch.callbacks import ModelCheckpoint, LearningRateMonitor, ModelSummary
 from torch.utils.data import DataLoader
 from omegaconf import DictConfig, OmegaConf
 
@@ -119,7 +119,8 @@ def main(cfg: DictConfig):
         save_top_k=1,
     )
     lr_monitor = LearningRateMonitor()
-    callbacks = [epoch_checkpoint_callback, lr_monitor]
+    model_summary = ModelSummary(max_depth=1)
+    callbacks = [epoch_checkpoint_callback, lr_monitor, model_summary]
                  
     # Create the trainer
     trainer = pl.Trainer(
