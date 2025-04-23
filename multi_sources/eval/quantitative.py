@@ -1,6 +1,6 @@
 """
 Implements the QuantitativeEvaluation class, which computes the mean squared error (MSE)
-between the targets and predictions for a given source, for each channel. 
+between the targets and predictions for a given source, for each channel.
 """
 
 import numpy as np
@@ -77,16 +77,15 @@ class QuantitativeEvaluation(AbstractMultisourceEvaluationMetric):
                 targets, preds = {}, {}
                 for source in sources:
                     targets[source], preds[source] = self.load_batch(source, batch_idx)
-                # Compute the metrics for the batch
-                compute_metrics(batch_info, batch_idx, targets, preds, unique_sources, results_csv)
+                gather_results(batch_info, batch_idx, targets, preds, unique_sources, results_csv)
         else:
             # Divide the dataframe into chunks based on the number of workers
             batch_chunks = np.array_split(unique_batch_indices, num_workers)
-            
+
             # Print the number of chunks
             if verbose:
                 print(f"Dividing work into {len(batch_chunks)} chunks")
-            
+
             # Process each chunk in parallel
             with ProcessPoolExecutor(max_workers=num_workers) as executor:
                 futures = []
@@ -96,14 +95,14 @@ class QuantitativeEvaluation(AbstractMultisourceEvaluationMetric):
                         process_batch_chunk,
                         self,
                         info_df,
-                        chunk, 
+                        chunk,
                         unique_sources,
                         results_csv,
                         verbose,
-                        worker_id
+                        worker_id,
                     )
                     futures.append(future)
-                
+
                 # Wait for all futures to complete
                 for future in tqdm(futures, desc="Processing chunks", disable=not verbose):
                     future.result()
@@ -129,8 +128,10 @@ class QuantitativeEvaluation(AbstractMultisourceEvaluationMetric):
                 print(f"MAE: {mae[source, channel]:.2f}")
                 print()
 
+        aggregate_results(results_df, self.results_dir)
+
         # Compute and display the detailed results
-        display_detailed_results(
+        results_per_n_sources(
             unique_sources,
             results_df,
             self.results_dir,
@@ -139,9 +140,8 @@ class QuantitativeEvaluation(AbstractMultisourceEvaluationMetric):
         )
 
 
-def compute_metrics(batch_info, batch_idx, targets, preds, all_sources, results_csv):
-    """Computes several metrics for every sample in a batch, and happens the results
-    to a given dataframe in CSV format.
+def gather_results(batch_info, batch_idx, targets, preds, all_sources, results_csv):
+    """Gathers the results from the netcdf files to a single CSV file.
     Args:
         batch_info (pd.DataFrame): DataFrame with the information of the batch.
         batch_idx (int): Index of the batch to display.
@@ -194,9 +194,74 @@ def compute_metrics(batch_info, batch_idx, targets, preds, all_sources, results_
                         results_df.to_csv(results_csv, mode="a", header=False, index=False)
 
 
-def display_detailed_results(
-    all_sources, results_df, figures_dir, displayed_names, displayed_units
+def process_batch_chunk(
+    evaluator, info_df, batch_indices, unique_sources, results_csv, verbose, worker_id=0
 ):
+    """Process a chunk of batch indices in a single worker process.
+
+    Args:
+        evaluator: The QuantitativeEvaluation instance
+        info_df (pd.DataFrame): The complete info dataframe
+        batch_indices (list): List of batch indices to process in this worker
+        unique_sources (list): List of all unique sources in the dataset
+        results_csv (Path): Path to the CSV file where results will be saved
+        verbose (bool): Whether to show progress bars
+        worker_id (int): ID of the worker processing this chunk
+    """
+    # Only show progress bar for the first worker (worker_id=0)
+    show_progress = verbose and worker_id == 0
+
+    for batch_idx in tqdm(
+        batch_indices, desc=f"Processing batch (chunk {worker_id})", disable=not show_progress
+    ):
+        # Get the sources included in the batch
+        batch_info = info_df[info_df["batch_idx"] == batch_idx]
+        sources = batch_info["source_name"].unique()
+
+        # For each source, load the targets and predictions
+        targets, preds = {}, {}
+        for source in sources:
+            targets[source], preds[source] = evaluator.load_batch(source, batch_idx)
+
+        gather_results(batch_info, batch_idx, targets, preds, unique_sources, results_csv)
+
+    return True  # Indicate successful completion
+
+
+def aggregate_results(results_df, results_dir):
+    """Aggregates the results from the CSV file:
+    - RMSE, R2, MAE for each source and channel.
+    Writes the results to a text file in the results directory.
+    Args:
+        results_df (pd.DataFrame): DataFrame with the results, with one row per sample.
+        results_dir (Path): Directory where the results will be saved.
+    """
+    # Open a stream to a text file to write the results
+    results_txt = results_dir / "results.txt"
+    with open(results_txt, "w") as f:
+        # For each source, channel and number of available sources, compute the RMSE, R2 and MAE
+        # Store the results in a DataFrame with columns:
+        # masked_source, channel, num_avail_sources, rmse, r2, mae
+        grouped = results_df.groupby(["masked_source", "channel"])
+        rmse = np.sqrt(grouped.apply(lambda x: np.mean((x["target"] - x["pred"]) ** 2)))
+        r2 = grouped.apply(lambda x: r2_score(x["target"], x["pred"]))
+        mae = grouped.apply(lambda x: np.mean(np.abs(x["target"] - x["pred"])))
+        for source in results_df["masked_source"].unique():
+            channels = results_df[results_df["masked_source"] == source]["channel"].unique()
+            for channel in channels:
+                f.write(f"Source: {source}, Channel: {channel}\n")
+                f.write(f"RMSE: {rmse[source, channel]:.2f}\n")
+                f.write(f"R2: {r2[source, channel]:.2f}\n")
+                f.write(f"MAE: {mae[source, channel]:.2f}\n")
+                f.write("\n")
+        
+    # Read the content of the text file and print it to the console
+    with open(results_txt, "r") as f:
+        content = f.read()
+        print(content)
+
+
+def results_per_n_sources(all_sources, results_df, figures_dir, displayed_names, displayed_units):
     """Displays the detailed results from the CSV file:
     - RMSE, R2, MAE for each source and channel versus the number of available sources
         in the sample.
@@ -280,34 +345,3 @@ def display_detailed_results(
         plt.tight_layout()
         plt.savefig(figures_dir / f"metrics_vs_num_sources_{msource}_{c}.png")
         plt.close()
-
-
-def process_batch_chunk(evaluator, info_df, batch_indices, unique_sources, results_csv, verbose, worker_id=0):
-    """Process a chunk of batch indices in a single worker process.
-    
-    Args:
-        evaluator: The QuantitativeEvaluation instance
-        info_df (pd.DataFrame): The complete info dataframe
-        batch_indices (list): List of batch indices to process in this worker
-        unique_sources (list): List of all unique sources in the dataset
-        results_csv (Path): Path to the CSV file where results will be saved
-        verbose (bool): Whether to show progress bars
-        worker_id (int): ID of the worker processing this chunk
-    """
-    # Only show progress bar for the first worker (worker_id=0)
-    show_progress = verbose and worker_id == 0
-    
-    for batch_idx in tqdm(batch_indices, desc=f"Processing batch (chunk {worker_id})", disable=not show_progress):
-        # Get the sources included in the batch
-        batch_info = info_df[info_df["batch_idx"] == batch_idx]
-        sources = batch_info["source_name"].unique()
-        
-        # For each source, load the targets and predictions
-        targets, preds = {}, {}
-        for source in sources:
-            targets[source], preds[source] = evaluator.load_batch(source, batch_idx)
-        
-        # Compute the metrics for the batch
-        compute_metrics(batch_info, batch_idx, targets, preds, unique_sources, results_csv)
-    
-    return True  # Indicate successful completion

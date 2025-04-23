@@ -50,8 +50,11 @@ def main(cfg: DictConfig):
     )
     print("Dataset size:", len(dataset), f" ({split} split)")
 
+    # The user can specify a name for the predictions (e.g. for a specific setting of a
+    # general model).
+    pred_name = cfg.get("pred_name", "default")
     # Create the results directory
-    run_results_dir = Path(cfg["paths"]["predictions"]) / run_id
+    run_results_dir = Path(cfg["paths"]["predictions"]) / run_id / pred_name
     # Remove run_results_dir / info.csv if it exists
     if (run_results_dir / "info.csv").exists():
         (run_results_dir / "info.csv").unlink()
@@ -63,7 +66,7 @@ def main(cfg: DictConfig):
         exp_cfg,
         validation_dir=None
     )
-    ckpt = torch.load(checkpoint_path)
+    ckpt = torch.load(checkpoint_path, weights_only=False)
     pl_module.load_state_dict(ckpt["state_dict"])
 
     # Custom BasePredictionWriter to save the preds and targets with metadata (eg coords).

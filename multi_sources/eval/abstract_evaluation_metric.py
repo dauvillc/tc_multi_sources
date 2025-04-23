@@ -24,8 +24,14 @@ class AbstractEvaluationMetric(abc.ABC):
         self.full_name = full_name
         self.predictions_dir = Path(predictions_dir)
         self.results_dir = Path(results_dir) / id_name
-        # Create the directory if it does not exist
-        self.results_dir.mkdir(parents=True, exist_ok=True)
+        # Create the directory if it does not exist, and reset it
+        # if it exists already
+        if self.results_dir.exists():
+            for item in self.results_dir.iterdir():
+                if item.is_file():
+                    item.unlink()
+        else:
+            self.results_dir.mkdir(parents=True, exist_ok=True)
 
     def load_batch(self, source_name, batch_idx):
         """

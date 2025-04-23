@@ -46,11 +46,11 @@ from multi_sources.eval.abstract_evaluation_metric import AbstractMultisourceEva
 def main(cfg: DictConfig):
     cfg = OmegaConf.to_object(cfg)
     num_workers = cfg["num_workers"]
-    if "run_id" not in cfg:
-        raise ValueError("Usage: python scripts/eval_mae.py run_id=<wandb_run_id>")
+    # Run id: ID of the training run, pred_name: name of the prediction to evaluate
     run_id = cfg["run_id"]
+    pred_name = cfg["pred_name"]
 
-    root_dir = Path(cfg["paths"]["predictions"]) / run_id
+    root_dir = Path(cfg["paths"]["predictions"]) / run_id / pred_name
     if not root_dir.exists():
         raise ValueError(
             f"Predictions for run_id {run_id} do not exist.\
@@ -65,7 +65,7 @@ def main(cfg: DictConfig):
         lambda x: tuple(map(int, x.strip("()").split(", "))) if x != '()' else ()
     )
     # Create the results directory
-    results_dir = Path(cfg["paths"]["results"]) / run_id
+    results_dir = Path(cfg["paths"]["results"]) / run_id / pred_name
     results_dir.mkdir(parents=True, exist_ok=True)
 
     # Instantiate the evaluation classes
