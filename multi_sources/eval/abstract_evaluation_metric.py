@@ -5,7 +5,7 @@ Implements the AbstractEvaluationMetric class, which is a base class for all eva
 import abc
 from pathlib import Path
 
-import xarray as xr  # Add xarray import
+import xarray as xr
 
 
 class AbstractEvaluationMetric(abc.ABC):

@@ -37,10 +37,9 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         to the center of the storm.
     - "values" is a tensor of shape (n_variables, H, W) containing the variables for the source.
 
-    For a given storm S and reference time t0,
-    the dataset returns an element from each source that is between t0 and t0 - dt_max.
-    When multiple elements are available for a source, a random one is selected.
-    If a source is not available for the storm S at time t0, it is not included in the sample.
+    For a given storm S and reference time t0, the dataset will yield observations from
+    the sources that are available in the time window (t0 - dt_max, t0) for each source.
+    Multiple observations from the same source can be available in that time window.
     """
 
     def __init__(
@@ -51,12 +50,11 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         dt_max=24,
         min_available_sources=0,
         source_types_min_avail={},
+        source_types_max_avail={},
         num_workers=0,
         select_most_recent=False,
         forecasting_lead_time=None,
         forecasting_sources=None,
-        include_seasons=None,
-        exclude_seasons=None,
         min_tc_intensity=None,
         randomly_drop_sources={},
         force_drop_sources=[],
@@ -80,7 +78,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                         - data_means/stds.json: dictionaries containing the means and stds
                             for the data variables of the source.
                         - charac_vars_min_max.json: dictionaries {charac_var_name: {min, max}}
-            split (str): The split of the dataset to use. Must be one of "train", "val", or "test".
+            split (str): The split of the dataset. Must be one of "train", "val", or "test".
             included_variables_dict (dict): A dictionary
                 {source_name: (list of variables, list of input-only variables)}
                 containing the variables (i.e. channels) to include for each source.
@@ -89,14 +87,18 @@ class MultiSourceDataset(torch.utils.data.Dataset):
             dt_max (int): The maximum time delta between the elements returned for each source,
                 in hours.
             min_available_sources (int): The minimum number of sources that must be available
-                for a sample to be included in the dataset. Does NOT include the forecasting source
+                for a sample to be included in the dataset. Does NOT include the forecast source
                 if it is enabled.
-            source_types_min_avail (dict of str to int): A dictionary D = {source_type: availability}
+            source_types_min_avail (dict of str to int): A dictionary D = {src_type: availability}
                 such that if D[source_type] is the minimum number of sources of type source_type
                 that must be available for a sample to be included in the dataset.
+            source_types_max_avail (dict of str to int): A dictionary D = {src_type: availability}
+                such that when a source of type T has multiple observations available,
+                at most D[T] of them will be included in the sample.
             num_workers (int): If > 1, number of workers to use for parallel loading of the data.
-            select_most_recent (bool): If True, selects the most recent element for each source
-                when multiple elements are available. If False, selects a random element.
+            select_most_recent (bool): If True, prioritize the most recent observations within
+                a source when there are multiple observations available. Otherwise, prioritize
+                the observations randomly.
             forecasting_lead_time (int): If not None, the lead time to use for forecasting.
                 Must be used in conjunction with forecasting_sources. If enabled, the reference
                 source will always be one of the forecast source.
@@ -106,10 +108,6 @@ class MultiSourceDataset(torch.utils.data.Dataset):
             forecasting_sources (list of str): If not None, the name of the sources to use
                 for forecasting.
                 Must be used in conjunction with forecasting_lead_time.
-            include_seasons (list of int): The years to include in the dataset.
-                If None, all years are included.
-            exclude_seasons (list of int): The years to exclude from the dataset.
-                If None, no years are excluded.
             min_tc_intensity (float): If not None, will filter the reference samples to only keep
                 the ones where the TC intensity is above the given threshold at the reference time.
             randomly_drop_sources (dict of str to float): A dictionary {source_type: p} such
@@ -131,6 +129,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         self.processed_dir = self.dataset_dir / "prepared"
         self.split = split
         self.dt_max = pd.Timedelta(dt_max, unit="h")
+        self.source_types_max_avail = source_types_max_avail
         self.select_most_recent = select_most_recent
         self.mask_spatial_coords = mask_spatial_coords
         self.data_augmentation = data_augmentation
@@ -176,19 +175,8 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         self.source_types = list(set([source.type for source in self.sources]))
         self.df = self.df[self.df["source_name"].isin(source_names)]
         self.df = self.df.reset_index(drop=True)
-
-        # Check that the included and excluded seasons are not overlapping
-        if include_seasons is not None and exclude_seasons is not None:
-            if set(include_seasons).intersection(exclude_seasons):
-                raise ValueError("The included and excluded seasons are overlapping.")
-        # Select the seasons to include
-        if include_seasons is not None:
-            self.df = self.df[self.df["season"].isin(include_seasons)]
-        # Select the seasons to exclude
-        if exclude_seasons is not None:
-            self.df = self.df[~self.df["season"].isin(exclude_seasons)]
         if len(self.df) == 0:
-            raise ValueError("No elements available for the selected sources and seasons.")
+            raise ValueError("No samples found for the given sources.")
 
         if forecasting_lead_time is not None:
             if forecasting_sources is None:
@@ -392,12 +380,20 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                     & (sample_df["time"] > min_t)
                 ]
 
-            if self.select_most_recent:
-                # Sort by descending time so that the first row is the closest to t0
-                df = df.sort_values("time", ascending=False)
-            else:
-                # Shuffle the rows so that the first row is random
-                df = df.sample(frac=1)
+            # Managing the case where multiple observations are available:
+            if source.type in self.source_types_max_avail:
+                n_avail = df.shape[0]
+                limit = self.source_types_max_avail[source.type]
+                if n_avail > limit:
+                    # If there are too many observations, we'll select a subset of them.
+                    # We do that either chronologically (most recent first) or randomly.
+                    if self.select_most_recent:
+                        # Sort by descending time so that the first row is the closest to t0
+                        df = df.sort_values("time", ascending=False)
+                    else:
+                        # Shuffle the rows so that the first row is random
+                        df = df.sample(frac=1)
+                    df = df.head(limit)
 
             # Collect all available observations for this source
             for _, row in df.iterrows():

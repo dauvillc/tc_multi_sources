@@ -255,7 +255,7 @@ class MultisourceDeterministicReconstructor(MultisourceAbstractReconstructor):
         }
         if self.validation_dir is not None and batch_idx % 15 == 0:
             # For every 30 batches, make a prediction and display it.
-            if batch_idx % 30 == 0:
+            if batch_idx % 15 == 0:
                 display_realizations(
                     pred,
                     input_batch,

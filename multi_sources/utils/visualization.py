@@ -246,7 +246,7 @@ def display_realizations(
                         # Crop the NaN borders to display the images correctly.
                         pred = crop_nan_border(coords, [pred.unsqueeze(0)])[0].squeeze(0)
                         pred = pred.detach().cpu().numpy()
-                        im = ax.imshow(pred, cmap="viridis")
+                        ax.imshow(pred, cmap="viridis")
                         # Add coords as axis labels
                         h, w = pred.shape
                         x_vals = np.nanmean(coords[1, :, :w].detach().cpu().numpy(), axis=0)
@@ -265,9 +265,9 @@ def display_realizations(
                         pred = pred.item()
                         ax.bar([0], [pred], color="orange")
 
-                    ax.set_title(f"{source_name} (index={index}) Pred {r_idx+1}")
+                    ax.set_title(f"{source_name} Pred {r_idx+1}")
                 else:
-                    ax.set_title(f"{source_name} (index={index}) Not masked")
+                    ax.set_title(f"{source_name}")
                     ax.axis("off")
 
             # Display groundtruth in the last column
@@ -277,7 +277,7 @@ def display_realizations(
             if len(true.shape) == 2:
                 true = crop_nan_border(coords, [true.unsqueeze(0)])[0].squeeze(0)
                 true = true.detach().cpu().numpy()
-                im = ax.imshow(true, cmap="viridis")
+                ax.imshow(true, cmap="viridis")
                 h, w = true.shape
                 x_vals = np.nanmean(coords[1, :, :w].detach().cpu().numpy(), axis=0)
                 y_vals = np.nanmean(coords[0, :h, :].detach().cpu().numpy(), axis=1)
@@ -293,7 +293,7 @@ def display_realizations(
                 true = true.item()
                 ax.bar([0], [true], color="orange")
 
-            ax.set_title(f"{source_name} (index={index}) Ground Truth")
+            ax.set_title(f"{source_name} Ground Truth")
 
         plt.tight_layout()
         # Save figure

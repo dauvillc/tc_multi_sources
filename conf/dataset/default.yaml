@@ -16,6 +16,9 @@ train:
   # for it to be included in the dataset.
   # Unspecified source types means at least 0 sources of that type (no restriction).
   source_types_min_avail: {}
+  # For each source type, max number of observations that can be included for each
+  # source of that type.
+  source_types_max_avail: {}
   # Number of workers for the data loading
   num_workers: ${dataloader.num_workers}
   # Dict {source_type: proba} to randomly drop sources
@@ -49,6 +52,7 @@ val:
   dt_max: ${dataset.train.dt_max}
   min_available_sources: ${dataset.train.min_available_sources}
   source_types_min_avail: ${dataset.train.source_types_min_avail}
+  source_types_max_avail: ${dataset.train.source_types_max_avail}
   num_workers: ${dataset.train.num_workers}
   randomly_drop_sources: ${dataset.train.randomly_drop_sources}
   force_drop_sources: ${dataset.train.force_drop_sources}
@@ -69,6 +73,7 @@ test:
   dt_max: ${dataset.train.dt_max}
   min_available_sources: ${dataset.train.min_available_sources}
   source_types_min_avail: ${dataset.train.source_types_min_avail}
+  source_types_max_avail: ${dataset.train.source_types_max_avail}
   num_workers: ${dataset.train.num_workers}
   randomly_drop_sources: ${dataset.train.randomly_drop_sources}
   force_drop_sources: ${dataset.train.force_drop_sources}

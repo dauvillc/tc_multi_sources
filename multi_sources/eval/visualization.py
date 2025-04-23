@@ -76,11 +76,13 @@ class VisualEvaluation(AbstractMultisourceEvaluationMetric):
             for batch_idx in tqdm(unique_batch_indices, desc="Batches", disable=not verbose):
                 # Get the sources included in the batch
                 batch_info = info_df[info_df["batch_idx"] == batch_idx]
-                sources = batch_info["source_name"].unique()
                 # For each source, load the targets and predictions
                 targets, preds = {}, {}
-                for source in sources:
-                    targets[source], preds[source] = self.load_batch(source, batch_idx)
+                for _, row in batch_info.iterrows():
+                    src, index = row["source_name"], row["index"]
+                    targets[(src, index)], preds[(src, index)] = self.load_batch(
+                        src, index, batch_idx
+                    )
                 # Display the targets and predictions
                 display_batch(batch_info, batch_idx, targets, preds, self.results_dir)
         else:
@@ -116,35 +118,38 @@ def display_batch(batch_info, batch_idx, targets, preds, results_dir):
     Args:
         batch_info (pd.DataFrame): DataFrame with the information of the batch.
         batch_idx (int): Index of the batch to display.
-        targets (dict): Dictionary with the targets for each source.
-        preds (dict): Dictionary with the predictions for each source.
+        targets (dict): Dictionary with the targets for each source/index pair.
+        preds (dict): Dictionary with the predictions for each source/index pair.
         results_dir (Path): Directory where the results will be saved.
     """
-    sources = batch_info["source_name"].unique()
     # For each sample, create a figure with the targets and predictions
     batch_indices = batch_info["index_in_batch"].unique()
     for idx in batch_indices:
         sample_df = batch_info[batch_info["index_in_batch"] == idx]
         # For each source, select only the targets and predictions for the sample
-        sample_targets = {source: targets[source].isel(samples=idx) for source in sources}
-        sample_preds = {source: preds[source].isel(samples=idx) for source in sources}
+        sample_targets, sample_preds = {}, {}
+        for _, row in sample_df.iterrows():
+            src, index = row["source_name"], row["index"]
+            sample_targets[(src, index)] = targets[(src, index)].isel(samples=idx)
+            sample_preds[(src, index)] = preds[(src, index)].isel(samples=idx)
         plot_sample(sample_df, sample_targets, sample_preds, results_dir, batch_idx, idx)
 
 
 def plot_sample(sample_df, targets, preds, results_dir, batch_idx, sample_idx):
     """Displays in a figure with a single row. From left to right: available sources,
     masked source target, and prediction."""
-    # Retrieve the list of all sources that are available and not masked
-    avail_sources = sample_df[sample_df["avail"] == 1]["source_name"].unique().tolist()
+    # Retrieve the list of all sources/index pairs that are available and not masked
+    avail_pairs = sample_df[sample_df["avail"] == 1][["source_name", "index"]].tolist()
     # Retrieve the source that is masked
-    masked_source = sample_df[sample_df["avail"] == 0]["source_name"].values[0]
+    masked_pair = sample_df[sample_df["avail"] == 0][["source_name", "index"]].iloc[0]
+    masked_source, _ = masked_pair
 
-    # Sort sources by decreasing dt
+    # Sort pairs by decreasing dt
     source_dt = {row["source_name"]: row["dt"] for _, row in sample_df.iterrows()}
-    avail_sources.sort(key=lambda x: source_dt[x], reverse=True)
+    avail_pairs.sort(key=lambda x: source_dt[x], reverse=True)
 
     # Calculate total number of plots needed
-    num_avail = len(avail_sources)
+    num_avail = len(avail_pairs)
     total_cols = num_avail + 2  # available sources + masked target + prediction
 
     # Create figure with custom gridspec
@@ -172,7 +177,7 @@ def plot_sample(sample_df, targets, preds, results_dir, batch_idx, sample_idx):
     )
 
     # Plot available sources
-    for i, source in enumerate(avail_sources):
+    for i, (source, _) in enumerate(avail_pairs):
         ax = fig.add_subplot(gs[0, i])
         target_ds = targets[source]
         first_channel = list(target_ds.data_vars.keys())[0]
@@ -197,10 +202,10 @@ def plot_sample(sample_df, targets, preds, results_dir, batch_idx, sample_idx):
     plt.axis("off")
 
     # Get target and prediction data for masked source
-    target_ds = targets[masked_source]
+    target_ds = targets[masked_pair]
     first_channel = list(target_ds.data_vars.keys())[0]
     target = target_ds[first_channel].values
-    pred_ds = preds[masked_source]
+    pred_ds = preds[masked_pair]
     pred = pred_ds[first_channel].values
 
     # Crop NaN borders from target and prediction based on the coordinates

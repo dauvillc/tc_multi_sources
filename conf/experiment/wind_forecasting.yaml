@@ -21,6 +21,15 @@ dataset:
       era5: 1
       infrared: 1
       pmw: 1
+    # Max number of observations for each source of each type:
+    source_types_max_avail:
+      infrared: 3
+    # Randomly drop sources of each type
+    randomly_drop_sources:
+      era5: 0.5
+      infrared: 0.5
+      pmw: 0.1
+    select_most_recent: true
     # Parameters to perform a forecasting task specifically.
     # Those are automatically propagated to the val and test datasets.
     forecasting_lead_time: 24
@@ -28,12 +37,23 @@ dataset:
     # Parameter to mask the spatial coordinates of the forecast source
     # (Since we don't know the future location of the storm)
     mask_spatial_coords: ['tc_primed_storm_metadata']
+    # Data augmentation
+    data_augmentation:
+      _target_: multi_sources.data_processing.data_augmentation.MultisourceDataAugmentation
+      augmentation_functions:
+        infrared:
+          - _target_: multi_sources.data_processing.data_augmentation.AddNoiseToTimeDelta
+            relative_noise_std: 0.0583  # 1.5 / 24 (1h30min for dt max of 24h)
+        pmw:
+          - _target_: multi_sources.data_processing.data_augmentation.AddNoiseToTimeDelta
+            relative_noise_std: 0.0583  # 1.5 / 24 (1h30min for dt max of 24h)
   val:
     select_most_recent: true
   test:
     select_most_recent: true
   
 lightning_module:
+  normalize_coords_across_sources: true
   mask_only_sources: tc_primed_storm_metadata
 
 trainer:
