@@ -78,7 +78,7 @@ def main(cfg: DictConfig):
         # It also allows weights that are in the checkpoint but not in the new lightning
         # module to be ignored.
         # https://discuss.pytorch.org/t/how-to-load-part-of-pre-trained-model/1113/39
-        ckpt = torch.load(checkpoint_path, map_location="cpu")
+        ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
         former_dict = ckpt["state_dict"]
         # The user can add "+reset_output_layers=true" to the command line to reset the
         # output layers of the model. In this case, the output layers are not loaded from
