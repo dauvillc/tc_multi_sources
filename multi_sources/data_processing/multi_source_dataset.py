@@ -213,10 +213,6 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         available_sources = compute_sources_availability(
             self.df, self.dt_max, lead_time=self.forecasting_lead_time, num_workers=num_workers
         )
-        # If forecasting, don't include the forecast sources in the available sources, since they
-        # won't be included in the samples.
-        if self.forecasting_sources is not None:
-            available_sources = available_sources.drop(columns=self.forecasting_sources)
         # We can now build the reference dataframe:
         # - self.df contains the metadata for all elements from all sources,
         # - self.reference_df is a subset of self.df containing every (sid, time) pair
@@ -259,7 +255,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         for source_type, st_avail_count in source_types_availability.items():
             self.reference_df["n_available_sources_" + source_type] = st_avail_count[mask]
 
-        # If forecasting, only use the forecasting sources as references
+        # If forecasting, only use the forecast sources as references
         if self.forecasting_sources is not None:
             self.reference_df = self.reference_df[
                 self.reference_df["source_name"].isin(self.forecasting_sources)
@@ -381,30 +377,18 @@ class MultiSourceDataset(torch.utils.data.Dataset):
 
         for source in self.sources:
             source_name = source.name
+            df = sample_df[sample_df["source_name"] == source_name]
 
-            # If forecast source: if it is the reference source, include it;
-            # otherwise, skip it.
+            # Isolate the rows of sample_df where the time is within the time window
+            # defined by the reference time t0.
+            min_t = t0 - self.forecasting_lead_time - self.dt_max
+            max_t = t0 - self.forecasting_lead_time
+            time_mask = (df["time"] <= max_t) & (df["time"] > min_t)
+            # For the forecast sources, we also keep the rows where the time is
+            # exactly the forecast time.
             if self.forecasting_sources is not None and source_name in self.forecasting_sources:
-                if source_name == sample["source_name"]:
-                    # Isolate the rows of sample_df corresponding to the right source
-                    # and where the time is within the time window
-                    min_t = t0 - self.dt_max
-                    max_t = t0
-                    df = sample_df[
-                        (sample_df["source_name"] == source_name) & (sample_df["time"] == t0)
-                    ]
-                else:
-                    continue
-            else:
-                # Isolate the rows of sample_df corresponding to the right source
-                # and where the time is within the time window
-                min_t = t0 - self.forecasting_lead_time - self.dt_max
-                max_t = t0 - self.forecasting_lead_time
-                df = sample_df[
-                    (sample_df["source_name"] == source_name)
-                    & (sample_df["time"] <= max_t)
-                    & (sample_df["time"] > min_t)
-                ]
+                time_mask = time_mask | (df["time"] == t0)
+            df = df[time_mask]
 
             # Managing the case where multiple observations are available:
             if source.type in self.source_types_max_avail:

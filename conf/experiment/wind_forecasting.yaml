@@ -22,10 +22,12 @@ dataset:
       era5: 1
       infrared: 1
       pmw: 1
+      stom_metadata: 1
     # Max number of observations for each source of each type:
     source_types_max_avail:
       infrared: 1
       era5: 3
+      storm_metadata: 1
     # Randomly drop sources of each type
     randomly_drop_sources:
       era5: 0.5
