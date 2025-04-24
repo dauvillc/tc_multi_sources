@@ -51,6 +51,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         min_available_sources=0,
         source_types_min_avail={},
         source_types_max_avail={},
+        min_ref_time_delta=0,
         num_workers=0,
         select_most_recent=False,
         forecasting_lead_time=None,
@@ -95,6 +96,8 @@ class MultiSourceDataset(torch.utils.data.Dataset):
             source_types_max_avail (dict of str to int): A dictionary D = {src_type: availability}
                 such that when a source of type T has multiple observations available,
                 at most D[T] of them will be included in the sample.
+            min_ref_time_delta (int): The minimum time delta between two reference times
+                of the same storm (ie between two samples of the same storm).
             num_workers (int): If > 1, number of workers to use for parallel loading of the data.
             select_most_recent (bool): If True, prioritize the most recent observations within
                 a source when there are multiple observations available. Otherwise, prioritize
@@ -130,6 +133,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         self.split = split
         self.dt_max = pd.Timedelta(dt_max, unit="h")
         self.source_types_max_avail = source_types_max_avail
+        self.min_ref_time_delta = min_ref_time_delta
         self.select_most_recent = select_most_recent
         self.mask_spatial_coords = mask_spatial_coords
         self.data_augmentation = data_augmentation
@@ -270,6 +274,27 @@ class MultiSourceDataset(torch.utils.data.Dataset):
             self.reference_df = self.reference_df[
                 self.reference_df["intensity"] >= min_tc_intensity
             ]
+
+        # If required, sample the reference dataframe to keep only one sample
+        # every min_ref_time_delta hours.
+        if self.min_ref_time_delta > 0:
+            # Assign each row to a time bin
+            self.reference_df["time_bin"] = self.reference_df["time"].dt.floor(
+                f"{self.min_ref_time_delta}H"
+            )
+            # Sort to ensure the first occurrence is the earliest in each bin
+            self.reference_df = self.reference_df.sort_values(["sid", "time"])
+            # Drop duplicates to keep the first occurrence in each bin per sid
+            self.reference_df = self.reference_df.drop_duplicates(subset=["sid", "time_bin"])
+            # Drop the 'time_bin' column as it's no longer needed
+            self.reference_df = self.reference_df.drop(columns="time_bin").reset_index(drop=True)
+
+        # If no samples are left, raise an error
+        if len(self.reference_df) == 0:
+            raise ValueError(
+                f"No samples left after filtering for {split} with min_available_sources="
+                f"{min_available_sources} and min_ref_time_delta={self.min_ref_time_delta}."
+            )
 
         # ========================================================================================
         # Pre-computation to speed up the data loading
@@ -513,7 +538,6 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         characs=None,
         denormalize=False,
         batched=False,
-        dist_to_center=False,
         device=None,
     ):
         """Normalizes the characs and values tensors associated with a given
@@ -529,9 +553,6 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                 instead of normalizing them.
             batched (bool, optional): If True, the values tensor is expected to have
                 shape (B, C, ...), where B is the batch size.
-            dist_to_center (bool, optional): expects the values tensor to have C + 1 channels,
-                where C is the number of data variables in the source, and the additional
-                channel is the distance to the center of the storm.
             device (torch.device, optional): Device to use for the normalization.
         Returns:
             normalized_characs (torch.Tensor): normalized charac variables.
@@ -558,8 +579,6 @@ class MultiSourceDataset(torch.utils.data.Dataset):
             normalized_characs = None
 
         data_vars = source.data_vars
-        if dist_to_center:
-            data_vars = data_vars + ["dist_to_center"]
 
         data_means = np.array([self.data_means[source_name][var] for var in data_vars]).reshape(
             -1, *(1 for _ in (values.shape[1:] if not batched else values.shape[2:]))

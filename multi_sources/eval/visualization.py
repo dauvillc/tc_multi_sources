@@ -136,110 +136,159 @@ def display_batch(batch_info, batch_idx, targets, preds, results_dir):
 
 
 def plot_sample(sample_df, targets, preds, results_dir, batch_idx, sample_idx):
-    """Displays in a figure with a single row. From left to right: available sources,
-    masked source target, and prediction."""
+    """Displays in a figure with multiple rows - one row per channel. From left to right:
+    available sources, masked source target, and prediction."""
     # Retrieve the list of all sources/index pairs that are available and not masked
-    avail_pairs = sample_df[sample_df["avail"] == 1][["source_name", "index"]].tolist()
+    avail_pairs = sample_df[sample_df["avail"] == 1]
     # Retrieve the source that is masked
-    masked_pair = sample_df[sample_df["avail"] == 0][["source_name", "index"]].iloc[0]
-    masked_source, _ = masked_pair
+    masked_pair = sample_df[sample_df["avail"] == 0].iloc[0]
+    masked_source, masked_idx = masked_pair["source_name"], masked_pair["index"]
 
     # Sort pairs by decreasing dt
-    source_dt = {row["source_name"]: row["dt"] for _, row in sample_df.iterrows()}
-    avail_pairs.sort(key=lambda x: source_dt[x], reverse=True)
+    avail_pairs.sort_values(by="dt", ascending=False, inplace=True)
 
-    # Calculate total number of plots needed
-    num_avail = len(avail_pairs)
-    total_cols = num_avail + 2  # available sources + masked target + prediction
+    # Get all unique channels across all sources
+    all_channels = set()
+    for _, row in avail_pairs.iterrows():
+        source = row["source_name"]
+        target_ds = targets[(source, row["index"])]
+        all_channels.update(target_ds.data_vars)
+
+    # Add channels from masked source
+    masked_target_ds = targets[(masked_source, masked_idx)]
+    all_channels.update(masked_target_ds.data_vars)
+    all_channels = sorted(list(all_channels))  # Sort for consistent ordering
+
+    # Calculate number of rows (one per channel) and columns
+    num_rows = len(all_channels)
+    num_avail_sources = len(avail_pairs)
+    # 2 columns per masked channel (target + prediction)
+    num_cols = num_avail_sources + 2 + 1  # +1 for the separator
 
     # Create figure with custom gridspec
-    fig = plt.figure(figsize=(3 * total_cols + 1, 3.5))  # Slightly taller to accommodate labels
-    gs = gridspec.GridSpec(1, total_cols + 1, wspace=0.4)
-    # Adjust the subplot parameters to give specified padding
-    plt.subplots_adjust(top=0.75, bottom=0.15)  # Increased top margin for labels
+    fig = plt.figure(figsize=(3 * num_cols, 2.5 * num_rows))
+    gs = gridspec.GridSpec(num_rows, num_cols, wspace=0.4, hspace=0.3)
 
-    # Add section labels - adjust the x-position for "Available sources" to center it over its columns
+    # Add channel labels on the left side
+    for i, channel in enumerate(all_channels):
+        fig.text(
+            0.01,  # Left aligned
+            1 - (i + 0.5) / num_rows,  # Centered vertically for each row
+            channel,
+            fontsize=12,
+            weight="bold",
+            ha="left",
+            va="center",
+            bbox=dict(facecolor="white", alpha=0.8, edgecolor="lightgray", pad=3),
+        )
+
+    # Add section labels at the top
     fig.text(
-        num_avail / (2 * total_cols),
-        0.92,  # Changed from 0.9 to 0.92
+        (num_avail_sources / 2) / num_cols,
+        0.98,
         "Available sources",
         fontsize=14,
         weight="bold",
         ha="center",
     )
     fig.text(
-        (total_cols - 0.15) / (total_cols + 1),
-        0.92,  # Changed from 0.9 to 0.92
+        (num_avail_sources + 1 + 1) / num_cols,
+        0.98,
         "Target / Prediction",
         fontsize=14,
         weight="bold",
         ha="center",
     )
 
-    # Plot available sources
-    for i, (source, _) in enumerate(avail_pairs):
-        ax = fig.add_subplot(gs[0, i])
-        target_ds = targets[source]
-        first_channel = list(target_ds.data_vars.keys())[0]
-        target = target_ds[first_channel].values
+    # For each channel, plot available sources on the corresponding row
+    for row_idx, channel in enumerate(all_channels):
+        # Plot each available source on this row if it has this channel
+        for col_idx, (_, row) in enumerate(avail_pairs.iterrows()):
+            source, idx = row["source_name"], row["index"]
+            target_ds = targets[(source, idx)]
 
-        # Crop NaN borders from target based on the coordinates
-        lat, lon = target_ds.lat.values, target_ds.lon.values
-        target, lat, lon = crop_nan_border_numpy(lat, [target, lat, lon])
+            # Check if this source has this channel
+            if channel in target_ds.data_vars:
+                ax = fig.add_subplot(gs[row_idx, col_idx])
+                target = target_ds[channel].values
 
-        dt = sample_df[sample_df["source_name"] == source]["dt"].iloc[0]
-        ax.imshow(target, cmap="viridis")
+                # Crop NaN borders from target based on the coordinates
+                lat, lon = target_ds.lat.values, target_ds.lon.values
+                target, lat, lon = crop_nan_border_numpy(lat, [target, lat, lon])
 
-        displayed_name = " ".join(source.split("_")[3:5])
-        displayed_name += " - " + first_channel
-        title = f"{displayed_name}\n$\delta_t=${strfdelta(dt, '%H:%M:%S')}"
-        ax.set_title(title)
-        set_axis_ticks(ax, lat, lon)
+                dt = sample_df[sample_df["source_name"] == source]["dt"].iloc[0]
 
-    # Add vertical separator line
-    fig.add_subplot(gs[0, num_avail])
-    plt.axvline(x=0, color="black", linestyle="-", linewidth=2)
-    plt.axis("off")
+                ax.imshow(target, cmap="viridis")
+                displayed_name = " ".join(source.split("_")[3:5])
+                title = f"{displayed_name}\n$\delta_t=${strfdelta(dt, '%H:%M:%S')}"
+                ax.set_title(title)
+                set_axis_ticks(ax, lat, lon)
+            else:
+                # Empty subplot if source doesn't have this channel
+                ax = fig.add_subplot(gs[row_idx, col_idx])
+                ax.axis("off")
 
-    # Get target and prediction data for masked source
-    target_ds = targets[masked_pair]
-    first_channel = list(target_ds.data_vars.keys())[0]
-    target = target_ds[first_channel].values
-    pred_ds = preds[masked_pair]
-    pred = pred_ds[first_channel].values
+        # Add vertical separator line
+        ax = fig.add_subplot(gs[row_idx, num_avail_sources])
+        ax.axvline(x=0.5, color="black", linestyle="-", linewidth=2)
+        ax.axis("off")
 
-    # Crop NaN borders from target and prediction based on the coordinates
-    lat, lon = target_ds.lat.values, target_ds.lon.values
-    target, pred, lat, lon = crop_nan_border_numpy(lat, [target, pred, lat, lon])
+        # Get target and prediction for masked source for this channel
+        if channel in masked_target_ds.data_vars:
+            target = masked_target_ds[channel].values
 
-    # Calculate shared min/max values
-    vmin = min(np.nanmin(target), np.nanmin(pred))
-    vmax = max(np.nanmax(target), np.nanmax(pred))
+            # Check if the channel exists in predictions
+            pred_ds = preds[(masked_source, masked_idx)]
+            channel_in_pred = channel in pred_ds.data_vars
 
-    # Plot masked source target
-    ax = fig.add_subplot(gs[0, -2])
-    dt = sample_df[sample_df["source_name"] == masked_source]["dt"].iloc[0]
-    ax.imshow(target, cmap="viridis", vmin=vmin, vmax=vmax)
+            if channel_in_pred:
+                pred = pred_ds[channel].values
+                # Crop NaN borders
+                lat, lon = masked_target_ds.lat.values, masked_target_ds.lon.values
+                target, pred, lat, lon = crop_nan_border_numpy(lat, [target, pred, lat, lon])
 
-    displayed_name = " ".join(masked_source.split("_")[3:5])
-    displayed_name += " - " + first_channel
-    title = f"{displayed_name}\n$\delta_t=${strfdelta(dt, '%H:%M:%S')}\n(MASKED)"
-    ax.set_title(title)
-    # We don't use the original lat/lon for the cropped image
-    set_axis_ticks(ax, lat, lon)
+                # Calculate shared min/max values for this channel
+                vmin = min(np.nanmin(target), np.nanmin(pred))
+                vmax = max(np.nanmax(target), np.nanmax(pred))
+            else:
+                # Only process target if channel not in predictions
+                lat, lon = masked_target_ds.lat.values, target_ds.lon.values
+                target, lat, lon = crop_nan_border_numpy(lat, [target, lat, lon])
 
-    # Plot prediction
-    ax = fig.add_subplot(gs[0, -1])
-    title_suffix = "\nPrediction"
+                # Calculate min/max values for target only
+                vmin = np.nanmin(target)
+                vmax = np.nanmax(target)
 
-    ax.imshow(pred, cmap="viridis", vmin=vmin, vmax=vmax)
-    title = f"{displayed_name}\n$\delta_t=${strfdelta(dt, '%H:%M:%S')}{title_suffix}"
-    ax.set_title(title)
-    # We don't use the original lat/lon for the cropped image
-    set_axis_ticks(ax, lat, lon)
+            # Plot masked source target
+            dt = sample_df[sample_df["source_name"] == masked_source]["dt"].iloc[0]
+            ax = fig.add_subplot(gs[row_idx, num_avail_sources + 1])
+            ax.imshow(target, cmap="viridis", vmin=vmin, vmax=vmax)
+
+            displayed_name = " ".join(masked_source.split("_")[3:5])
+            title = f"{displayed_name}\n$\delta_t=${strfdelta(dt, '%H:%M:%S')}\n(MASKED)"
+            ax.set_title(title)
+            set_axis_ticks(ax, lat, lon)
+
+            # Plot prediction
+            ax = fig.add_subplot(gs[row_idx, num_avail_sources + 2])
+            if channel_in_pred:
+                ax.imshow(pred, cmap="viridis", vmin=vmin, vmax=vmax)
+                title = f"{displayed_name}\n$\delta_t=${strfdelta(dt, '%H:%M:%S')}\nPrediction"
+                ax.set_title(title)
+                set_axis_ticks(ax, lat, lon)
+            else:
+                # Empty subplot with message if channel not in predictions
+                ax.axis("off")
+                ax.set_title(f"{displayed_name}\nPrediction N/A", color="gray")
+        else:
+            # Empty subplot for target and prediction if masked source doesn't have this channel
+            ax = fig.add_subplot(gs[row_idx, num_avail_sources + 1])
+            ax.axis("off")
+            ax = fig.add_subplot(gs[row_idx, num_avail_sources + 2])
+            ax.axis("off")
 
     # Save the figure
-    plt.tight_layout(h_pad=0.2, w_pad=0.4)  # Add specific padding parameters
+    plt.tight_layout(rect=[0.05, 0, 1, 0.98])  # Adjust layout, leaving space for row labels
     fig.savefig(results_dir / f"{batch_idx}_{sample_idx}.png", bbox_inches="tight")
     plt.close(fig)
 
@@ -268,12 +317,12 @@ def process_batch_chunk(
     ):
         # Get the sources included in the batch
         batch_info = chunk_df[chunk_df["batch_idx"] == batch_idx]
-        sources = batch_info["source_name"].unique()
 
         # For each source, load the targets and predictions
         targets, preds = {}, {}
-        for source in sources:
-            targets[source], preds[source] = load_batch_fn(source, batch_idx)
+        for _, row in batch_info.iterrows():
+            src, index = row["source_name"], row["index"]
+            targets[(src, index)], preds[(src, index)] = load_batch_fn(src, index, batch_idx)
 
         # Display the targets and predictions
         display_batch(batch_info, batch_idx, targets, preds, results_dir)
@@ -286,8 +335,8 @@ def set_axis_ticks(ax, lat, lon):
     H, W = lat.shape
     lat_ticks = np.linspace(0, H - 1, num=10).astype(int)
     lon_ticks = np.linspace(0, W - 1, num=10).astype(int)
-    lat_labels = np.nanmean(lat[lat_ticks]).round(2)
-    lon_labels = np.nanmean(lon[lon_ticks]).round(2)
+    lat_labels = np.nanmean(lat[lat_ticks], axis=1).round(2)
+    lon_labels = np.nanmean(lon[:, lon_ticks], axis=0).round(2)
     ax.set_xticks(lon_ticks)
     ax.set_xticklabels(lon_labels)
     ax.set_yticks(lat_ticks)
