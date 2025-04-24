@@ -128,16 +128,18 @@ class AddNoiseToTimeDelta:
         Args:
             data (dict): The data of the source.
         Returns:
-            dict: The data with the modified timedelta, which is also modified
-                in-place.
+            dict: The data with the modified timedelta.
         """
         # Add noise to the time delta
-        dt_noise = torch.normal(
-            mean=0.0, std=self.relative_noise_std, size=data["dt"].shape
-        ).item()
-        data["dt"] += dt_noise
+        dt_noise = torch.normal(mean=0.0, std=self.relative_noise_std, size=data["dt"].shape)
+        # The noise cannot change the sign of the dt, so we need to
+        # make sure that the noise is not larger than the dt.
+        # If it is, we set the noise to the dt.
+        dt_noise = torch.clamp(dt_noise, -data["dt"] + 1e-4, data["dt"] - 1e-4)
 
-        return data
+        out = {k: v for k, v in data.items() if k != "dt"}
+        out["dt"] = data["dt"] + dt_noise
+        return out
 
 
 class RandomDynamicCrop(Transform):
