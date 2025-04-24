@@ -13,7 +13,7 @@ wandb:
 
 dataset:
   train:
-    dt_max: 48
+    dt_max: 24
     min_available_sources: 2
 
 trainer:
