@@ -19,6 +19,9 @@ train:
   # For each source type, max number of observations that can be included for each
   # source of that type.
   source_types_max_avail: {}
+  # Minimum difference in hours between two samples of the same storm.
+  # This can be used to reduce redundancy and limit the number of samples.
+  min_ref_time_delta: 0
   # Number of workers for the data loading
   num_workers: ${dataloader.num_workers}
   # Dict {source_type: proba} to randomly drop sources
@@ -53,6 +56,7 @@ val:
   min_available_sources: ${dataset.train.min_available_sources}
   source_types_min_avail: ${dataset.train.source_types_min_avail}
   source_types_max_avail: ${dataset.train.source_types_max_avail}
+  min_ref_time_delta: ${dataset.train.min_ref_time_delta}
   num_workers: ${dataset.train.num_workers}
   randomly_drop_sources: ${dataset.train.randomly_drop_sources}
   force_drop_sources: ${dataset.train.force_drop_sources}
@@ -74,6 +78,7 @@ test:
   min_available_sources: ${dataset.train.min_available_sources}
   source_types_min_avail: ${dataset.train.source_types_min_avail}
   source_types_max_avail: ${dataset.train.source_types_max_avail}
+  min_ref_time_delta: ${dataset.train.min_ref_time_delta}
   num_workers: ${dataset.train.num_workers}
   randomly_drop_sources: ${dataset.train.randomly_drop_sources}
   force_drop_sources: ${dataset.train.force_drop_sources}
