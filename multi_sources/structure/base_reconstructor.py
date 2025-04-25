@@ -54,6 +54,7 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
         ignore_land_pixels_in_loss=False,
         normalize_coords_across_sources=False,
         mask_only_sources=None,
+        forecasting_mode=False,
         validation_dir=None,
         metrics={},
     ):
@@ -80,6 +81,9 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
                 If False, the coordinates will be normalized as sinusoïds.
             mask_only_sources (str or list of str): List of sources to mask. If None, all sources
                 may be masked.
+            forecasting_mode (bool): If True, will always mask all sources that are forecasted.
+                A source is forecasted if its time delta is negative.
+                Mutually exclusive with mask_only_sources.
             validation_dir (optional, str or Path): Directory where to save the validation plots.
                 If None, no plots will be saved.
             metrics (dict of str: callable): Metrics to compute during training and validation.
@@ -113,9 +117,12 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
 
         self.mask_only_sources = None
         if mask_only_sources is not None:
+            if forecasting_mode:
+                raise ValueError("mask_only_sources and forecasting_mode are mutually exclusive.")
             if isinstance(mask_only_sources, str):
                 mask_only_sources = [mask_only_sources]
             self.mask_only_sources = set(mask_only_sources)
+        self.forecasting_mode = forecasting_mode
 
     def init_embedding_layers(self):
         """Initializes the weights of the embedding layers."""
@@ -237,7 +244,24 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
                     "At least one sample has no sources to mask. "
                     "Please check the mask_only_sources argument."
                 )
-
+        # Case where we mask the sources that are forecasted.
+        elif self.forecasting_mode:
+            # In this case, we mask all sources that are forecasted (i.e. have a negative dt).
+            avail_flags = {}
+            for source_index_pair, data in x.items():
+                source_name = source_index_pair[0]
+                avail_flag = data["avail"].clone()
+                # Mask the sources that are forecasted (i.e. have a negative dt).
+                avail_flag[(avail_flag == 1) & (data["dt"] < 0)] = 0
+                avail_flags[source_index_pair] = avail_flag
+            # We need to check that for each sample, at least one source has been masked.
+            total_avail_flag = sum([flag == 0 for flag in avail_flags.values()])
+            if (total_avail_flag == 0).any():
+                raise ValueError(
+                    "At least one sample has no sources to mask. "
+                    "Please check the forecasting_mode argument."
+                )
+        # Case where we randomly select the sources to mask
         else:
             if masking_seed is not None:
                 self.source_select_gen.manual_seed(int(masking_seed))

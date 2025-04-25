@@ -50,6 +50,7 @@ class MultisourceDeterministicReconstructor(MultisourceAbstractReconstructor):
         ignore_land_pixels_in_loss=False,
         normalize_coords_across_sources=False,
         mask_only_sources=None,
+        forecasting_mode=False,
         perceptual_loss_weight=None,
         validation_dir=None,
         metrics={},
@@ -77,6 +78,9 @@ class MultisourceDeterministicReconstructor(MultisourceAbstractReconstructor):
                 If False, the coordinates will be normalized as sinusoïds.
             mask_only_sources (str or list of str): List of sources to mask. If None, all sources
                 may be masked.
+            forecasting_mode (bool): If True, will always mask all sources that are forecasted.
+                A source is forecasted if its time delta is negative.
+                Mutually exclusive with mask_only_sources.
             perceptual_loss_weight (float): Weight of the perceptual loss in the total loss.
                 If None, no perceptual loss will be computed.
             validation_dir (optional, str or Path): Directory where to save the validation plots.
@@ -100,6 +104,7 @@ class MultisourceDeterministicReconstructor(MultisourceAbstractReconstructor):
             ignore_land_pixels_in_loss=ignore_land_pixels_in_loss,
             normalize_coords_across_sources=normalize_coords_across_sources,
             mask_only_sources=mask_only_sources,
+            forecasting_mode=forecasting_mode,
             validation_dir=validation_dir,
             metrics=metrics,
         )
@@ -253,16 +258,16 @@ class MultisourceDeterministicReconstructor(MultisourceAbstractReconstructor):
             source_index_pair: masked_batch[source_index_pair]["avail"]
             for source_index_pair in masked_batch
         }
-        if self.validation_dir is not None and batch_idx % 15 == 0:
+        if self.validation_dir is not None and batch_idx % 50 == 0:
             # For every 30 batches, make a prediction and display it.
-            if batch_idx % 15 == 0:
+            if batch_idx % 50 == 0:
                 display_realizations(
                     pred,
                     input_batch,
                     avail_flags,
                     self.validation_dir / f"realizations_{batch_idx}",
                     deterministic=True,
-                    display_fraction=0.25,
+                    display_fraction=1.0,
                 )
 
         # Evaluate the metrics
