@@ -32,7 +32,7 @@ class ValuesCoordinatesSelfAttention(nn.Module):
         super().__init__()
         self.values_dim = values_dim
         self.coords_dim = coords_dim
-        self.inner_dim = inner_ratio * values_dim
+        self.inner_dim = int(inner_ratio * values_dim)
         self.head_dim = self.inner_dim // num_heads
         self.num_heads = num_heads
 
