@@ -1,7 +1,20 @@
 # Config for scripts/make_predictions.py
 defaults:
   - paths: jz
+  - inference_cfg: default
   - _self_
+
+run_id: ???
+pred_name: ???
+split: val  # Defaults to the validation set
+
+dataset:
+  train:
+    dataset_dir: ${paths.preprocessed_dataset}
+  val:
+    dataset_dir: ${paths.preprocessed_dataset}
+  test:
+    dataset_dir: ${paths.preprocessed_dataset}
 
 trainer:
   accelerator: gpu
@@ -10,5 +23,3 @@ trainer:
 dataloader:
   num_workers: 9
 
-use_groundtruth_for_unmasked_tokens: True
-run_id: ???

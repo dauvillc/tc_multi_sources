@@ -24,24 +24,14 @@ def main(cfg: DictConfig):
     exp_cfg, checkpoint_path = load_experiment_cfg_from_checkpoint(
         cfg["paths"]["checkpoints"], run_id
     )
-    # For some fields, we'll use the values from the config file instead of the ones from the
-    # experiment
-    exp_cfg["dataloader"].update(cfg["dataloader"])
-    exp_cfg["paths"].update(cfg["paths"])
-    split = "val"
-    if "split" in cfg and cfg["split"] is not None:
-        split = cfg["split"]
-    exp_cfg["dataset"][split]["dataset_dir"] = cfg["paths"]["preprocessed_dataset"]
-
-    # Finally, the user can use the "change" domain in the config to modify the parameters
-    # of the experiment (e.g. +change.dataset.dt_max=xxx)
-    if "change" in cfg:
-        update(exp_cfg, cfg["change"])
+    # Update the experiment configuration with the current config.
+    update(exp_cfg, cfg)
 
     # Seed everything with the seed used in the experiment
     pl.seed_everything(exp_cfg["seed"], workers=True)
 
     # Create the dataset and dataloader
+    split = cfg["split"]
     dataset = hydra.utils.instantiate(
         exp_cfg["dataset"][split],
     )
@@ -50,9 +40,8 @@ def main(cfg: DictConfig):
     )
     print("Dataset size:", len(dataset), f" ({split} split)")
 
-    # The user can specify a name for the predictions (e.g. for a specific setting of a
-    # general model).
-    pred_name = cfg.get("pred_name", "default")
+    # Every set of predictions will be given a name.
+    pred_name = cfg["pred_name"]
     # Create the results directory
     run_results_dir = Path(cfg["paths"]["predictions"]) / run_id / pred_name
     # Remove run_results_dir / info.csv if it exists
