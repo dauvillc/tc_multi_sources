@@ -190,6 +190,8 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                 forecasting_sources = [forecasting_sources]
             # Check that none of the forecast sources are in the randomly dropped sources
             for source in forecasting_sources:
+                if source not in source_names:
+                    raise ValueError(f"Forecasting source {source} is not in the dataset sources.")
                 if source in self.randomly_drop_sources:
                     raise ValueError(
                         f"Cannot randomly drop the forecasting source {source}."
@@ -453,7 +455,6 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                         C = torch.zeros_like(C)
                         LM = torch.zeros_like(LM)
                         D = torch.zeros_like(D)
-                        DT = torch.zeros_like(DT)
 
                     # Characterstic variables
                     if source.n_charac_variables() == 0:
