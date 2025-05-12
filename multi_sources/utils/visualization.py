@@ -179,124 +179,131 @@ def display_realizations(
             the following entries: "values", of shape (B, C, ...).
         avail_flags (dict): Dictionary {(source_name, index): avail_flag_s} where avail_flag_s is a
             tensor of shape (B,) containing 1 if the value is available, 0 if it was
-            available and masked, and -1 if it was not available.
+            masked and -1 if it was not available.
         save_filepath_prefix (str or Path): Prefix of the filepath where the figure will be saved.
             The figure will be saved as save_filepath_prefix + "_{sample_idx}.png".
         deterministic (bool, optional): If True, expects sol to be a tensor of shape (B, C, ...).
         display_fraction (float, optional): Fraction of the samples to display. Defaults to 1.0.
     """
-    save_filepath_prefix = Path(save_filepath_prefix)
-    # Make sure parent directory exists
-    save_filepath_prefix.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        save_filepath_prefix = Path(save_filepath_prefix)
+        # Make sure parent directory exists
+        save_filepath_prefix.parent.mkdir(parents=True, exist_ok=True)
 
-    # Make the deterministic case compatible with the non-deterministic case
-    if deterministic:
-        sol = {source_index_pair: sol_s.unsqueeze(0) for source_index_pair, sol_s in sol.items()}
+        # Make the deterministic case compatible with the non-deterministic case
+        if deterministic:
+            sol = {
+                source_index_pair: sol_s.unsqueeze(0) for source_index_pair, sol_s in sol.items()
+            }
 
-    # Extract batch size and number of realizations
-    any_source_index_pair = next(iter(sol.keys()))
-    n_realizations = sol[any_source_index_pair].shape[0]
-    batch_size = sol[any_source_index_pair].shape[1]
+        # Extract batch size and number of realizations
+        any_source_index_pair = next(iter(sol.keys()))
+        n_realizations = sol[any_source_index_pair].shape[0]
+        batch_size = sol[any_source_index_pair].shape[1]
 
-    # Take a fraction of the samples, evenly spaced
-    samples_to_display = np.linspace(0, batch_size - 1, int(display_fraction * batch_size)).astype(
-        int
-    )
+        # Take a fraction of the samples, evenly spaced
+        samples_to_display = np.linspace(
+            0, batch_size - 1, int(display_fraction * batch_size)
+        ).astype(int)
 
-    # For each sample
-    for sample_idx in samples_to_display:
-        # Get available sources for this sample (either masked or available)
-        source_index_pairs = [
-            source_index_pair
-            for source_index_pair, flags in avail_flags.items()
-            if flags[sample_idx].item() != -1  # Either masked (0) or available (1)
-        ]
+        # For each sample
+        for sample_idx in samples_to_display:
+            # Get available sources for this sample (either masked or available)
+            source_index_pairs = [
+                source_index_pair
+                for source_index_pair, flags in avail_flags.items()
+                if flags[sample_idx].item() != -1  # Either masked (0) or available (1)
+            ]
 
-        if not source_index_pairs:
-            continue  # Skip if no sources are available or masked
+            if not source_index_pairs:
+                continue  # Skip if no sources are available or masked
 
-        # Create a figure with n_realizations + 1 columns (realizations + groundtruth)
-        # and one row per source
-        fig, axs = plt.subplots(
-            nrows=len(source_index_pairs),
-            ncols=n_realizations + 1,
-            figsize=(3 * (n_realizations + 1), 3 * len(source_index_pairs)),
-            squeeze=False,
-        )
+            # Create a figure with n_realizations + 1 columns (realizations + groundtruth)
+            # and one row per source
+            fig, axs = plt.subplots(
+                nrows=len(source_index_pairs),
+                ncols=n_realizations + 1,
+                figsize=(3 * (n_realizations + 1), 3 * len(source_index_pairs)),
+                squeeze=False,
+            )
 
-        # For each source-index pair
-        for src_idx, source_index_pair in enumerate(source_index_pairs):
-            source_name, index = source_index_pair
-            is_masked = avail_flags[source_index_pair][sample_idx].item() == 0
+            # For each source-index pair
+            for src_idx, source_index_pair in enumerate(source_index_pairs):
+                source_name, index = source_index_pair
+                is_masked = avail_flags[source_index_pair][sample_idx].item() == 0
 
-            # For each realization
-            for r_idx in range(n_realizations):
-                ax = axs[src_idx, r_idx]
-                # Get original coordinates
-                coords = batch[source_index_pair]["coords"][sample_idx]  # (2, H, W), lat/lon
+                # For each realization
+                for r_idx in range(n_realizations):
+                    ax = axs[src_idx, r_idx]
+                    # Get original coordinates
+                    coords = batch[source_index_pair]["coords"][sample_idx]  # (2, H, W), lat/lon
 
-                # Only show prediction if the source was masked
-                if is_masked:
-                    # Get prediction data
-                    pred = sol[source_index_pair][r_idx, sample_idx, 0]
+                    # Only show prediction if the source was masked
+                    if is_masked:
+                        # Get prediction data
+                        pred = sol[source_index_pair][r_idx, sample_idx, 0]
 
-                    # Display data based on dimensionality
-                    if len(pred.shape) == 2:
-                        # The images' borders may be NaN due to the batching system.
-                        # Crop the NaN borders to display the images correctly.
-                        pred = crop_nan_border(coords, [pred.unsqueeze(0)])[0].squeeze(0)
-                        pred = pred.detach().cpu().numpy()
-                        ax.imshow(pred, cmap="viridis")
-                        # Add coords as axis labels
-                        h, w = pred.shape
-                        x_vals = np.nanmean(coords[1, :, :w].detach().cpu().numpy(), axis=0)
-                        y_vals = np.nanmean(coords[0, :h, :].detach().cpu().numpy(), axis=1)
-                        step_x = max(1, w // 5)
-                        step_y = max(1, h // 5)
-                        ax.set_xticks(range(0, w, step_x))
-                        ax.set_yticks(range(0, h, step_y))
-                        ax.set_xticklabels(
-                            [f"{val:.2f}" for val in x_vals[0::step_x]], rotation=45
-                        )
-                        ax.set_yticklabels([f"{val:.2f}" for val in y_vals[0::step_y]])
-                    else:  # For 0D or 1D data
-                        if len(pred.shape) == 1:
-                            pred = pred[0]
-                        pred = pred.item()
-                        ax.bar([0], [pred], color="orange")
+                        # Display data based on dimensionality
+                        if len(pred.shape) == 2:
+                            # The images' borders may be NaN due to the batching system.
+                            # Crop the NaN borders to display the images correctly.
+                            pred = crop_nan_border(coords, [pred.unsqueeze(0)])[0].squeeze(0)
+                            pred = pred.detach().cpu().numpy()
+                            ax.imshow(pred, cmap="viridis")
+                            # Add coords as axis labels
+                            h, w = pred.shape
+                            x_vals = np.nanmean(coords[1, :, :w].detach().cpu().numpy(), axis=0)
+                            y_vals = np.nanmean(coords[0, :h, :].detach().cpu().numpy(), axis=1)
+                            step_x = max(1, w // 5)
+                            step_y = max(1, h // 5)
+                            ax.set_xticks(range(0, w, step_x))
+                            ax.set_yticks(range(0, h, step_y))
+                            ax.set_xticklabels(
+                                [f"{val:.2f}" for val in x_vals[0::step_x]], rotation=45
+                            )
+                            ax.set_yticklabels([f"{val:.2f}" for val in y_vals[0::step_y]])
+                        else:  # For 0D or 1D data
+                            if len(pred.shape) == 1:
+                                pred = pred[0]
+                            pred = pred.item()
+                            ax.bar([0], [pred], color="orange")
 
-                    ax.set_title(f"{source_name} Pred {r_idx+1}")
+                        ax.set_title(f"{source_name} Pred {r_idx+1}")
+                    else:
+                        ax.set_title(f"{source_name}")
+                        ax.axis("off")
+
+                # Display groundtruth in the last column
+                ax = axs[src_idx, -1]
+                # Get groundtruth
+                true = batch[source_index_pair]["values"][sample_idx, 0]
+
+                if len(true.shape) == 2:
+                    true = crop_nan_border(coords, [true.unsqueeze(0)])[0].squeeze(0)
+                    true = true.detach().cpu().numpy()
+                    ax.imshow(true, cmap="viridis")
+                    h, w = true.shape
+                    x_vals = np.nanmean(coords[1, :, :w].detach().cpu().numpy(), axis=0)
+                    y_vals = np.nanmean(coords[0, :h, :].detach().cpu().numpy(), axis=1)
+                    step_x = max(1, w // 5)
+                    step_y = max(1, h // 5)
+                    ax.set_xticks(range(0, w, step_x))
+                    ax.set_yticks(range(0, h, step_y))
+                    ax.set_xticklabels([f"{val:.2f}" for val in x_vals[0::step_x]], rotation=45)
+                    ax.set_yticklabels([f"{val:.2f}" for val in y_vals[0::step_y]])
                 else:
-                    ax.set_title(f"{source_name}")
-                    ax.axis("off")
+                    if len(true.shape) == 1:
+                        true = true[0]
+                    true = true.item()
+                    ax.bar([0], [true], color="orange")
 
-            # Display groundtruth in the last column
-            ax = axs[src_idx, -1]
-            true = batch[source_index_pair]["values"][sample_idx, 0]
+                ax.set_title(f"{source_name} Ground Truth")
 
-            if len(true.shape) == 2:
-                true = crop_nan_border(coords, [true.unsqueeze(0)])[0].squeeze(0)
-                true = true.detach().cpu().numpy()
-                ax.imshow(true, cmap="viridis")
-                h, w = true.shape
-                x_vals = np.nanmean(coords[1, :, :w].detach().cpu().numpy(), axis=0)
-                y_vals = np.nanmean(coords[0, :h, :].detach().cpu().numpy(), axis=1)
-                step_x = max(1, w // 5)
-                step_y = max(1, h // 5)
-                ax.set_xticks(range(0, w, step_x))
-                ax.set_yticks(range(0, h, step_y))
-                ax.set_xticklabels([f"{val:.2f}" for val in x_vals[0::step_x]], rotation=45)
-                ax.set_yticklabels([f"{val:.2f}" for val in y_vals[0::step_y]])
-            else:
-                if len(true.shape) == 1:
-                    true = true[0]
-                true = true.item()
-                ax.bar([0], [true], color="orange")
-
-            ax.set_title(f"{source_name} Ground Truth")
-
-        plt.tight_layout()
-        # Save figure
-        save_path = f"{save_filepath_prefix}_{sample_idx}.png"
-        plt.savefig(save_path)
-        plt.close()
+            plt.tight_layout()
+            # Save figure
+            save_path = f"{save_filepath_prefix}_{sample_idx}.png"
+            plt.savefig(save_path)
+            plt.close(fig)
+    finally:
+        # Ensure all figures are closed even if an exception occurs
+        plt.close("all")

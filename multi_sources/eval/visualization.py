@@ -42,77 +42,104 @@ class VisualEvaluation(AbstractMultisourceEvaluationMetric):
     - Saves the figure to the results directory.
     """
 
-    def __init__(self, predictions_dir, results_dir, eval_fraction=1.0):
+    def __init__(self, model_data, parent_results_dir, eval_fraction=1.0):
         """
         Args:
-            predictions_dir (Path): Directory with the predictions.
-            results_dir (Path): Directory where the results will be saved.
+            model_data (dict): Dictionary mapping model_ids to dictionaries containing:
+                - info_df: DataFrame with metadata
+                - root_dir: Path to predictions directory
+                - results_dir: Path to results directory
+                - run_id: Run ID
+                - pred_name: Prediction name
+            parent_results_dir (Path): Parent directory for all results
             eval_fraction (float): Fraction of the dataset to evaluate. If less than
-                1.0, a random portion of the dataset will be displayed.
+                1.0, a random subset of the dataset will be displayed.
         """
         super().__init__(
-            "visual_eval", "Visualization of predictions", predictions_dir, results_dir
+            "visual_eval", "Visualization of predictions", model_data, parent_results_dir
         )
         self.eval_fraction = eval_fraction
 
-    def evaluate_sources(self, info_df, verbose=True, num_workers=0):
+    def evaluate_sources(self, verbose=True, num_workers=0):
         """
         Args:
-            info_df (pd.DataFrame): DataFrame with at least the following columns:
-                source_name, avail, batch_idx, index_in_batch, dt.
-            **kwargs: Additional keyword arguments.
+            verbose (bool): Whether to show progress bars.
+            num_workers (int): Number of workers for parallel processing.
         """
         sns.set_context("paper")
-        # Browse the batch indices in the DataFrame
-        unique_batch_indices = info_df["batch_idx"].unique()
-        # If eval_fraction < 1.0, select a random subset of the batch indices
-        if self.eval_fraction < 1.0:
-            num_batches = len(unique_batch_indices)
-            num_eval_batches = np.ceil(self.eval_fraction * num_batches).astype(int)
-            unique_batch_indices = np.random.choice(
-                unique_batch_indices, num_eval_batches, replace=False
-            )
-        if num_workers < 2:
-            for batch_idx in tqdm(unique_batch_indices, desc="Batches", disable=not verbose):
-                # Get the sources included in the batch
-                batch_info = info_df[info_df["batch_idx"] == batch_idx]
-                # For each source, load the targets and predictions
-                targets, preds = {}, {}
-                for _, row in batch_info.iterrows():
-                    src, index = row["source_name"], row["index"]
-                    targets[(src, index)], preds[(src, index)] = self.load_batch(
-                        src, index, batch_idx
-                    )
-                # Display the targets and predictions
-                display_batch(batch_info, batch_idx, targets, preds, self.results_dir)
-        else:
-            # Split batches into chunks for parallel processing
-            batch_chunks = np.array_split(unique_batch_indices, num_workers)
-            print(f"Dividing {len(unique_batch_indices)} batches into {len(batch_chunks)} chunks")
-            futures = []
 
-            with ProcessPoolExecutor(max_workers=num_workers) as executor:
-                for i, chunk in enumerate(batch_chunks):
-                    # Create chunks of batch indices
-                    chunk_df = info_df[info_df["batch_idx"].isin(chunk)]
-                    if not chunk_df.empty:
-                        futures.append(
-                            executor.submit(
-                                process_batch_chunk,
-                                chunk_df,
-                                chunk,
-                                self.load_batch,
-                                self.results_dir,
-                                verbose,
-                                i,  # Pass the process ID (chunk index)
-                            )
+        # Process each model separately
+        for model_id, data in self.model_data.items():
+            run_id = data["run_id"]
+            pred_name = data["pred_name"]
+            info_df = data["info_df"]
+
+            print(
+                f"\nCreating visualizations for model: {model_id} (run_id: {run_id}, prediction: {pred_name})"
+            )
+
+            # Get the results directory for this model
+            model_results_dir = self.model_dirs[model_id]["results_dir"]
+
+            # Browse the batch indices in the DataFrame
+            unique_batch_indices = info_df["batch_idx"].unique()
+
+            # If eval_fraction < 1.0, select a random subset of the batch indices
+            if self.eval_fraction < 1.0:
+                num_batches = len(unique_batch_indices)
+                num_eval_batches = np.ceil(self.eval_fraction * num_batches).astype(int)
+                unique_batch_indices = np.random.choice(
+                    unique_batch_indices, num_eval_batches, replace=False
+                )
+
+            if num_workers < 2:
+                for batch_idx in tqdm(unique_batch_indices, desc="Batches", disable=not verbose):
+                    # Get the sources included in the batch
+                    batch_info = info_df[info_df["batch_idx"] == batch_idx]
+
+                    # For each source, load the targets and predictions
+                    targets, preds = {}, {}
+                    for _, row in batch_info.iterrows():
+                        src, index = row["source_name"], row["index"]
+                        targets[(src, index)], preds[(src, index)] = self.load_batch(
+                            src, index, batch_idx, model_id
                         )
 
-                for future in tqdm(futures, desc="Processing chunks", disable=not verbose):
-                    future.result()
+                    # Display the targets and predictions
+                    display_batch(
+                        batch_info, batch_idx, targets, preds, model_results_dir, model_id
+                    )
+            else:
+                # Split batches into chunks for parallel processing
+                batch_chunks = np.array_split(unique_batch_indices, num_workers)
+                print(
+                    f"Dividing {len(unique_batch_indices)} batches into {len(batch_chunks)} chunks"
+                )
+                futures = []
+
+                with ProcessPoolExecutor(max_workers=num_workers) as executor:
+                    for i, chunk in enumerate(batch_chunks):
+                        # Create chunks of batch indices
+                        chunk_df = info_df[info_df["batch_idx"].isin(chunk)]
+                        if not chunk_df.empty:
+                            futures.append(
+                                executor.submit(
+                                    process_batch_chunk,
+                                    chunk_df,
+                                    chunk,
+                                    self.load_batch,
+                                    model_results_dir,
+                                    verbose,
+                                    i,  # Pass the process ID (chunk index)
+                                    model_id,  # Pass the model ID
+                                )
+                            )
+
+                    for future in tqdm(futures, desc="Processing chunks", disable=not verbose):
+                        future.result()
 
 
-def display_batch(batch_info, batch_idx, targets, preds, results_dir):
+def display_batch(batch_info, batch_idx, targets, preds, results_dir, model_id):
     """Displays the targets and predictions for a given batch index. Auxiliary function
     for parallel execution in the VisualEvaluation class.
     Args:
@@ -121,28 +148,78 @@ def display_batch(batch_info, batch_idx, targets, preds, results_dir):
         targets (dict): Dictionary with the targets for each source/index pair.
         preds (dict): Dictionary with the predictions for each source/index pair.
         results_dir (Path): Directory where the results will be saved.
+        model_id (str): ID of the model
     """
     # For each sample, create a figure with the targets and predictions
     batch_indices = batch_info["index_in_batch"].unique()
-    for idx in batch_indices:
-        sample_df = batch_info[batch_info["index_in_batch"] == idx]
-        # For each source, select only the targets and predictions for the sample
-        sample_targets, sample_preds = {}, {}
-        for _, row in sample_df.iterrows():
-            src, index = row["source_name"], row["index"]
-            sample_targets[(src, index)] = targets[(src, index)].isel(samples=idx)
-            sample_preds[(src, index)] = preds[(src, index)].isel(samples=idx)
-        plot_sample(sample_df, sample_targets, sample_preds, results_dir, batch_idx, idx)
+    try:
+        for idx in batch_indices:
+            sample_df = batch_info[batch_info["index_in_batch"] == idx]
+            # For each source, select only the targets and predictions for the sample
+            sample_targets, sample_preds = {}, {}
+            for _, row in sample_df.iterrows():
+                src, index = row["source_name"], row["index"]
+                source_pair = (src, index)
+                if source_pair in targets and source_pair in preds:
+                    if targets[source_pair] is not None:
+                        sample_targets[source_pair] = targets[source_pair].isel(samples=idx)
+                    if preds[source_pair] is not None:
+                        sample_preds[source_pair] = preds[source_pair].isel(samples=idx)
+
+            plot_sample(
+                sample_df, sample_targets, sample_preds, results_dir, batch_idx, idx, model_id
+            )
+    finally:
+        # Make sure to close all figures even if an error occurs
+        plt.close("all")
 
 
-def plot_sample(sample_df, targets, preds, results_dir, batch_idx, sample_idx):
+def plot_sample(sample_df, targets, preds, results_dir, batch_idx, sample_idx, model_id):
     """Displays in a figure with multiple rows - one row per channel. From left to right:
-    available sources, masked source target, and prediction."""
+    available sources, masked source target, and prediction.
+
+    Args:
+        sample_df (pd.DataFrame): DataFrame with information about the sample.
+        targets (dict): Dictionary with targets for each source/index pair.
+        preds (dict): Dictionary with predictions for each source/index pair.
+        results_dir (Path): Directory where results will be saved.
+        batch_idx (int): Batch index.
+        sample_idx (int): Sample index within the batch.
+        model_id (str): ID of the model
+    """
     # Retrieve the list of all sources/index pairs that are available and not masked
     avail_pairs = sample_df[sample_df["avail"] == 1]
+
     # Retrieve the source that is masked
-    masked_pair = sample_df[sample_df["avail"] == 0].iloc[0]
+    masked_pairs = sample_df[sample_df["avail"] == 0]
+    if len(masked_pairs) == 0:
+        return  # Skip if no masked source is found
+
+    masked_pair = masked_pairs.iloc[0]
     masked_source, masked_idx = masked_pair["source_name"], masked_pair["index"]
+
+    # Process all sources (both available and masked)
+    for _, row in sample_df.iterrows():
+        source, idx = row["source_name"], row["index"]
+        source_pair = (source, idx)
+
+        # Apply post-processing to all sources based on their type
+        if source_pair in targets and targets[source_pair] is not None:
+            if "pmw" in source:
+                # Process PMW sources
+                targets[source_pair], _ = process_pmw(targets[source_pair], None)
+            elif source == "tc_primed_era5":
+                # Process ERA5 sources
+                targets[source_pair], _ = process_era5(targets[source_pair], None)
+
+        # Also process the predictions (only for masked source)
+        if source_pair in preds and preds[source_pair] is not None and source == masked_source:
+            if "pmw" in source:
+                # Process PMW predictions
+                _, preds[source_pair] = process_pmw(None, preds[source_pair])
+            elif source == "tc_primed_era5":
+                # Process ERA5 predictions
+                _, preds[source_pair] = process_era5(None, preds[source_pair])
 
     # Sort pairs by decreasing dt
     avail_pairs.sort_values(by="dt", ascending=False, inplace=True)
@@ -151,12 +228,16 @@ def plot_sample(sample_df, targets, preds, results_dir, batch_idx, sample_idx):
     all_channels = set()
     for _, row in avail_pairs.iterrows():
         source = row["source_name"]
-        target_ds = targets[(source, row["index"])]
-        all_channels.update(target_ds.data_vars)
+        source_pair = (source, row["index"])
+        if source_pair in targets and targets[source_pair] is not None:
+            target_ds = targets[source_pair]
+            all_channels.update(target_ds.data_vars)
 
     # Add channels from masked source
-    masked_target_ds = targets[(masked_source, masked_idx)]
-    all_channels.update(masked_target_ds.data_vars)
+    masked_pair_key = (masked_source, masked_idx)
+    if masked_pair_key in targets and targets[masked_pair_key] is not None:
+        masked_target_ds = targets[masked_pair_key]
+        all_channels.update(masked_target_ds.data_vars)
     all_channels = sorted(list(all_channels))  # Sort for consistent ordering
 
     # Calculate number of rows (one per channel) and columns
@@ -167,7 +248,7 @@ def plot_sample(sample_df, targets, preds, results_dir, batch_idx, sample_idx):
 
     # Create figure with custom gridspec
     fig = plt.figure(figsize=(3 * num_cols, 2.5 * num_rows))
-    gs = gridspec.GridSpec(num_rows, num_cols, wspace=0.4, hspace=0.3)
+    gs = gridspec.GridSpec(num_rows, num_cols, wspace=0.01, hspace=0.15)
 
     # Add channel labels on the left side
     for i, channel in enumerate(all_channels):
@@ -182,47 +263,33 @@ def plot_sample(sample_df, targets, preds, results_dir, batch_idx, sample_idx):
             bbox=dict(facecolor="white", alpha=0.8, edgecolor="lightgray", pad=3),
         )
 
-    # Add section labels at the top
-    fig.text(
-        (num_avail_sources / 2) / num_cols,
-        0.98,
-        "Available sources",
-        fontsize=14,
-        weight="bold",
-        ha="center",
-    )
-    fig.text(
-        (num_avail_sources + 1 + 1) / num_cols,
-        0.98,
-        "Target / Prediction",
-        fontsize=14,
-        weight="bold",
-        ha="center",
-    )
-
     # For each channel, plot available sources on the corresponding row
     for row_idx, channel in enumerate(all_channels):
         # Plot each available source on this row if it has this channel
         for col_idx, (_, row) in enumerate(avail_pairs.iterrows()):
             source, idx = row["source_name"], row["index"]
-            target_ds = targets[(source, idx)]
+            source_pair = (source, idx)
 
-            # Check if this source has this channel
-            if channel in target_ds.data_vars:
-                ax = fig.add_subplot(gs[row_idx, col_idx])
-                target = target_ds[channel].values
+            if source_pair in targets and targets[source_pair] is not None:
+                target_ds = targets[source_pair]
 
-                # Crop NaN borders from target based on the coordinates
-                lat, lon = target_ds.lat.values, target_ds.lon.values
-                target, lat, lon = crop_nan_border_numpy(lat, [target, lat, lon])
+                # Check if this source has this channel
+                if channel in target_ds.data_vars:
+                    ax = fig.add_subplot(gs[row_idx, col_idx])
+                    target = target_ds[channel].values
+                    target = crop_nan_border_numpy(target, [target])[0]
 
-                dt = sample_df[sample_df["source_name"] == source]["dt"].iloc[0]
-
-                ax.imshow(target, cmap="viridis")
-                displayed_name = " ".join(source.split("_")[3:5])
-                title = f"{displayed_name}\n$\delta_t=${strfdelta(dt, '%H:%M:%S')}"
-                ax.set_title(title)
-                set_axis_ticks(ax, lat, lon)
+                    ax.imshow(target, cmap="viridis")
+                    # Make title more compact
+                    displayed_name = " ".join(source.split("_")[3:5])
+                    dt_str = strfdelta(row["dt"], "%D d%H:%M")
+                    title = f"{displayed_name}\n$\delta_t$={dt_str}"
+                    ax.set_title(title, fontsize=8)
+                    ax.axis("off")
+                else:
+                    # Empty subplot if source doesn't have this channel
+                    ax = fig.add_subplot(gs[row_idx, col_idx])
+                    ax.axis("off")
             else:
                 # Empty subplot if source doesn't have this channel
                 ax = fig.add_subplot(gs[row_idx, col_idx])
@@ -234,52 +301,56 @@ def plot_sample(sample_df, targets, preds, results_dir, batch_idx, sample_idx):
         ax.axis("off")
 
         # Get target and prediction for masked source for this channel
-        if channel in masked_target_ds.data_vars:
-            target = masked_target_ds[channel].values
+        masked_pair_key = (masked_source, masked_idx)
 
-            # Check if the channel exists in predictions
-            pred_ds = preds[(masked_source, masked_idx)]
-            channel_in_pred = channel in pred_ds.data_vars
+        if masked_pair_key in targets and targets[masked_pair_key] is not None:
+            masked_target_ds = targets[masked_pair_key]
 
-            if channel_in_pred:
-                pred = pred_ds[channel].values
-                # Crop NaN borders
-                lat, lon = masked_target_ds.lat.values, masked_target_ds.lon.values
-                target, pred, lat, lon = crop_nan_border_numpy(lat, [target, pred, lat, lon])
+            if channel in masked_target_ds.data_vars:
+                # Check if the channel exists in predictions
+                pred_ds = preds.get(masked_pair_key)
+                channel_in_pred = pred_ds is not None and channel in pred_ds.data_vars
 
-                # Calculate shared min/max values for this channel
-                vmin = min(np.nanmin(target), np.nanmin(pred))
-                vmax = max(np.nanmax(target), np.nanmax(pred))
+                if channel_in_pred:
+                    target = masked_target_ds[channel].values
+                    pred = pred_ds[channel].values
+                    # Crop NaN borders using only the target values
+                    target, pred = crop_nan_border_numpy(target, [target, pred])
+
+                    # Calculate shared min/max values for this channel
+                    vmin = min(np.nanmin(target), np.nanmin(pred))
+                    vmax = max(np.nanmax(target), np.nanmax(pred))
+
+                    # Plot masked source target
+                    dt = sample_df[sample_df["source_name"] == masked_source]["dt"].iloc[0]
+                    ax = fig.add_subplot(gs[row_idx, num_avail_sources + 1])
+                    ax.imshow(target, cmap="viridis", vmin=vmin, vmax=vmax)
+
+                    displayed_name = " ".join(masked_source.split("_")[3:5])
+                    dt_str = strfdelta(dt, "%D d%H:%M")
+                    title = f"{displayed_name}\n$\delta_t$={dt_str}"
+                    ax.set_title(title, fontsize=8)
+                    ax.axis("off")
+
+                    # Plot prediction
+                    ax = fig.add_subplot(gs[row_idx, num_avail_sources + 2])
+                    ax.imshow(pred, cmap="viridis", vmin=vmin, vmax=vmax)
+                    title = f"{displayed_name}\n$\delta_t$={dt_str}"
+                    ax.set_title(title, fontsize=8)
+                    ax.axis("off")
+                else:
+                    # Empty subplot with message if channel not in predictions
+                    ax = fig.add_subplot(gs[row_idx, num_avail_sources + 1])
+                    ax.axis("off")
+                    ax = fig.add_subplot(gs[row_idx, num_avail_sources + 2])
+                    ax.axis("off")
+                    ax.set_title(f"{displayed_name}\nPrediction N/A", color="gray")
             else:
-                # Only process target if channel not in predictions
-                lat, lon = masked_target_ds.lat.values, target_ds.lon.values
-                target, lat, lon = crop_nan_border_numpy(lat, [target, lat, lon])
-
-                # Calculate min/max values for target only
-                vmin = np.nanmin(target)
-                vmax = np.nanmax(target)
-
-            # Plot masked source target
-            dt = sample_df[sample_df["source_name"] == masked_source]["dt"].iloc[0]
-            ax = fig.add_subplot(gs[row_idx, num_avail_sources + 1])
-            ax.imshow(target, cmap="viridis", vmin=vmin, vmax=vmax)
-
-            displayed_name = " ".join(masked_source.split("_")[3:5])
-            title = f"{displayed_name}\n$\delta_t=${strfdelta(dt, '%H:%M:%S')}\n(MASKED)"
-            ax.set_title(title)
-            set_axis_ticks(ax, lat, lon)
-
-            # Plot prediction
-            ax = fig.add_subplot(gs[row_idx, num_avail_sources + 2])
-            if channel_in_pred:
-                ax.imshow(pred, cmap="viridis", vmin=vmin, vmax=vmax)
-                title = f"{displayed_name}\n$\delta_t=${strfdelta(dt, '%H:%M:%S')}\nPrediction"
-                ax.set_title(title)
-                set_axis_ticks(ax, lat, lon)
-            else:
-                # Empty subplot with message if channel not in predictions
+                # Empty subplot for target and prediction if masked source doesn't have this channel
+                ax = fig.add_subplot(gs[row_idx, num_avail_sources + 1])
                 ax.axis("off")
-                ax.set_title(f"{displayed_name}\nPrediction N/A", color="gray")
+                ax = fig.add_subplot(gs[row_idx, num_avail_sources + 2])
+                ax.axis("off")
         else:
             # Empty subplot for target and prediction if masked source doesn't have this channel
             ax = fig.add_subplot(gs[row_idx, num_avail_sources + 1])
@@ -287,24 +358,35 @@ def plot_sample(sample_df, targets, preds, results_dir, batch_idx, sample_idx):
             ax = fig.add_subplot(gs[row_idx, num_avail_sources + 2])
             ax.axis("off")
 
-    # Save the figure
-    plt.tight_layout(rect=[0.05, 0, 1, 0.98])  # Adjust layout, leaving space for row labels
-    fig.savefig(results_dir / f"{batch_idx}_{sample_idx}.png", bbox_inches="tight")
+    # Save the figure with tight layout and minimal padding
+    plt.tight_layout(
+        rect=[0.05, 0, 1, 0.95]
+    )  # Adjust layout, leaving minimal space for row labels
+    fig.savefig(
+        results_dir / f"{batch_idx}_{sample_idx}.png", bbox_inches="tight", pad_inches=0.1, dpi=150
+    )
     plt.close(fig)
 
 
 def process_batch_chunk(
-    chunk_df, batch_indices, load_batch_fn, results_dir, verbose=True, process_id=None
+    chunk_df,
+    batch_indices,
+    load_batch_fn,
+    results_dir,
+    verbose=True,
+    process_id=None,
+    model_id=None,
 ):
     """Process a chunk of batches in a single worker process.
 
     Args:
         chunk_df (pd.DataFrame): DataFrame containing information for a chunk of batches
-        batch_indices (np.array): Array of batch indices to process
+        batch_indices (np.array): Array
         load_batch_fn (callable): Function to load batch data (from VisualEvaluation.load_batch)
         results_dir (Path): Directory where results will be saved
         verbose (bool): Whether to display progress information
         process_id (int, optional): ID of the process. If provided, only process 0 will display progress.
+        model_id (str, optional): ID of the model
     """
     # Only show progress for process_id=0 or if process_id is None
     show_progress = verbose and (process_id is None or process_id == 0)
@@ -322,23 +404,68 @@ def process_batch_chunk(
         targets, preds = {}, {}
         for _, row in batch_info.iterrows():
             src, index = row["source_name"], row["index"]
-            targets[(src, index)], preds[(src, index)] = load_batch_fn(src, index, batch_idx)
+            targets[(src, index)], preds[(src, index)] = load_batch_fn(
+                src, index, batch_idx, model_id
+            )
 
         # Display the targets and predictions
-        display_batch(batch_info, batch_idx, targets, preds, results_dir)
+        display_batch(batch_info, batch_idx, targets, preds, results_dir, model_id)
+
+    # Make sure to close all figures to avoid memory leaks
+    plt.close("all")
 
     return True  # Return value to indicate completion
 
 
-def set_axis_ticks(ax, lat, lon):
-    """Helper function to set axis ticks and labels."""
-    H, W = lat.shape
-    lat_ticks = np.linspace(0, H - 1, num=10).astype(int)
-    lon_ticks = np.linspace(0, W - 1, num=10).astype(int)
-    lat_labels = np.nanmean(lat[lat_ticks], axis=1).round(2)
-    lon_labels = np.nanmean(lon[:, lon_ticks], axis=0).round(2)
-    ax.set_xticks(lon_ticks)
-    ax.set_xticklabels(lon_labels)
-    ax.set_yticks(lat_ticks)
-    ax.set_yticklabels(lat_labels)
-    ax.tick_params(axis="x", rotation=45)
+def apply_post_processing(targets, preds, source_name):
+    """Apply post-processing to targets and predictions based on source type.
+
+    Args:
+        targets (xarray.Dataset): Target dataset
+        preds (xarray.Dataset): Predictions dataset
+        source_name (str): Name of the source
+
+    Returns:
+        tuple: Processed (targets, preds)
+    """
+    if source_name == "tc_primed_era5":
+        return process_era5(targets, preds)
+    elif "pmw" in source_name:
+        return process_pmw(targets, preds)
+    else:
+        # For other sources, return the datasets unchanged
+        return targets, preds
+
+
+def process_era5(targets, preds, radius_around_center_km=1000):
+    """Post-process ERA5 data. Keep the u and v wind components."""
+    # Return the datasets unchanged, preserving u_wind_10m and v_wind_10m
+    return targets, preds
+
+
+def process_pmw(targets, preds, radius_around_center_km=1000):
+    """Post-process PMW data by renaming the variable whose name contains "TB" to "Brightness Temperature".
+
+    Args:
+        targets (xarray.Dataset): Target dataset
+        preds (xarray.Dataset): Predictions dataset
+        radius_around_center_km (int): Radius around center in km for masking (not used in visualization)
+
+    Returns:
+        tuple: Processed (targets, preds)
+    """
+    # Rename the variable whose name contains "TB" to "Brightness Temperature"
+    target_result = targets
+    pred_result = preds
+
+    if targets is not None:
+        tb_var = [var for var in targets.data_vars if "TB" in var]
+        if len(tb_var) == 1:
+            target_result = targets.rename({tb_var[0]: "Brightness Temperature"})
+
+    if preds is not None:
+        tb_var = [var for var in preds.data_vars if "TB" in var]
+        if len(tb_var) == 1:
+            pred_result = preds.rename({tb_var[0]: "Brightness Temperature"})
+
+    return target_result, pred_result
