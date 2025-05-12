@@ -111,6 +111,7 @@ def main(cfg: DictConfig):
     )
 
     # Model checkpoint after every epoch
+    print("Saving checkpoints to:", cfg["paths"]["checkpoints"])
     epoch_checkpoint_callback = ModelCheckpoint(
         dirpath=Path(cfg["paths"]["checkpoints"]) / run_id,
         filename=f"{run_id}-" + "{epoch}-best",

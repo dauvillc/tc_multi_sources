@@ -1,0 +1,43 @@
+# @package _global_
+defaults:
+  - override /paths: jz
+  - override /dataloader: jz
+  - override /sources: pmw_era5
+  - override /lightning_module: deterministic
+  - override /lr_scheduler: cosine_warmup_100epochs
+  - override /metrics: default_fm
+  - override /data_augmentation: random_cropping
+  - override /model: msvit_8b_d256
+  - override /lr_scheduler: finetune
+
+resume_run_id: ???
+resume_mode: fine_tune
+
+wandb:
+  name: pmw_era5_forecast_era5
+  group: pmw_era5_forecast_era5
+
+dataset:
+  train:
+    dt_max: 24
+    min_ref_time_delta: 24
+    min_available_sources: 2
+    forecasting_sources: tc_primed_era5
+    forecasting_lead_time: 24
+    source_types_min_avail:
+      pmw: 2
+      era5: 1
+    source_types_max_avail:
+      era5: 2
+      pmw: 1
+    select_most_recent: true
+  val:
+    select_most_recent: true
+  test:
+    select_most_recent: true
+
+lightning_module:
+  forecasting_mode: true
+
+trainer:
+  strategy: ddp_find_unused_parameters_true

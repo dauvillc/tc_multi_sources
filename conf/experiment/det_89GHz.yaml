@@ -1,0 +1,17 @@
+# @package _global_
+defaults:
+  - override /paths: jz
+  - override /dataloader: jz
+  - override /sources: sat_interp_89GHz
+  - override /lightning_module: deterministic
+  - override /lr_scheduler: cosine_warmup_100epochs
+  - override /metrics: default_fm
+
+wandb:
+  name: det_89GHz
+  group: det_89GHz
+
+dataset:
+  train:
+    dt_max: 6
+    min_available_sources: 2

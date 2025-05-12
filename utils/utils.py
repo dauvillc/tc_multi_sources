@@ -6,7 +6,10 @@ import string
 def update(d, u):
     for k, v in u.items():
         if isinstance(v, collections.abc.Mapping):
-            d[k] = update(d.get(k, {}), v)
+            if k in d and d[k] is None:
+                d[k] = v
+            else:
+                d[k] = update(d.get(k, {}), v)
         else:
             d[k] = v
     return d

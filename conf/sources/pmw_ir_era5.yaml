@@ -1,0 +1,54 @@
+tc_primed:
+  pmw:
+    AMSR2_GCOMW1:
+      S4:
+        variables: ['TB_36.5H', 'dist_to_center']
+        output_only: ['dist_to_center']
+    GMI_GPM:
+      S1:
+        variables: ['TB_36.64H', 'dist_to_center']
+        output_only: ['dist_to_center']
+    TMI_TRMM:
+      S2:
+        variables: ['TB_37.0H', 'dist_to_center']
+        output_only: ['dist_to_center']
+    SSMI_F11:
+      S1:
+        variables: ['TB_37.0H', 'dist_to_center']
+        output_only: ['dist_to_center']
+    SSMI_F13:
+      S1:
+        variables: ['TB_37.0H', 'dist_to_center']
+        output_only: ['dist_to_center']
+    SSMI_F14:
+      S1:
+        variables: ['TB_37.0H', 'dist_to_center']
+        output_only: ['dist_to_center']
+    SSMI_F15:
+      S1:
+        variables: ['TB_37.0H', 'dist_to_center']
+        output_only: ['dist_to_center']
+    SSMIS_F16:
+      S2:
+        variables: ['TB_37.0H', 'dist_to_center']
+        output_only: ['dist_to_center']
+    SSMIS_F17:
+      S2:
+        variables: ['TB_37.0H', 'dist_to_center']
+        output_only: ['dist_to_center']
+    SSMIS_F18:
+      S2:
+        variables: ['TB_37.0H', 'dist_to_center']
+        output_only: ['dist_to_center']
+    SSMIS_F19:
+      S2:
+        variables: ['TB_37.0H', 'dist_to_center']
+        output_only: ['dist_to_center']
+  era5:
+    variables: ["pressure_msl", "u_wind_10m", "v_wind_10m", "sst", "dist_to_center"]
+    input_only: ["sst"]
+    output_only: ['dist_to_center']
+  infrared:
+    variables: ['IRWIN', 'dist_to_center']
+    output_only: ['dist_to_center']
+

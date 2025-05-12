@@ -1,6 +1,7 @@
 # Config for scripts/make_predictions.py
 defaults:
   - paths: jz
+  - data_augmentation: none
   - inference_cfg: default
   - _self_
 

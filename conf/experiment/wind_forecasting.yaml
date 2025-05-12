@@ -2,11 +2,11 @@
 defaults:
   - override /paths: jz
   - override /dataloader: jz
-  - override /sources: all_sources
+  - override /sources: pmw_era5_bt
   - override /lightning_module: deterministic
   - override /lr_scheduler: cosine_warmup_100epochs
   - override /metrics: default_fm
-  - override /data_augmentation: affine_flip
+  - override /data_augmentation: random_cropping
 
 wandb:
   name: wind_forecasting
@@ -14,25 +14,20 @@ wandb:
 
 dataset:
   train:
-    dt_max: 18
-    min_available_sources: 1
+    dt_max: 24
+    min_ref_time_delta: 24
+    min_available_sources: 2
     # Minimum number of sources to be available for each source type:
     # we only keep samples with at least one source of each type.
     source_types_min_avail:
       era5: 1
-      infrared: 1
       pmw: 1
-      stom_metadata: 1
+      storm_metadata: 1
     # Max number of observations for each source of each type:
     source_types_max_avail:
-      infrared: 1
-      era5: 3
+      era5: 1
       storm_metadata: 1
-    # Randomly drop sources of each type
-    randomly_drop_sources:
-      era5: 0.5
-      infrared: 0.5
-      pmw: 0.1
+      pmw: 1
     select_most_recent: true
     # Parameters to perform a forecasting task specifically.
     # Those are automatically propagated to the val and test datasets.
@@ -40,16 +35,14 @@ dataset:
     forecasting_sources: tc_primed_storm_metadata
     # Parameter to mask the spatial coordinates of the forecast source
     # (Since we don't know the future location of the storm)
-    mask_spatial_coords: ['tc_primed_storm_metadata, tc_primed_era5, tc_primed_infrared']
+    mask_spatial_coords: ['tc_primed_storm_metadata']
   val:
     select_most_recent: true
-    data_augmentation: ${dataset.train.data_augmentation}
   test:
     select_most_recent: true
   
 lightning_module:
-  normalize_coords_across_sources: true
-  mask_only_sources: tc_primed_storm_metadata
+  forecasting_mode: true
 
 trainer:
   strategy: ddp_find_unused_parameters_true

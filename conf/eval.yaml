@@ -5,8 +5,7 @@ defaults:
   - eval_class: [quantitative, visual]
   - _self_
 
-run_id: ???
-pred_name: ???
+models: ???
 num_workers: 9
 
 

@@ -1,0 +1,15 @@
+# Data augmentation config file.
+# This cfg leads to the instantiation of a MultisourceDataAugmentation object.
+_target_: multi_sources.data_processing.data_augmentation.MultisourceDataAugmentation
+augmentation_functions:
+  era5:
+    # List of data augmentation classes. Such classes must be callable with the signature
+    # `__call__(self, data: Dict[str, Any]) -> Dict[str, Any]`.
+    # the function multi_sources.data_processing.data_augmentation.wrap_tv_image_transform
+    # can be used to wrap torchvision v2 transforms to the expected signature.
+    # For the fill values, use ${nan:}.
+    - _target_: multi_sources.data_processing.data_augmentation.wrap_tv_image_transform
+      transform:
+        _target_: multi_sources.data_processing.data_augmentation.RandomDynamicCrop
+        min_scale: 0.6
+        max_scale: 1.0

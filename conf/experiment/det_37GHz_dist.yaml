@@ -1,0 +1,23 @@
+# @package _global_
+defaults:
+  - override /paths: jz
+  - override /dataloader: jz
+  - override /sources: 37GHz_dist
+  - override /lightning_module: deterministic
+  - override /lr_scheduler: cosine_warmup_100epochs
+  - override /metrics: default_fm
+  - override /model: msvit_8b_d256
+
+wandb:
+  name: det_37GHz
+  group: det_37GHz
+
+dataset:
+  train:
+    dt_max: 24
+    min_available_sources: 2
+    source_types_max_avail:
+      pmw: 1
+
+trainer:
+  strategy: ddp

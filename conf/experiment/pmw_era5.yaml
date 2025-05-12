@@ -1,0 +1,34 @@
+# @package _global_
+defaults:
+  - override /paths: jz
+  - override /dataloader: jz
+  - override /sources: pmw_era5
+  - override /lightning_module: deterministic
+  - override /lr_scheduler: cosine_warmup_100epochs
+  - override /metrics: default_fm
+  - override /data_augmentation: random_cropping
+  - override /model: msvit_8b_d256
+
+wandb:
+  name: pmw_era5
+  group: pmw_era5
+
+dataset:
+  train:
+    dt_max: 24
+    min_ref_time_delta: 1
+    min_available_sources: 2
+    source_types_min_avail:
+      pmw: 2
+      era5: 1
+    source_types_max_avail:
+      era5: 2
+      pmw: 1
+    select_most_recent: false
+  val:
+    select_most_recent: false
+  test:
+    select_most_recent: false
+
+trainer:
+  strategy: ddp_find_unused_parameters_true
