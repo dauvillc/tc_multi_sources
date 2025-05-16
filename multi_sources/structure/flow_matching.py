@@ -53,7 +53,7 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
         coords_dim,
         adamw_kwargs,
         lr_scheduler_kwargs,
-        predict_residuals_from_run=None,
+        use_det_model_from_run=None,
         n_sampling_diffusion_steps=25,
         loss_max_distance_from_center=None,
         ignore_land_pixels_in_loss=False,
@@ -73,8 +73,8 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
             coords_dim (int): Dimension of the coordinates embeddings.
             adamw_kwargs (dict): Arguments to pass to torch.optim.AdamW (other than params).
             lr_scheduler_kwargs (dict): Arguments to pass to the learning rate scheduler.
-            predict_residuals_from_run (str): Path to a checkpoint of a deterministic model
-                to predict the residuals from.
+            use_det_model_from_run (str): Path to a checkpoint of a deterministic model
+                to predict the means from.
             n_sampling_diffusion_steps (int): Number of diffusion steps when sampling.
             loss_max_distance_from_center (int or None): If specified, only pixels within this
                 distance from the center of the storm (in km) will be considered
@@ -93,6 +93,7 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
             **kwargs: Additional arguments to pass to the LightningModule constructor.
         """
         self.use_diffusion_t = True
+        self.use_det_model = use_det_model_from_run is not None
         super().__init__(
             sources,
             cfg,
@@ -103,29 +104,64 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
             coords_dim,
             adamw_kwargs,
             lr_scheduler_kwargs,
-            loss_max_distance_from_center,
-            ignore_land_pixels_in_loss,
-            normalize_coords_across_sources,
-            validation_dir,
-            metrics,
+            loss_max_distance_from_center=loss_max_distance_from_center,
+            ignore_land_pixels_in_loss=ignore_land_pixels_in_loss,
+            normalize_coords_across_sources=normalize_coords_across_sources,
+            validation_dir=validation_dir,
+            metrics=metrics,
         )
 
         # Flow matching ingredients
         self.n_sampling_diffusion_steps = n_sampling_diffusion_steps
         self.fm_path = CondOTProbPath()
 
-        # Optional: residual prediction
-        self.predict_residuals = predict_residuals_from_run is not None
-        if predict_residuals_from_run is not None:
-            ckpt_dir = Path(cfg["paths"]["checkpoints"]) / predict_residuals_from_run
+        # Optional: deterministic model usage
+        if self.use_det_model:
+            ckpt_dir = Path(cfg["paths"]["checkpoints"]) / use_det_model_from_run
+            # Load the checkpoint and the configuration of the deterministic model
             det_cfg, ckpt_path = load_experiment_cfg_from_checkpoint(
-                ckpt_dir, predict_residuals_from_run
+                ckpt_dir, use_det_model_from_run
             )
             self.det_model = instantiate(
                 det_cfg["lightning_module"], sources, det_cfg, validation_dir=validation_dir
             )
-            state_dict = torch.load(ckpt_path, map_location="cpu")["state_dict"]
-            self.det_model.load_state_dict(state_dict, strict=False)
+            former_dict = torch.load(ckpt_path, map_location="cpu", weights_only=False)[
+                "state_dict"
+            ]
+            current_dict = self.det_model.state_dict()
+            # Note: self.det_model is NOT an exact copy of the original deterministic model,
+            # since it was created with the current configuration.
+            # If some sources that were used in the deterministic model are not used
+            # here, the weights for those sources' embedding/output layers will be missing
+            # from self.det_model. Thus we need to remove those weights from the checkpoint
+            # before loading it into self.det_model.
+            new_dict = {}
+            for k, v in former_dict.items():
+                if k in current_dict:
+                    new_dict[k] = v
+                else:
+                    # If the key is not in the current model, there are two cases:
+                    # - It's a source-related layer (embedding/output_proj) that is not used here
+                    #   (fine, we can ignore it).
+                    # - It's a layer that is not source-related (e.g. backbone) that is missing
+                    #   from the current model (not fine, we need to raise an error).
+                    if "embedding" in k or "output_proj" in k:
+                        continue
+                    else:
+                        raise ValueError(
+                            f"Layer {k} is not present in the current model. "
+                            "Please use a deterministic model that has been trained on all sources."
+                        )
+            # Note 2: If there are new sources in the current model (that the former det model
+            # hasn't been trained on), we raise an error: we expect the deterministic model
+            # to be pre-trained on at least all of the sources used in the current model.
+            for k, v in current_dict.items():
+                if k not in former_dict and ("output_proj" in k or "embedding" in k):
+                    raise ValueError(
+                        f"Source {k} is not present in the deterministic model. "
+                        "Please use a deterministic model that has been trained on all sources."
+                    )
+            self.det_model.load_state_dict(new_dict)
             self.det_model.eval()
             self.det_model.requires_grad_(False)
 
@@ -193,7 +229,7 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
 
         return masked_x, path_samples
 
-    def forward(self, x, residual_mean=None):
+    def forward(self, x):
         """Computes the forward pass of the model.
         Args:
             x (dict): The input sources, masked, with (source_name, index) tuples as keys.
@@ -284,6 +320,10 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
                 # Mask the sources with pure noise
                 masked_batch, path_samples = self.mask(batch, pure_noise=True, masking_seed=seed)
 
+                if self.use_det_model:
+                    # Compute the deterministic predictions
+                    masked_batch = self.make_deterministic_predictions(masked_batch)
+
                 x_0 = {
                     source_index_pair: data["values"]
                     for source_index_pair, data in masked_batch.items()
@@ -326,13 +366,38 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
             }
             return avail_flags, time_grid, all_sols
 
+    def make_deterministic_predictions(self, masked_x):
+        """Computes the deterministic predictions of the model.
+        Args:
+            masked_x (dict): The input sources, masked, with (source_name, index) tuples as keys.
+        Returns:
+            masked_x (dict): The input sources with the predicted values
+                for each source, included in the dict under
+                updated_x[source_idx_pair]["pred_mean"].
+                The dict is updated in-place.
+        """
+        # Run the deterministic model
+        means = self.det_model(masked_x)
+        # Update the values of the sources with the predicted values
+        for source_index_pair, data in masked_x.items():
+            pred_mean = means[source_index_pair]
+            # The predicted means are only valid for the masked sources
+            # (i.e. the sources that have an availability flag set to 0).
+            # -> Set the predicted means to 0 for the sources that are not masked.
+            pred_mean[data["avail"] != 0] = 0
+            # Update the values with the predicted values
+            masked_x[source_index_pair]["pred_mean"] = pred_mean
+        return masked_x
+
     def training_step(self, batch, batch_idx):
         batch_size = batch[list(batch.keys())[0]]["values"].shape[0]
-        # If predicting residuals, call a forward pass of the deterministic model
-        if self.predict_residuals:
-            means = self.det_model.predict(batch)
         batch = self.preproc_input(batch)
         masked_x, path_samples = self.mask(batch)
+
+        if self.use_det_model:
+            # Compute the deterministic predictions
+            masked_x = self.make_deterministic_predictions(masked_x)
+
         # Make predictions
         pred = self.forward(masked_x)
         # Compute the loss
@@ -353,6 +418,11 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
         batch = self.preproc_input(input_batch)
         # Mask the sources
         masked_x, path_samples = self.mask(batch)
+
+        if self.use_det_model:
+            # Compute the deterministic predictions
+            masked_x = self.make_deterministic_predictions(masked_x)
+
         # Make predictions
         pred = self.forward(masked_x)
         # Compute the loss

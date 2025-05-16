@@ -126,6 +126,10 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
 
     def init_embedding_layers(self):
         """Initializes the weights of the embedding layers."""
+        if not hasattr(self, "use_diffusion_t"):
+            self.use_diffusion_t = False
+        if not hasattr(self, "use_det_model"):
+            self.use_det_model = False
         # Embedding and output projection layers
         # An embedding and an output layer for each source type
         # - We need to retrieve the list of each source type from the sources,
@@ -139,6 +143,8 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
                 self.sourcetypes_characs_vars[source.type] = source.n_charac_variables()
                 n_input_channels = source.n_input_variables()
                 n_output_channels = source.n_data_variables()
+                # Whether to include a predicted mean in the embedding layer
+                pred_mean_channels = n_output_channels if self.use_det_model else 0
                 # Create the layers for that source type depending on
                 # its dimensionality
                 if source.dim == 2:
@@ -149,6 +155,7 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
                         self.coords_dim,
                         source.n_charac_variables(),
                         use_diffusion_t=self.use_diffusion_t,
+                        pred_mean_channels=pred_mean_channels,
                     )
                     self.sourcetype_output_projs[source.type] = SourcetypeProjection2d(
                         self.values_dim,
@@ -162,6 +169,8 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
                         self.coords_dim,
                         source.n_charac_variables(),
                         use_diffusion_t=self.use_diffusion_t,
+                        use_predicted_mean=self.use_det_model,
+                        pred_mean_channels=pred_mean_channels,
                     )
                     self.sourcetype_output_projs[source.type] = SourcetypeProjection0d(
                         self.values_dim,

@@ -89,7 +89,6 @@ class MultisourceDeterministicReconstructor(MultisourceAbstractReconstructor):
                 A metric should have the signature metric(y_pred, batch, avail_flags, **kwargs)
                 and return a dict {source: tensor of shape (batch_size,)}.
         """
-        self.use_diffusion_t = False
         super().__init__(
             sources,
             cfg,

@@ -10,7 +10,7 @@ from omegaconf import DictConfig, OmegaConf
 from torch.utils.data import DataLoader
 
 from multi_sources.data_processing.collate_fn import multi_source_collate_fn
-from utils.checkpoints import load_experiment_cfg_from_checkpoint
+from utils.checkpoints import load_experiment_cfg_from_checkpoint, load_weights_intersection
 from utils.utils import get_random_code
 
 
@@ -86,15 +86,8 @@ def main(cfg: DictConfig):
         if "reset_output_layers" in cfg and cfg["reset_output_layers"]:
             former_dict = {k: v for k, v in former_dict.items() if "output_proj" not in k}
         new_dict = pl_module.state_dict()
-        # add to the former dict the weights that were added in the new dict.
-        for k, v in new_dict.items():
-            if k not in former_dict:
-                former_dict[k] = v
-        # Remove from the former dict the weights that are not in the new dict.
-        for k in list(former_dict.keys()):
-            if k not in new_dict:
-                del former_dict[k]
-        # 3. load the former state dict that now contains all the weights.
+        # Only keep the intersection of the keys in the former and current dictionaries.
+        former_dict = load_weights_intersection(former_dict, new_dict)
         pl_module.load_state_dict(former_dict)
 
     # Callbacks

@@ -90,7 +90,7 @@ class SourcetypeEmbedding2d(nn.Module):
         coords_dim,
         n_charac_vars=0,
         use_diffusion_t=True,
-        use_predicted_mean=False,
+        pred_mean_channels=0,
     ):
         """
         Args:
@@ -100,21 +100,18 @@ class SourcetypeEmbedding2d(nn.Module):
             values_dim (int): Dimension of the values embedding space.
             coords_dim (int): Dimension of the coordinate embedding space.
             n_charac_vars (int): Number of optional characteristic variables.
-            use_diffusion_t (bool): Whether to include a diffusion timestep channel.
-            use_predicted_mean (bool): Whether to include a predicted mean channel.
+            use_diffusion_t (bool): Whether to include a diffusion timestep embedding.
+            pred_mean_channels (int): Number of channels for the predicted mean. If zero,
+                the predicted mean is not used.
         """
         super().__init__()
 
         # Values embedding layers
         self.values_patch_size = patch_size
         self.use_diffusion_t = use_diffusion_t
-        self.use_predicted_mean = use_predicted_mean
+        self.use_predicted_mean = pred_mean_channels > 0
 
-        ch = channels + 2  # landmask + availability
-        if use_diffusion_t:
-            ch += 1  # diffusion channel
-        if use_predicted_mean:
-            ch += 1
+        ch = channels + 2 + pred_mean_channels  # landmask + availability + predicted mean
         self.values_embedding = ConvPatchEmbedding2d(ch, patch_size, values_dim, norm=True)
 
         # Coords embedding layers
@@ -143,7 +140,7 @@ class SourcetypeEmbedding2d(nn.Module):
                 - "landmask": (B, H, W) land-sea mask.
                 - Optionally "characs": (B, n_characs_vars) characteristic variables.
                 - Optionally "diffusion_t": (B,) diffusion timestep.
-                - Optionally "predicted_mean": (B, C_out, H, W), predicted mean.
+                - Optionally "pred_mean": (B, C_out, H, W), predicted mean.
         Returns:
             embedded_values: (B, h, w, values_dim) tensor of embedded values.
             embedded_coords: (B, h, w, coords_dim) tensor of embedded coordinates.
@@ -157,15 +154,8 @@ class SourcetypeEmbedding2d(nn.Module):
             avail_mask = data["avail_mask"].unsqueeze(1)
             landmask = data["landmask"].unsqueeze(1)
             values = torch.cat([values, avail_mask, landmask], dim=1)
-            if self.use_diffusion_t:
-                diffusion_t = (
-                    data["diffusion_t"]
-                    .view(-1, 1, 1, 1)
-                    .expand(-1, 1, values.size(2), values.size(3))
-                )
-                values = torch.cat([values, diffusion_t], dim=1)
             if self.use_predicted_mean:
-                predicted_mean = data["predicted_mean"]
+                predicted_mean = data["pred_mean"]
                 values = torch.cat([values, predicted_mean], dim=1)
             embedded_values = self.values_embedding(values)
 
@@ -202,8 +192,8 @@ class SourcetypeEmbedding0d(nn.Module):
     """A class that embeds the values and time of a 0D source, including optional
     characteristic variables.
 
-    This module handles both time embeddings and values embeddings (channels, masks,
-    diffusion timestep), then outputs their embedded representations.
+    This module handles both time embeddings and values embeddings (channels, masks),
+    then outputs their embedded representations.
     Additionally, a conditioning tensor is computed that embeds the conditioning
     that isn't the values or the time. This includes:
     - The characteristic variables.
@@ -218,7 +208,7 @@ class SourcetypeEmbedding0d(nn.Module):
         coords_dim,
         n_charac_vars=0,
         use_diffusion_t=True,
-        use_predicted_mean=False,
+        pred_mean_channels=0,
     ):
         """
         Args:
@@ -227,20 +217,17 @@ class SourcetypeEmbedding0d(nn.Module):
             values_dim (int): Dimension of the values embedding space.
             coords_dim (int): Dimension of the coordinate (time) embedding space.
             n_charac_vars (int): Number of optional characteristic variables.
-            use_diffusion_t (bool): Whether to include a diffusion timestep channel.
-            use_predicted_mean (bool): Whether to include a predicted mean channel.
+            use_diffusion_t (bool): Whether to include a diffusion timestep embedding.
+            pred_mean_channels (int): Number of channels for the predicted mean. If zero,
+                the predicted mean is not used.
         """
         super().__init__()
 
         # Values embedding layers
         self.use_diffusion_t = use_diffusion_t
-        self.use_predicted_mean = use_predicted_mean
+        self.use_predicted_mean = pred_mean_channels > 0
 
-        ch = channels + 2  # landmask + availability
-        if use_diffusion_t:
-            ch += 1  # diffusion channel
-        if use_predicted_mean:
-            ch += 1
+        ch = channels + 2 + pred_mean_channels  # landmask + availability + predicted mean
         self.values_embedding = nn.Sequential(
             nn.Linear(ch, values_dim), nn.GELU(), nn.LayerNorm(values_dim)
         )
@@ -270,7 +257,7 @@ class SourcetypeEmbedding0d(nn.Module):
                 - "landmask": (B,) land-sea mask.
                 - Optionally "characs": (B, n_characs_vars) characteristic variables.
                 - Optionally "diffusion_t": (B,) diffusion timestep.
-                - Optionally "predicted_mean": (B, C_out), predicted mean.
+                - Optionally "pred_mean": (B, C_out), predicted mean.
         Returns:
             embedded_values: (B, values_dim) tensor of embedded values.
             embedded_coords: (B, coords_dim) tensor of embedded coordinates.
@@ -283,11 +270,8 @@ class SourcetypeEmbedding0d(nn.Module):
         avail_mask = data["avail_mask"].unsqueeze(1)
         landmask = data["landmask"].unsqueeze(1)
         values = torch.cat([values, avail_mask, landmask], dim=1)
-        if self.use_diffusion_t:
-            diffusion_t = data["diffusion_t"].view(-1, 1)
-            values = torch.cat([values, diffusion_t], dim=1)
         if self.use_predicted_mean:
-            predicted_mean = data["predicted_mean"]
+            predicted_mean = data["pred_mean"]
             values = torch.cat([values, predicted_mean], dim=1)
         embedded_values = self.values_embedding(values)
 

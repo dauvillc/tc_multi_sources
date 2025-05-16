@@ -31,3 +31,22 @@ def load_experiment_cfg_from_checkpoint(checkpoints_dir, run_id):
     checkpoint = torch.load(checkpoint_path, weights_only=False)
     exp_cfg = checkpoint["hyper_parameters"]["cfg"]
     return exp_cfg, checkpoint_path
+
+
+def load_weights_intersection(former_dict, current_dict):
+    """Loads the weights of the intersection of the keys in the
+    former and current dictionaries.
+
+    Args:
+        former_dict (dict): The former dictionary.
+        current_dict (dict): The current dictionary.
+    Returns:
+        new_dict (dict): The new dictionary with the weights of the intersection.
+    """
+    new_dict = {}
+    for k, v in current_dict.items():
+        if k in former_dict:
+            new_dict[k] = former_dict[k]
+        else:
+            new_dict[k] = v
+    return new_dict
