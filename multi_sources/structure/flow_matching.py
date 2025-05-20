@@ -117,7 +117,7 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
 
         # Optional: deterministic model usage
         if self.use_det_model:
-            ckpt_dir = Path(cfg["paths"]["checkpoints"]) / use_det_model_from_run
+            ckpt_dir = Path(cfg["paths"]["checkpoints"])
             # Load the checkpoint and the configuration of the deterministic model
             det_cfg, ckpt_path = load_experiment_cfg_from_checkpoint(
                 ckpt_dir, use_det_model_from_run
@@ -171,6 +171,10 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
         to mask. The number of sources to mask is determined by self.masking ratio.
         Masked sources have their values mixed with random noise following the noise schedule.
         The availability flag is set to 0 where the source is masked.
+
+        If using a deterministic model, the masked sources are converted to the residual
+        between the ground truth and the predicted mean, before being noised.
+
         Args:
             x (dict): The input sources with (source_name, index) tuples as keys,
                 where index counts observations (0 = most recent).
@@ -180,7 +184,7 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
                 which sources to mask.
         Returns:
             masked_x (dict): The input sources with a portion
-                of the sources masked. If not determnistic, an entry "diffusion_t" is added
+                of the sources masked. An entry "diffusion_t" is added
                 to the dict of each source, which is a tensor of shape (B,) such that:
                 diffusion_t[b] is the diffusion timestep at which the source was masked
                 for the sample b if the source was masked, and -1 otherwise.
@@ -188,18 +192,48 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
                 noised values.
         """
 
-        # Choose the sources to mask.
+        # First step: for each sample in the batch, select a subset of the sources to mask.
         avail_flags = super().select_sources_to_mask(x, masking_seed)
         # avail_flags[s][i] == 0 if the source s should be masked.
         batch_size = avail_flags[list(avail_flags.keys())[0]].shape[0]
         device = next(self.parameters()).device
 
-        masked_x, path_samples = {}, {}
+        # Second step: create a copy of the input dict and update the availability flag
+        # to 0 for the masked sources.
+        masked_x = {}
         for source_index_pair, data in x.items():
             # Copy the data to avoid modifying the original dict
             masked_data = {k: v.clone() if torch.is_tensor(v) else v for k, v in data.items()}
             # Update the availability flag to that after masking.
             masked_data["avail"] = avail_flags[source_index_pair]
+            # Set the availability mask to 0 everywhere for noised sources.
+            masked_data["avail_mask"][masked_data["avail"] == 0] = 0
+            masked_x[source_index_pair] = masked_data
+
+        # Third step (optional): if using a deterministic model, compute the predicted means
+        # and convert the masked sources to the residual between the ground truth and the predicted
+        # mean.
+        if self.use_det_model:
+            # Compute the deterministic predictions (which are set to 0 for unmasked sources)
+            masked_x = self.make_deterministic_predictions(masked_x)
+            # Update the values of the sources with the predicted values
+            for source_index_pair, data in masked_x.items():
+                pred_mean = masked_x[source_index_pair]["pred_mean"]
+                # Update the values with the predicted values
+                masked_x[source_index_pair]["pred_mean"] = pred_mean
+                # Set the values of the masked sources to the residual
+                is_masked = masked_x[source_index_pair]["avail"] == 0
+                is_masked = is_masked.view(batch_size, *([1] * (len(data["values"].shape) - 1)))
+                masked_x[source_index_pair]["values"] = torch.where(
+                    is_masked,
+                    data["values"] - pred_mean,
+                    data["values"],
+                )
+
+        # Last step: for each masked source, compute the noised values
+        # and the diffusion timestep at which the source was masked.
+        path_samples = {}
+        for source_index_pair, masked_data in masked_x.items():
             # The sources should be noised if they are masked.
             should_mask = avail_flags[source_index_pair] == 0
 
@@ -213,7 +247,9 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
             # Generate random noise with the same shape as the values
             noise = torch.randn_like(masked_data["values"])
             # Compute the noised values associated with the diffusion timesteps
-            path_sample = self.fm_path.sample(t=t, x_0=noise, x_1=data["values"].detach().clone())
+            path_sample = self.fm_path.sample(
+                t=t, x_0=noise, x_1=masked_data["values"].detach().clone()
+            )
             path_samples[source_index_pair] = path_sample
             noised_values = path_sample.x_t.detach().clone()
             masked_data["values"][should_mask] = noised_values[should_mask]
@@ -222,9 +258,6 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
             masked_data["diffusion_t"] = torch.where(should_mask, t, torch.ones_like(t))
             # For sources that are fully unavailable, set the diffusion timestep to -1
             masked_data["diffusion_t"][masked_data["avail"] == -1] = -1
-            # Set the availability mask to 0 everywhere for noised sources.
-            # (!= from the avail flag, it's a mask of same shape
-            masked_data["avail_mask"][should_mask] = 0
             masked_x[source_index_pair] = masked_data
 
         return masked_x, path_samples
@@ -320,10 +353,6 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
                 # Mask the sources with pure noise
                 masked_batch, path_samples = self.mask(batch, pure_noise=True, masking_seed=seed)
 
-                if self.use_det_model:
-                    # Compute the deterministic predictions
-                    masked_batch = self.make_deterministic_predictions(masked_batch)
-
                 x_0 = {
                     source_index_pair: data["values"]
                     for source_index_pair, data in masked_batch.items()
@@ -354,6 +383,16 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
                 time_grid = torch.linspace(0, 1, self.n_sampling_diffusion_steps)
                 solver = MultisourceEulerODESolver(vf_func)
                 sol = solver.solve(x_0, time_grid)  # Dict of tensors of shape (B, C, ...)
+
+                # If using a deterministic model, the solution of the ODE is the residual
+                # between the predicted mean and the actual sample. We need to add back the
+                # predicted mean to the solution.
+                if self.use_det_model:
+                    for source_index_pair in sol:
+                        # Note: the predicted mean is already set to 0 for unmasked sources.
+                        pred_mean = masked_batch[source_index_pair]["pred_mean"]
+                        sol[source_index_pair] += pred_mean
+
                 all_sols.append(sol)
 
             avail_flags = {
@@ -394,10 +433,6 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
         batch = self.preproc_input(batch)
         masked_x, path_samples = self.mask(batch)
 
-        if self.use_det_model:
-            # Compute the deterministic predictions
-            masked_x = self.make_deterministic_predictions(masked_x)
-
         # Make predictions
         pred = self.forward(masked_x)
         # Compute the loss
@@ -419,10 +454,6 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
         # Mask the sources
         masked_x, path_samples = self.mask(batch)
 
-        if self.use_det_model:
-            # Compute the deterministic predictions
-            masked_x = self.make_deterministic_predictions(masked_x)
-
         # Make predictions
         pred = self.forward(masked_x)
         # Compute the loss
@@ -439,7 +470,7 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
         if self.validation_dir is not None and batch_idx % 5 == 0:
             # For every 30 batches, make multiple realizations of the solution
             # for each sample in the batch and display them.
-            if batch_idx % 30 == 0:
+            if batch_idx % 10 == 0:
                 avail_flags, time_grid, sol = self.sample(batch, n_realizations_per_sample=5)
                 display_realizations(
                     sol,
