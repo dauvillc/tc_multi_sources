@@ -122,7 +122,8 @@ class SourcetypeEmbedding2d(nn.Module):
         self.coords_norm = nn.LayerNorm(coords_dim)
 
         # Conditioning embedding layers
-        self.cond_embedding = ConvPatchEmbedding2d(1, patch_size, values_dim, norm=False)
+        ch_cond = 1 + pred_mean_channels  # landmask + predicted mean
+        self.cond_embedding = ConvPatchEmbedding2d(ch_cond, patch_size, values_dim, norm=False)
         if self.use_diffusion_t:
             self.diffusion_t_embedding = nn.Linear(1, values_dim)
         if n_charac_vars > 0:
@@ -144,7 +145,7 @@ class SourcetypeEmbedding2d(nn.Module):
         Returns:
             embedded_values: (B, h, w, values_dim) tensor of embedded values.
             embedded_coords: (B, h, w, coords_dim) tensor of embedded coordinates.
-            conditioning: (B, 1, 1, values_dim) tensor containing the conditioning, or
+            conditioning: (B, h, w, values_dim) tensor containing the conditioning, or
                 None if no conditioning is given.
         """
 
@@ -169,16 +170,26 @@ class SourcetypeEmbedding2d(nn.Module):
         # Conditioning tensor
         available_conditioning = []
         b, c, h, w = values.shape
-        lm_cond = self.cond_embedding(landmask)
-        available_conditioning.append(lm_cond)
+        # First part: spatial conditionings (embedded together via patch embedding)
+        # - Land-sea mask
+        spatial_cond = landmask
+        # Then, optionally, the predicted mean
+        if self.use_predicted_mean:
+            spatial_cond = torch.cat([spatial_cond, predicted_mean], dim=1)
+        spatial_cond = self.cond_embedding(spatial_cond)
+        available_conditioning.append(spatial_cond)
+        # Second part: diffusion timestep embedding
         if self.use_diffusion_t:
             diffusion_t = data["diffusion_t"].view(b, 1, 1, 1)
             embedded_diff_t = self.diffusion_t_embedding(diffusion_t)
             available_conditioning.append(embedded_diff_t)
+        # Third part: characteristic variables
         if "characs" in data and data["characs"] is not None:
             embedded_characs = self.characs_embedding(data["characs"])
             embedded_characs = embedded_characs.view(b, 1, 1, -1)
             available_conditioning.append(embedded_characs)
+        # Finally, sum the available conditioning tensors
+        # and apply layer normalization.
         if len(available_conditioning) > 0:
             conditioning = sum(available_conditioning)
             conditioning = self.cond_norm(conditioning)
