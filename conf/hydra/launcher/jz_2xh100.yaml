@@ -2,16 +2,17 @@
 _target_: hydra_plugins.hydra_submitit_launcher.submitit_launcher.SlurmLauncher
 submitit_folder: ${hydra.sweep.dir}/.submitit/%j
 timeout_min: 1200
-cpus_per_task: 10
+cpus_per_task: 24
 ntasks_per_node: ${trainer.devices}
-gres: "gpu:4"
+gres: "gpu:2"
 name: ${hydra.job.name}
-constraint: null
-account: "xyw@v100"
+constraint: "h100"
+account: "xyw@h100"
 additional_parameters:
   hint: nomultithread
   no_requeue: ""
 setup:
   - module purge
   - source ${oc.env:HOME}/.bash_profile
+  - module load arch/h100
   - module load pytorch-gpu/py3/2.6.0
