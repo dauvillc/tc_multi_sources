@@ -1,0 +1,71 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+
+# PyTorch Lightning logs and checkpoints
+lightning_logs/
+*.ckpt
+lightning_logs.pt
+
+# Jupyter Notebook
+.ipynb_checkpoints
+.jupyter/
+
+# Environment and IDE
+.venv
+.env
+venv/
+env/
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Project specific
+outputs/
+figures/examples/
+wandb/
+*.png
+*.jpg
+*.jpeg
+
+# Hydra outputs
+multirun/
+.hydra/
+
+# Local data that should not be versioned
+data/
+*.npy
+*.h5
+*.nc
+*.pt
+*.pth
+*.pkl
+*.csv
+*.txt
+*.pdf
+
+# MacOS
+.DS_Store
+
+# Keep any example files that should be tracked
+!ex.png
+!ex2.png
+!example_data/*.csv
+!README.md
