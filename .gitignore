@@ -27,6 +27,11 @@ lightning_logs.pt
 .ipynb_checkpoints
 .jupyter/
 
+# Jupyter and VS Code
+.ipynb_checkpoints
+.jupyter/
+.virtual_documents/
+
 # Environment and IDE
 .venv
 .env
