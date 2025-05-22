@@ -73,6 +73,10 @@ class Source:
     def n_input_variables(self):
         return len(self.input_vars)
 
+    def n_output_variables(self):
+        """Returns the number of output variables in the source."""
+        return len(self.output_vars)
+
     def n_target_variables(self):
         return len(self.output_vars)
 

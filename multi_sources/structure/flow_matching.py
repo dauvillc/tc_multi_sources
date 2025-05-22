@@ -310,19 +310,21 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
             for source_index_pair in path_samples
         }
 
-        pred, y_true = super().apply_loss_mask(pred, y_true, batch, avail_flag)
+        # Multiply the predictions and true values by a mask that filters out a part of the
+        # data based on several criteria (including only considering the masked sources).
+        loss_masks, pred, y_true = super().apply_loss_mask(pred, y_true, batch, avail_flag)
 
         # Compute the loss: MSE between the predicted and true velocity fields
         losses = {}
         for source_index_pair in pred:
-            # Compute the loss for each source
-            losses[source_index_pair] = (
-                (pred[source_index_pair] - y_true[source_index_pair]).pow(2).mean()
-            )
-        # If len(losses) == 0, i.e. for all masked sources the tokens were missing,
-        # raise an error.
-        if len(losses) == 0:
-            raise ValueError("No tokens to compute the loss on")
+            # Compute the loss for each source. We need to divide by the number of
+            # non-masked points in the loss mask.
+            source_loss = (pred[source_index_pair] - y_true[source_index_pair]).pow(2).sum()
+            mask_sum = loss_masks[source_index_pair].sum()
+            if mask_sum == 0:
+                # If all points are masked, we skip the loss computation for this source
+                continue
+            losses[source_index_pair] = source_loss / mask_sum
 
         # Compute the total loss
         loss = sum(losses.values()) / len(losses)

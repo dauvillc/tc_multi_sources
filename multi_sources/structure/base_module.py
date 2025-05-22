@@ -152,16 +152,17 @@ class MultisourceAbstractModule(pl.LightningModule, ABC):
         pass
 
     def apply_loss_mask(self, y_pred, y_true, batch, avail_flag=None):
-        """Filters the predictions and groundtruth to to:
-        - Only consider output-enabled variables.
+        """Multiplies the predictions and groundtruths by a binary mask to:
         - Exclude the tokens that were missing in the ground truth.
         - Only consider the tokens that were masked in the input.
         - Optionally exclude the tokens that are too far from the center
           of the storm.
         - Optionally exclude the tokens that are on land.
+        - For the groundtruth only, exlude variables that are not
+          output-enabled.
         Args:
             y_pred (dict of (source_name, index) to tensor): The predictions, of shape (B, C, ...).
-            y_true (dict of (source_name, index) to tensor): The groundtruth, of shape (B, C, ...).
+            y_true (dict of (source_name, index) to tensor): The groundtruth, of shape (B, Ct, ...).
             batch (dict of (source_name, index) to dict of str to tensor): The input data, such that
                 batch[(src, index)] includes the following keys:
                 * avail_mask (dict of (source_name, index) to tensor): The availability mask of
@@ -176,23 +177,24 @@ class MultisourceAbstractModule(pl.LightningModule, ABC):
                element is available, 0 if it was masked and -1 if it was
                missing.
         Returns:
+            masks (dict of (source_name, index) to tensor): The masks, of shape (B, C, ...),
+                valued 1 where the token is available and 0 otherwise.
             filtered_preds (dict of (source_name, index) to tensor): The filtered predictions,
-            flattened.
-            filtered_true_data (dict of (source_name, index) to tensor): The filtered groundtruth,
-            flattened.
+                of shape (B, C, ...).
+            filtered_gt (dict of (source_name, index) to tensor): The filtered groundtruth,
+                of shape (B, C, ...).
         """
-        filtered_preds, filtered_gt = {}, {}
+        filtered_preds, filtered_gt, masks = {}, {}, {}
         for source_index_pair, pred_s in y_pred.items():
-            source_name = source_index_pair[0]  # Extract the source name from the tuple
+            # 1. Retrieve the list of output variables for the source and only keep those
+            # in the groundtruth.
+            source_name, _ = source_index_pair
             true_s = y_true[source_index_pair]
-            # Retrieve the mask of the output-enabled variables for the source,
-            # and exclude them from the predictions and groundtruth.
-            output_vars = self.sources[source_name].get_output_variables_mask()  # (C,)
+            output_vars = self.sources[source_name].get_output_variables_mask()  # (Ct,)
             output_vars = torch.tensor(output_vars, device=pred_s.device)
-            pred_s = pred_s[:, output_vars]
-            true_s = true_s[:, output_vars]
+            true_s = true_s[:, output_vars]  # (B, Ct, ...) to (B, C, ...)
 
-            # We'll compute a mask M on the tokens of the source of shape (B, C, ...)
+            # 2. We'll compute a mask M on the tokens of the source of shape (B, C, ...)
             # such that M[b, ...] = True if and only if the following conditions are met:
             # - The source was masked for the sample b (avail flag == 0);
             # - the value at position ... was not missing (true_data["am"] == True);
@@ -209,15 +211,15 @@ class MultisourceAbstractModule(pl.LightningModule, ABC):
             # Optionally ignore the pixels that are on land
             if self.ignore_land_pixels_in_loss:
                 loss_mask[batch[source_index_pair]["landmask"] > 0] = False
-            # Apply the mask to the predictions and groundtruth
+            # Multiply the predictions and groundtruth by the mask
             loss_mask = loss_mask.unsqueeze(1).expand_as(pred_s)  # (B, C, ...)
-            pred_s = pred_s[loss_mask]
-            # If no elements are left, remove the source from the filtered predictions
-            if pred_s.numel() == 0:
-                continue
+            pred_s = pred_s * loss_mask
+            true_s = true_s * loss_mask
+            masks[source_index_pair] = loss_mask
             filtered_preds[source_index_pair] = pred_s
-            filtered_gt[source_index_pair] = true_s[loss_mask]
-        return filtered_preds, filtered_gt
+            filtered_gt[source_index_pair] = true_s
+
+        return masks, filtered_preds, filtered_gt
 
     @abstractmethod
     def training_step(self, batch, batch_idx):

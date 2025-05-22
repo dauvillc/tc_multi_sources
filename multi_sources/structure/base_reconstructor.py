@@ -142,7 +142,7 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
             if source.type not in self.sourcetypes_characs_vars:
                 self.sourcetypes_characs_vars[source.type] = source.n_charac_variables()
                 n_input_channels = source.n_input_variables()
-                n_output_channels = source.n_data_variables()
+                n_output_channels = source.n_output_variables()
                 # Whether to include a predicted mean in the embedding layer
                 pred_mean_channels = n_output_channels if self.use_det_model else 0
                 # Create the layers for that source type depending on
