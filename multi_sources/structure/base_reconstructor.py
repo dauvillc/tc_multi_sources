@@ -87,7 +87,7 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
             validation_dir (optional, str or Path): Directory where to save the validation plots.
                 If None, no plots will be saved.
             metrics (dict of str: callable): Metrics to compute during training and validation.
-                A metric should have the signature metric(y_pred, batch, avail_flags, **kwargs)
+                A metric should have the signature metric(y_pred, y_true, masks, **kwargs)
                 and return a dict {source: tensor of shape (batch_size,)}.
             **kwargs: Additional arguments to pass to the LightningModule constructor.
         """

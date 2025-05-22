@@ -3,48 +3,24 @@
 import torch
 
 
-def multisource_rmse(y_pred, batch, avail_flags, **unused_kwargs):
+def multisource_rmse(y_pred, y_true, masks, **unused_kwargs):
     """Computes the RMSE between y_pred and y_true.
     Args:
         y_pred (dict): Dictionary {source: y_pred_s} where y_pred_s is a tensor of
             shape (B, C, ...) giving the predicted values for the source s.
-        batch (dict of dict of torch.Tensor): Dict mapping source names to data dicts.
-            For each source, batch[source] must contains the following entries: "values",
-            "avail_mask".
-        avail_flags (dict): Dictionary {source: avail_flag_s} where avail_flag_s is a
-            tensor of shape (B,) containing 1 if the value is available, 0 if it was
-            available and masked, and -1 if it was not available.
-            The RMSE will only be computed for the samples and sources where the avail
-            flag is 0.
+        y_true (dict): Dictionary {source: y_true_s} where y_true_s is a tensor of
+            shape (B, C, ...) giving the true values for the source s.
+        masks (dict): Dictionary {source: mask_s} where mask_s is a tensor of
+            shape (B, ...), valued 1 at points that should be considered and 0
+            at points that should be ignored.
     Returns:
         rmse (dict): Dictionary {source: rmse_s} where rmse_s is a scalar.
     """
     rmse = {}
     for source, y_pred_s in y_pred.items():
-        y_true_s = batch[source]["values"]
-        avail_flag_s = avail_flags[source] == 0
-        avail_mask_s = batch[source]["avail_mask"].unsqueeze(1)  # (B, 1, ...)
-
-        y_true_s = y_true_s[avail_flag_s]
-        y_pred_s = y_pred_s[avail_flag_s]
-        avail_mask_s = avail_mask_s[avail_flag_s] >= 0
-        avail_mask_s = avail_mask_s.expand_as(y_pred_s)  # (B, C, ...)
-
-        # If the avail_flag was never 0, we can skip the computation
-        if y_true_s.numel() == 0:
-            continue
-
-        # Squared error
-        se_s = torch.pow(y_pred_s - y_true_s, 2)  # (B, C, ...)
-        se_s[~avail_mask_s] = 0  # Ignore the values that were unavailable
-        # Compute the mean over each sample. We can't just call mean() as the
-        # points set to zero would bias the result. We need to compute the sum
-        # and divide by the number of non-masked values.
-        non_batch_dims = tuple(range(1, se_s.dim()))
-        mse_s = se_s.sum(dim=non_batch_dims) / avail_mask_s.sum(dim=non_batch_dims)
-
-        # Deduce the RMSE of each sample and average it over the batch
-        rmse_s = torch.sqrt(mse_s).mean()
-
+        y_true_s = y_true[source]
+        mask_s = masks[source].unsqueeze(1).expand_as(y_pred_s)
+        # Compute the RMSE
+        rmse_s = torch.sqrt(torch.sum(mask_s * (y_pred_s - y_true_s) ** 2) / torch.sum(mask_s))
         rmse[source] = rmse_s
     return rmse

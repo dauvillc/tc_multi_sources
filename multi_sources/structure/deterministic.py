@@ -86,7 +86,7 @@ class MultisourceDeterministicReconstructor(MultisourceAbstractReconstructor):
             validation_dir (optional, str or Path): Directory where to save the validation plots.
                 If None, no plots will be saved.
             metrics (dict of str: callable): Metrics to compute during training and validation.
-                A metric should have the signature metric(y_pred, batch, avail_flags, **kwargs)
+                A metric should have the signature metric(y_pred, y_true, masks, **kwargs)
                 and return a dict {source: tensor of shape (batch_size,)}.
         """
         super().__init__(
@@ -177,21 +177,26 @@ class MultisourceDeterministicReconstructor(MultisourceAbstractReconstructor):
             source_index_pair: batch[source_index_pair]["values"] for source_index_pair in batch
         }
 
-        # Multiply the predictions and true values by a mask that filters out a part of the
-        # data based on several criteria (including only considering the masked sources).
-        loss_masks, pred, targets = super().apply_loss_mask(pred, targets, batch, avail_flag)
+        # Only the keep the output variables from the ground truth
+        targets = self.filter_output_variables(targets)
+        # Compute the loss masks: a dict {(s,i): M} where M is a binary mask of shape
+        # (B, ...) indicating which points should be considered in the loss.
+        loss_masks = self.compute_loss_mask(batch, avail_flag)
 
         # Compute the MSE loss for each source
         losses = {}
         for source_index_pair in pred:
-            # Compute the loss for each source. We need to divide by the number of
-            # non-masked points in the loss mask.
-            source_loss = (pred[source_index_pair] - targets[source_index_pair]).pow(2).sum()
-            mask_sum = loss_masks[source_index_pair].sum()
+            # Compute the pointwise loss for each source.
+            source_loss = (pred[source_index_pair] - targets[source_index_pair]).pow(2)
+            # Multiply by the loss mask
+            source_loss_mask = loss_masks[source_index_pair].unsqueeze(1).expand_as(source_loss)
+            source_loss = source_loss * source_loss_mask
+            # Compute the mean over the number of available points
+            mask_sum = source_loss_mask.sum()
             if mask_sum == 0:
                 # If all points are masked, we skip the loss computation for this source
                 continue
-            losses[source_index_pair] = source_loss / mask_sum
+            losses[source_index_pair] = source_loss.sum() / mask_sum
 
         # Optional perceptual loss
         if hasattr(self, "perceptual_loss"):
@@ -271,8 +276,13 @@ class MultisourceDeterministicReconstructor(MultisourceAbstractReconstructor):
                 )
 
         # Evaluate the metrics
+        y_true = {
+            source_index_pair: batch[source_index_pair]["values"] for source_index_pair in batch
+        }
+        y_true = self.filter_output_variables(y_true)
+        masks = self.compute_loss_mask(batch, avail_flags)
         for metric_name, metric in self.metrics.items():
-            metric_res = metric(pred, batch, avail_flags)
+            metric_res = metric(pred, y_true, masks)
             # Compute the average metric over all sources
             avg_res = torch.stack(list(metric_res.values())).mean()
             self.log(
