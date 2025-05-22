@@ -10,7 +10,6 @@ constraint: null
 account: "xyw@v100"
 additional_parameters:
   hint: nomultithread
-  no_requeue: ""
 setup:
   - module purge
   - source ${oc.env:HOME}/.bash_profile

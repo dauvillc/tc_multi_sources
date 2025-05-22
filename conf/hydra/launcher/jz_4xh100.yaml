@@ -10,7 +10,6 @@ constraint: "h100"
 account: "xyw@h100"
 additional_parameters:
   hint: nomultithread
-  no_requeue: ""
 setup:
   - module purge
   - source ${oc.env:HOME}/.bash_profile
