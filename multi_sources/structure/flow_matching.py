@@ -59,6 +59,8 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
         ignore_land_pixels_in_loss=False,
         normalize_coords_across_sources=False,
         validation_dir=None,
+        compute_metrics_every_k_batches=5,
+        display_realizations_every_k_batches=3,
         metrics={},
     ):
         """
@@ -87,6 +89,10 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
                 If False, the coordinates will be normalized as sinusoïds.
             validation_dir (optional, str or Path): Directory where to save the validation plots.
                 If None, no plots will be saved.
+            compute_metrics_every_k_batches (int): Number of batches between two metric computations,
+                which require sampling with the ODE solver.
+            display_realizations_every_kp_batches (int): Number of metrics evaluations between
+                two realizations display.
             metrics (dict of str: callable): Metrics to compute during training and validation.
                 A metric should have the signature metric(y_pred, y_true, masks, **kwargs)
                 and return a dict {source: tensor of shape (batch_size,)}.
@@ -114,6 +120,8 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
         # Flow matching ingredients
         self.n_sampling_diffusion_steps = n_sampling_diffusion_steps
         self.fm_path = CondOTProbPath()
+        self.compute_metrics_every_k_batches = compute_metrics_every_k_batches
+        self.display_realizations_every_k_batches = display_realizations_every_k_batches
 
         # Optional: deterministic model usage
         if self.use_det_model:
@@ -474,42 +482,45 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
             sync_dist=True,
         )
 
-        if self.validation_dir is not None and batch_idx % 5 == 0:
-            # For every 30 batches, make multiple realizations of the solution
-            # for each sample in the batch and display them.
-            if batch_idx % 10 == 0:
-                avail_flags, time_grid, sol = self.sample(batch, n_realizations_per_sample=5)
-                display_realizations(
-                    sol,
-                    input_batch,
-                    avail_flags,
-                    self.validation_dir / f"realizations_{batch_idx}",
-                    display_fraction=0.25,
-                )
-            else:
-                # We'll only compute the metrics on one realization of the solution.
-                avail_flags, time_grid, sol = self.sample(batch, n_realizations_per_sample=1)
-            # Only keep one realization of the solution for the metrics.
-            sol = {source: sol[source][0] for source in sol}
+        if self.validation_dir is not None:
+            if batch_idx % self.compute_metrics_every_k_batches == 0:
+                # We'll sample a certain number of realizations for each sample.
+                # If we're displaying realizations, we'll sample 5 realizations. If we're
+                # simply computing the metrics, we'll sample 1 realization.
+                n_real = 1 if batch_idx % self.display_realizations_every_k_batches != 0 else 5
+                # Sample with the ODE solver
+                avail_flags, time_grid, sol = self.sample(batch, n_realizations_per_sample=n_real)
 
-            # Evaluate the metrics
-            y_true = {
-                source_index_pair: batch[source_index_pair]["values"]
-                for source_index_pair in batch
-            }
-            y_true = self.filter_output_variables(y_true)
-            masks = self.compute_loss_mask(batch, avail_flags)
-            for metric_name, metric in self.metrics.items():
-                metric_res = metric(sol, y_true, masks)
-                # Compute the average metric over all sources
-                avg_res = torch.stack(list(metric_res.values())).mean()
-                self.log(
-                    f"val_{metric_name}",
-                    avg_res,
-                    on_epoch=True,
-                    on_step=False,
-                    sync_dist=True,
-                )
+                # If required, display the realizations
+                if batch_idx % self.display_realizations_every_k_batches == 0:
+                    display_realizations(
+                        sol,
+                        input_batch,
+                        avail_flags,
+                        self.validation_dir / f"realizations_{batch_idx}",
+                        display_fraction=0.25,
+                    )
+
+                # Only keep one realization of the solution for the metrics.
+                sol = {source: sol[source][0] for source in sol}
+                # Evaluate the metrics
+                y_true = {
+                    source_index_pair: batch[source_index_pair]["values"]
+                    for source_index_pair in batch
+                }
+                y_true = self.filter_output_variables(y_true)
+                masks = self.compute_loss_mask(batch, avail_flags)
+                for metric_name, metric in self.metrics.items():
+                    metric_res = metric(sol, y_true, masks)
+                    # Compute the average metric over all sources
+                    avg_res = torch.stack(list(metric_res.values())).mean()
+                    self.log(
+                        f"val_{metric_name}",
+                        avg_res,
+                        on_epoch=True,
+                        on_step=False,
+                        sync_dist=True,
+                    )
 
         return loss
 
