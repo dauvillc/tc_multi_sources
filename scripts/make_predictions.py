@@ -9,8 +9,8 @@ from torch.utils.data import DataLoader
 
 from multi_sources.data_processing.collate_fn import multi_source_collate_fn
 from multi_sources.data_processing.writer import MultiSourceWriter
+from utils.cfg_utils import update
 from utils.checkpoints import load_experiment_cfg_from_checkpoint
-from utils.utils import update
 
 
 @hydra.main(version_base=None, config_path="../conf", config_name="make_predictions")

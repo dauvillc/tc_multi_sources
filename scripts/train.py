@@ -10,8 +10,8 @@ from omegaconf import DictConfig, OmegaConf
 from torch.utils.data import DataLoader
 
 from multi_sources.data_processing.collate_fn import multi_source_collate_fn
+from utils.cfg_utils import get_random_code
 from utils.checkpoints import load_experiment_cfg_from_checkpoint, load_weights_intersection
-from utils.utils import get_random_code
 
 
 @hydra.main(version_base=None, config_path="../conf", config_name="train")
