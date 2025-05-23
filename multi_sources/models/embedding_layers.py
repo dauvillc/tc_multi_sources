@@ -122,12 +122,16 @@ class SourcetypeEmbedding2d(nn.Module):
         self.coords_norm = nn.LayerNorm(coords_dim)
 
         # Conditioning embedding layers
-        ch_cond = 1 + pred_mean_channels  # landmask + predicted mean
-        self.cond_embedding = ConvPatchEmbedding2d(ch_cond, patch_size, values_dim, norm=False)
-        if self.use_diffusion_t:
-            self.diffusion_t_embedding = nn.Linear(1, values_dim)
-        if n_charac_vars > 0:
-            self.characs_embedding = nn.Linear(n_charac_vars, values_dim)
+        # - spatial conditioning
+        ch_spatial_cond = 1 + pred_mean_channels  # landmask + predicted mean
+        self.spatial_cond_embedding = ConvPatchEmbedding2d(
+            ch_spatial_cond, patch_size, values_dim, norm=False
+        )
+        # - 0D / 1D embeddings
+        # there's always at least 1 channel: the availability flag
+        ch_cond = 1 + n_charac_vars + int(self.use_diffusion_t)
+        self.cond_embedding = LinearEmbedding(ch_cond, values_dim, norm=False)
+        # final layer normalization for the conditioning
         self.cond_norm = nn.LayerNorm(values_dim)
 
     def forward(self, data):
@@ -139,6 +143,8 @@ class SourcetypeEmbedding2d(nn.Module):
                 - "values": (B, C, H, W) source pixel data.
                 - "avail_mask": (B, H, W) data availability mask.
                 - "landmask": (B, H, W) land-sea mask.
+                - "avail": (B,) tensor, valued 1 if the sample is available, -1 if missing,
+                    and 0 if masked (and to be reconstructed).
                 - Optionally "characs": (B, n_characs_vars) characteristic variables.
                 - Optionally "diffusion_t": (B,) diffusion timestep.
                 - Optionally "pred_mean": (B, C_out, H, W), predicted mean.
@@ -169,25 +175,33 @@ class SourcetypeEmbedding2d(nn.Module):
 
         # Conditioning tensor
         available_conditioning = []
-        b, c, h, w = values.shape
-        # First part: spatial conditionings (embedded together via patch embedding)
+        b = values.size(0)
+        # Spatial conditionings (embedded together via patch embedding)
         # - Land-sea mask
         spatial_cond = landmask
-        # Then, optionally, the predicted mean
+        # - optionally, the predicted mean
         if self.use_predicted_mean:
             spatial_cond = torch.cat([spatial_cond, predicted_mean], dim=1)
-        spatial_cond = self.cond_embedding(spatial_cond)
+        spatial_cond = self.spatial_cond_embedding(spatial_cond)
         available_conditioning.append(spatial_cond)
-        # Second part: diffusion timestep embedding
-        if self.use_diffusion_t:
-            diffusion_t = data["diffusion_t"].view(b, 1, 1, 1)
-            embedded_diff_t = self.diffusion_t_embedding(diffusion_t)
-            available_conditioning.append(embedded_diff_t)
-        # Third part: characteristic variables
+        # Non-spatial conditionings: we'll concatenate the ones that are available
+        # and embed them with a single linear embedding.
+        conds = []
+        # - Availability flag (always used)
+        conds.append(data["avail"].view(-1, 1))  # (B, 1)
+        # - Characteristic variables
         if "characs" in data and data["characs"] is not None:
-            embedded_characs = self.characs_embedding(data["characs"])
-            embedded_characs = embedded_characs.view(b, 1, 1, -1)
-            available_conditioning.append(embedded_characs)
+            conds.append(data["characs"])  # (B, n_characs_vars)
+        # - Diffusion timestep
+        if self.use_diffusion_t:
+            diffusion_t = data["diffusion_t"].view(b, 1)
+            conds.append(diffusion_t)
+        # Concatenate the conditioning tensors
+        conds = torch.cat(conds, dim=1)  # (B, ch_cond)
+        conds = self.cond_embedding(conds)  # (B, values_dim)
+        # Reshape to sum to the spatial dimensions
+        conds = conds.view(b, 1, 1, -1)
+        available_conditioning.append(conds)
         # Finally, sum the available conditioning tensors
         # and apply layer normalization.
         if len(available_conditioning) > 0:
@@ -250,12 +264,9 @@ class SourcetypeEmbedding0d(nn.Module):
         self.coords_norm = nn.LayerNorm(coords_dim)
 
         # Conditioning embedding layers
-        self.cond_embedding = nn.Linear(1, values_dim)
-        if self.use_diffusion_t:
-            self.diffusion_t_embedding = nn.Linear(1, values_dim)
-        if n_charac_vars > 0:
-            self.characs_embedding = nn.Linear(n_charac_vars, values_dim)
-        self.cond_norm = nn.LayerNorm(values_dim)
+        # there are always at least 2 channels: landmask and availability flag
+        ch_cond = 2 + pred_mean_channels + n_charac_vars + int(self.use_diffusion_t)
+        self.cond_embedding = LinearEmbedding(ch_cond, values_dim, norm=True)
 
     def forward(self, data):
         """
@@ -266,6 +277,8 @@ class SourcetypeEmbedding0d(nn.Module):
                 - "values": (B, C) source pixel data.
                 - "avail_mask": (B,) data availability mask.
                 - "landmask": (B,) land-sea mask.
+                - "avail": (B,) tensor, valued 1 if the sample is available, -1 if missing,
+                    and 0 if masked (and to be reconstructed).
                 - Optionally "characs": (B, n_characs_vars) characteristic variables.
                 - Optionally "diffusion_t": (B,) diffusion timestep.
                 - Optionally "pred_mean": (B, C_out), predicted mean.
@@ -294,20 +307,19 @@ class SourcetypeEmbedding0d(nn.Module):
         embedded_coords = self.coords_norm(embedded_coords)
 
         # Conditioning tensor
-        available_conditioning = []
-        b, c = values.shape
-        lm_cond = self.cond_embedding(landmask)
-        available_conditioning.append(lm_cond)
-        if self.use_diffusion_t:
-            diffusion_t = data["diffusion_t"].view(b, 1)
-            embedded_diff_t = self.diffusion_t_embedding(diffusion_t)
-            available_conditioning.append(embedded_diff_t)
+        available_conditioning = [data["landmask"].view(-1, 1), data["avail"].view(-1, 1)]
         if "characs" in data and data["characs"] is not None:
-            embedded_characs = self.characs_embedding(data["characs"])
-            available_conditioning.append(embedded_characs)
+            available_conditioning.append(data["characs"])
+        if self.use_diffusion_t:
+            diffusion_t = data["diffusion_t"].view(-1, 1)
+            available_conditioning.append(diffusion_t)
+        if self.use_predicted_mean:
+            available_conditioning.append(predicted_mean)
+        # Concatenate the conditioning tensors and embed them at once
         if len(available_conditioning) > 0:
-            conditioning = sum(available_conditioning)
-            conditioning = self.cond_norm(conditioning)
+            conditioning = torch.cat(available_conditioning, dim=1)
+            conditioning = self.cond_embedding(conditioning)
         else:
             conditioning = None
+
         return embedded_values, embedded_coords, conditioning
