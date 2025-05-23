@@ -41,11 +41,6 @@ def main(cfg: DictConfig):
     # Seed everything
     pl.seed_everything(cfg["seed"], workers=True)
 
-    # If running on a cluster, retrieve the number of cpus per task to adjust
-    # the number of workers in the dataloaders
-    if "hydra" in cfg and "launcher" in cfg["hydra"]:
-        cfg["dataloader"]["num_workers"] = cfg["hydra"]["launcher"]["cpus_per_task"] - 1
-
     # Create the training dataset and dataloader
     train_dataset = hydra.utils.instantiate(cfg["dataset"]["train"])
     train_dataloader = DataLoader(
