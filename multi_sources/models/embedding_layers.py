@@ -188,7 +188,7 @@ class SourcetypeEmbedding2d(nn.Module):
         # and embed them with a single linear embedding.
         conds = []
         # - Availability flag (always used)
-        conds.append(data["avail"].view(-1, 1))  # (B, 1)
+        conds.append(data["avail"].float().view(-1, 1))  # (B, 1)
         # - Characteristic variables
         if "characs" in data and data["characs"] is not None:
             conds.append(data["characs"])  # (B, n_characs_vars)
