@@ -53,6 +53,7 @@ class MultisourceDeterministicReconstructor(MultisourceAbstractReconstructor):
         forecasting_mode=False,
         perceptual_loss_weight=None,
         validation_dir=None,
+        use_modulation_in_output_layers=False,
         metrics={},
     ):
         """
@@ -88,6 +89,8 @@ class MultisourceDeterministicReconstructor(MultisourceAbstractReconstructor):
             metrics (dict of str: callable): Metrics to compute during training and validation.
                 A metric should have the signature metric(y_pred, y_true, masks, **kwargs)
                 and return a dict {source: tensor of shape (batch_size,)}.
+            use_modulation_in_output_layers (bool): If True, applies modulation to the values
+                embeddings in the output layers.
         """
         super().__init__(
             sources,
@@ -106,6 +109,7 @@ class MultisourceDeterministicReconstructor(MultisourceAbstractReconstructor):
             forecasting_mode=forecasting_mode,
             validation_dir=validation_dir,
             metrics=metrics,
+            use_modulation_in_output_layers=use_modulation_in_output_layers,
         )
 
         # [MASK] token that will replace the embeddings of the masked tokens

@@ -57,6 +57,8 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
         forecasting_mode=False,
         validation_dir=None,
         metrics={},
+        use_modulation_in_output_layers=False,
+        **kwargs,
     ):
         """
         Args:
@@ -89,6 +91,7 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
             metrics (dict of str: callable): Metrics to compute during training and validation.
                 A metric should have the signature metric(y_pred, y_true, masks, **kwargs)
                 and return a dict {source: tensor of shape (batch_size,)}.
+            use_modulation_in_output_layers (bool): If True, applies modulation to the output layers.
             **kwargs: Additional arguments to pass to the LightningModule constructor.
         """
         super().__init__(
@@ -113,7 +116,7 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
         self.source_select_gen = torch.Generator()
 
         # Initialize the embedding layers
-        self.init_embedding_layers()
+        self.init_embedding_layers(use_modulation_in_output_layers)
 
         self.mask_only_sources = None
         if mask_only_sources is not None:
@@ -124,7 +127,7 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
             self.mask_only_sources = set(mask_only_sources)
         self.forecasting_mode = forecasting_mode
 
-    def init_embedding_layers(self):
+    def init_embedding_layers(self, use_modulation_in_output_layers):
         """Initializes the weights of the embedding layers."""
         if not hasattr(self, "use_diffusion_t"):
             self.use_diffusion_t = False
@@ -161,6 +164,7 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
                         self.values_dim,
                         n_output_channels,
                         self.patch_size,
+                        use_modulation=use_modulation_in_output_layers,
                     )
                 elif source.dim == 0:
                     self.sourcetype_embeddings[source.type] = SourcetypeEmbedding0d(
@@ -175,6 +179,7 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
                     self.sourcetype_output_projs[source.type] = SourcetypeProjection0d(
                         self.values_dim,
                         n_output_channels,
+                        use_modulation=use_modulation_in_output_layers,
                     )
 
             else:

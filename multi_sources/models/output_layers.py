@@ -11,18 +11,22 @@ class SourcetypeProjection2d(nn.Module):
     that source's original space. Meant to be shared across all sources of the same type.
     """
 
-    def __init__(self, values_dim, out_channels, patch_size, **unused_kwargs):
+    def __init__(
+        self, values_dim, out_channels, patch_size, use_modulation=False, **unused_kwargs
+    ):
         """
         Args:
             values_dim (int): Dimension of the values embeddings.
             out_channels (int): Number of channels in the output space.
             patch_size (int): Size of the embedding patches.
+            use_modulation (bool): If True, applies modulation to the values embeddings.
         """
         super().__init__()
         self.patch_size = patch_size
 
         self.norm = nn.LayerNorm(values_dim)
-        self.modulation = nn.Sequential(nn.SiLU(), nn.Linear(values_dim, 2 * values_dim))
+        if use_modulation:
+            self.modulation = nn.Sequential(nn.SiLU(), nn.Linear(values_dim, 2 * values_dim))
         # Subpixel convolution to project the latent space to the output space
         self.conv = nn.Conv2d(
             in_channels=values_dim,
@@ -50,9 +54,14 @@ class SourcetypeProjection2d(nn.Module):
         Returns:
             torch.Tensor of shape (B, channels, H, W) containing the projected output.
         """
-        # Apply the modulation to the values embeddings
-        shift, scale = self.modulation(cond).chunk(2, dim=-1)
-        v = (1 + scale) * self.norm(values) + shift
+        v = values
+        if hasattr(self, "modulation"):
+            # Apply the modulation to the values embeddings
+            shift, scale = self.modulation(cond).chunk(2, dim=-1)
+            v = (1 + scale) * self.norm(values) + shift
+        else:
+            # Normalize the values embeddings
+            v = self.norm(values)
         # Transpose x from (B, h, w, Dv) to (B, Dv, h, w)
         v = v.permute(0, 3, 1, 2)
         # Deconvolve the latent space using subpixel convolutions
@@ -68,15 +77,19 @@ class SourcetypeProjection0d(nn.Module):
     """Receives the embedded values and conditioning of a 0D source and projects them to
     that source's original space. Meant to be shared across all sources of the same type."""
 
-    def __init__(self, values_dim, out_channels, **unused_kwargs):
+    def __init__(self, values_dim, out_channels, use_modulation=False, **unused_kwargs):
         """Args:
         values_dim (int): Dimension of the values embeddings.
         out_channels (int): Number of channels in the output space.
+        use_modulation (bool): If True, applies modulation to the values embeddings.
         **unused_kwargs: Unused arguments.
         """
         super().__init__()
         self.norm = nn.LayerNorm(values_dim)
-        self.modulation = nn.Sequential(nn.SiLU(), nn.Linear(values_dim, 2 * values_dim))
+        if use_modulation:
+            self.modulation = nn.Sequential(nn.SiLU(), nn.Linear(values_dim, 2 * values_dim))
+        else:
+            self.modulation = nn.Identity()
         self.output_proj = nn.Linear(values_dim, out_channels)
 
     def forward(self, values, cond, **unused_kwargs):
@@ -87,8 +100,13 @@ class SourcetypeProjection0d(nn.Module):
             torch.Tensor of shape (B, C) containing the projected output.
         """
         # Apply the modulation to the values embeddings
-        shift, scale = self.modulation(cond).chunk(2, dim=-1)
-        v = (1 + scale) * self.norm(values) + shift
+        v = values
+        if hasattr(self, "modulation"):
+            shift, scale = self.modulation(cond).chunk(2, dim=-1)
+            v = (1 + scale) * self.norm(values) + shift
+        else:
+            # Normalize the values embeddings
+            v = self.norm(values)
         # Project to output space
         v = self.output_proj(v)
         return v

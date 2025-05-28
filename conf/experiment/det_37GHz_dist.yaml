@@ -19,5 +19,8 @@ dataset:
     source_types_max_avail:
       pmw: 1
 
+model:
+  dropout: 0.1
+
 trainer:
   strategy: ddp

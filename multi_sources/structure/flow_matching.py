@@ -62,6 +62,7 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
         compute_metrics_every_k_batches=5,
         display_realizations_every_k_batches=3,
         metrics={},
+        use_modulation_in_output_layers=False,
     ):
         """
         Args:
@@ -96,6 +97,8 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
             metrics (dict of str: callable): Metrics to compute during training and validation.
                 A metric should have the signature metric(y_pred, y_true, masks, **kwargs)
                 and return a dict {source: tensor of shape (batch_size,)}.
+            use_modulation_in_output_layers (bool): If True, the output layers will apply
+                modulation to the values embeddings before projecting them to the output space.
             **kwargs: Additional arguments to pass to the LightningModule constructor.
         """
         self.use_diffusion_t = True
@@ -115,6 +118,7 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
             normalize_coords_across_sources=normalize_coords_across_sources,
             validation_dir=validation_dir,
             metrics=metrics,
+            use_modulation_in_output_layers=use_modulation_in_output_layers,
         )
 
         # Flow matching ingredients
@@ -249,9 +253,7 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
             if pure_noise:
                 t = torch.zeros(batch_size, device=device)  # Means x_t = x_0
             else:
-                # Sigmoid of a standard gaussian to favor intermediate timesteps,
-                # following Stable Diffusion 3.
-                t = torch.normal(mean=0, std=1, size=(batch_size,), device=device).sigmoid()
+                t = torch.rand(batch_size, device=device)  # Random diffusion timestep
             # Generate random noise with the same shape as the values
             noise = torch.randn_like(masked_data["values"])
             # Compute the noised values associated with the diffusion timesteps
@@ -291,13 +293,13 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
         pred = self.backbone(x)
 
         for source_index_pair, v in pred.items():
-            # Embedded coords for the final modulation
-            c = x[source_index_pair]["embedded_coords"]
+            # Embedded condtioning for the final modulation.
+            cond = x[source_index_pair]["conditioning"]
             # Project from latent values space to output space using the output layer
             # corresponding to the source type
             source_name = source_index_pair[0]  # Extract source name from tuple
             src_type = self.sources[source_name].type
-            pred[source_index_pair] = self.sourcetype_output_projs[src_type](v, c)
+            pred[source_index_pair] = self.sourcetype_output_projs[src_type](v, cond)
         # For 2D sources, remove the padding
         for source_index_pair, spatial_shape in spatial_shapes.items():
             pred[source_index_pair] = pred[source_index_pair][
@@ -498,7 +500,7 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
                         input_batch,
                         avail_flags,
                         self.validation_dir / f"realizations_{batch_idx}",
-                        display_fraction=0.25,
+                        display_fraction=1.0,
                     )
 
                 # Only keep one realization of the solution for the metrics.

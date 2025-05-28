@@ -2,7 +2,7 @@
 defaults:
   - override /paths: jz
   - override /dataloader: jz
-  - override /sources: 37GHz_dist
+  - override /sources: sat_interp_37GHz
   - override /lightning_module: flow_matching
   - override /lr_scheduler: cosine_warmup_100epochs
   - override /metrics: default_fm
@@ -14,7 +14,7 @@ wandb:
 
 dataset:
   train:
-    dt_max: 24
+    dt_max: 6
     min_available_sources: 2
     source_types_max_avail:
       pmw: 1
