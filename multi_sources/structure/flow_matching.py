@@ -63,6 +63,7 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
         display_realizations_every_k_batches=3,
         metrics={},
         use_modulation_in_output_layers=False,
+        det_model_kwargs={},
     ):
         """
         Args:
@@ -99,6 +100,8 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
                 and return a dict {source: tensor of shape (batch_size,)}.
             use_modulation_in_output_layers (bool): If True, the output layers will apply
                 modulation to the values embeddings before projecting them to the output space.
+            det_model_kwargs (dict): Arguments to pass to the deterministic model
+                constructor, if using a deterministic model.
             **kwargs: Additional arguments to pass to the LightningModule constructor.
         """
         self.use_diffusion_t = True
@@ -135,45 +138,16 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
                 ckpt_dir, use_det_model_from_run
             )
             self.det_model = instantiate(
-                det_cfg["lightning_module"], sources, det_cfg, validation_dir=validation_dir
+                det_cfg["lightning_module"],
+                sources,
+                det_cfg,
+                validation_dir=validation_dir,
+                **det_model_kwargs,
             )
-            former_dict = torch.load(ckpt_path, map_location="cpu", weights_only=False)[
+            state_dict = torch.load(ckpt_path, map_location="cpu", weights_only=False)[
                 "state_dict"
             ]
-            current_dict = self.det_model.state_dict()
-            # Note: self.det_model is NOT an exact copy of the original deterministic model,
-            # since it was created with the current configuration.
-            # If some sources that were used in the deterministic model are not used
-            # here, the weights for those sources' embedding/output layers will be missing
-            # from self.det_model. Thus we need to remove those weights from the checkpoint
-            # before loading it into self.det_model.
-            new_dict = {}
-            for k, v in former_dict.items():
-                if k in current_dict:
-                    new_dict[k] = v
-                else:
-                    # If the key is not in the current model, there are two cases:
-                    # - It's a source-related layer (embedding/output_proj) that is not used here
-                    #   (fine, we can ignore it).
-                    # - It's a layer that is not source-related (e.g. backbone) that is missing
-                    #   from the current model (not fine, we need to raise an error).
-                    if "embedding" in k or "output_proj" in k:
-                        continue
-                    else:
-                        raise ValueError(
-                            f"Layer {k} is not present in the current model. "
-                            "Please use a deterministic model that has been trained on all sources."
-                        )
-            # Note 2: If there are new sources in the current model (that the former det model
-            # hasn't been trained on), we raise an error: we expect the deterministic model
-            # to be pre-trained on at least all of the sources used in the current model.
-            for k, v in current_dict.items():
-                if k not in former_dict and ("output_proj" in k or "embedding" in k):
-                    raise ValueError(
-                        f"Source {k} is not present in the deterministic model. "
-                        "Please use a deterministic model that has been trained on all sources."
-                    )
-            self.det_model.load_state_dict(new_dict)
+            self.det_model.load_state_dict(state_dict, strict=True)
             self.det_model.eval()
             self.det_model.requires_grad_(False)
 
