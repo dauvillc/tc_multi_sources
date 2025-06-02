@@ -6,11 +6,11 @@ defaults:
   - override /lightning_module: flow_matching
   - override /lr_scheduler: cosine_warmup_100epochs
   - override /metrics: default_fm
-  - override /model: msvit_8b_d256
+  - override /model: msvit_12b_d512
 
 wandb:
-  name: diff_37GHz
-  group: diff_37GHz
+  name: diff_37GHz_dist
+  group: diff_37GHz_dist
 
 dataset:
   train:
