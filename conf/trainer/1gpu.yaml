@@ -1,5 +1,5 @@
 max_epochs: ${lr_scheduler.first_cycle_steps}
 accelerator: gpu
 devices: 1
-precision: 16-mixed
+precision: bf16
 gradient_clip_val: 1.0
