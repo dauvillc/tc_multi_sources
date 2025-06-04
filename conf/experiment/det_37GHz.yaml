@@ -15,6 +15,11 @@ dataset:
   train:
     dt_max: 24
     min_available_sources: 2
+    source_types_max_avail:
+      pmw: 1
+
+model:
+  dropout: 0.1
 
 trainer:
   strategy: ddp
