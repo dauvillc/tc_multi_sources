@@ -54,7 +54,6 @@ class SourcetypeProjection2d(nn.Module):
         Returns:
             torch.Tensor of shape (B, channels, H, W) containing the projected output.
         """
-        v = values
         if hasattr(self, "modulation"):
             # Apply the modulation to the values embeddings
             shift, scale = self.modulation(cond).chunk(2, dim=-1)
