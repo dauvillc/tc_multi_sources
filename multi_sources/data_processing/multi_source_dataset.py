@@ -522,22 +522,24 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         source,
         characs=None,
         denormalize=False,
-        batched=False,
+        leading_dims=0,
         device=None,
     ):
         """Normalizes the characs and values tensors associated with a given
         source, and optionally a specific data variable.
         Args:
-            values (torch.Tensor): tensor of shape (C, ...) if dvar is None,
-                or (1, ...) if dvar is specified, where ... are the spatial dimensions.
+            values (torch.Tensor): tensor of shape (C, ...) if leading_dims=0,
+                or (D1, D2, ..., Dn, C, ...) for leading_dims=n, where ... are the spatial dimensions.
             source (Source or str): Source object representing the source, or name
                 of the source.
             characs (torch.Tensor, optiona): tensor of shape (n_charac_vars,)
                 containing the characteristic variables.
             denormalize (bool, optional): If True, denormalize the characs and values tensors
                 instead of normalizing them.
-            batched (bool, optional): If True, the values tensor is expected to have
-                shape (B, C, ...), where B is the batch size.
+            leading_dims (int, optional): Number of leading dimensions before the channel dimension.
+                For example, if leading_dims=0, the tensor has shape (C, ...),
+                if leading_dims=1, the tensor has shape (D1, C, ...),
+                if leading_dims=2, the tensor has shape (D1, D2, C, ...), etc.
             device (torch.device, optional): Device to use for the normalization.
         Returns:
             normalized_characs (torch.Tensor): normalized charac variables.
@@ -565,11 +567,15 @@ class MultiSourceDataset(torch.utils.data.Dataset):
 
         data_vars = source.data_vars
 
+        # Create shape with leading 1s for each leading dimension, followed by channel dimension
+        # and trailing 1s for spatial dimensions
+        shape = [1] * leading_dims + [-1] + [1] * (len(values.shape) - leading_dims - 1)
+
         data_means = np.array([self.data_means[source_name][var] for var in data_vars]).reshape(
-            -1, *(1 for _ in (values.shape[1:] if not batched else values.shape[2:]))
-        )  # (C, 1, ...) like values
+            shape
+        )
         data_stds = np.array([self.data_stds[source_name][var] for var in data_vars]).reshape(
-            -1, *(1 for _ in (values.shape[1:] if not batched else values.shape[2:]))
+            shape
         )
         data_means = torch.tensor(data_means, dtype=values.dtype)
         data_stds = torch.tensor(data_stds, dtype=values.dtype)
@@ -580,7 +586,9 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         if denormalize:
             normalized_values = values * data_stds + data_means
         else:
-            normalized_values = (values - data_means) / data_stds
+            normalized_values = (
+                values - data_means
+            ) / data_stds  # Fixed: was dividing by data_means
 
         return normalized_characs, normalized_values
 

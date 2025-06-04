@@ -28,7 +28,7 @@ class MultiSourceWriter(BasePredictionWriter):
     source_name, avail, batch_idx, index_in_batch, dt, channels, spatial_shape.
     """
 
-    def __init__(self, root_dir, dt_max, dataset=None):
+    def __init__(self, root_dir, dt_max, dataset=None, multiple_realizations=False):
         """
         Args:
             root_dir (str or Path): The root directory where the predictions will be written.
@@ -37,11 +37,15 @@ class MultiSourceWriter(BasePredictionWriter):
                 normalize(values, source_name, denorm=False) that can be used to denormalize the
                 values before writing them to disk. If None, the values will
                 not be denormalized.
+            multiple_realizations (bool): If True, expects the predictions to include multiple
+                realizations for each source. The values tensors are expected to have an additional
+                leading dimension for the realizations.
         """
         super().__init__(write_interval="batch")
         self.root_dir = Path(root_dir)
         self.dt_max = dt_max
         self.dataset = dataset
+        self.multiple_realizations = multiple_realizations
 
     def setup(self, trainer, pl_module, stage):
         self.root_dir.mkdir(parents=True, exist_ok=True)
@@ -58,19 +62,20 @@ class MultiSourceWriter(BasePredictionWriter):
         self, trainer, pl_module, prediction, batch_indices, batch, batch_idx, dataloader_idx
     ):
         pred, avail_tensors = prediction
+
         # We'll write to the info file in append mode
         info_file = self.root_dir / "info.csv"
         for source_index_pair, data in batch.items():
             source_name, index = source_index_pair  # Unpack the tuple
             with torch.no_grad():
-                # If a dataset is provided, denormalize the values
+                # DENORMALIZATION
                 if self.dataset is not None:
                     device = data["values"].device
                     _, targets = self.dataset.normalize(
                         data["values"],
                         source_name,  # Use only source_name for normalization
                         denormalize=True,
-                        batched=True,
+                        leading_dims=1,
                         device=device,
                     )
                     if source_index_pair in pred:
@@ -78,37 +83,40 @@ class MultiSourceWriter(BasePredictionWriter):
                             pred[source_index_pair],
                             source_name,  # Use only source_name for normalization
                             denormalize=True,
-                            batched=True,
+                            leading_dims=1 + int(self.multiple_realizations),
                             device=device,
                         )
+
                 # WRITING TARGETS
                 # Create directory structure with source_name/index to organize by both source and index
                 target_dir = self.targets_dir / source_name / str(index)
                 target_dir.mkdir(parents=True, exist_ok=True)
-                targets = targets.detach().cpu().numpy()
+                targets = targets.detach().cpu().float().numpy()
                 # Append the lat/lon to the targets
-                latlon = data["coords"].detach().cpu().numpy()
-                dt = data["dt"].detach().cpu().numpy() * self.dt_max
+                latlon = data["coords"].detach().cpu().float().numpy()
+                dt = data["dt"].detach().cpu().float().numpy() * self.dt_max
                 dt = pd.to_timedelta(dt).total_seconds()
                 # The dimensions of the Datasets we'll create depend on the
                 # dimensionality of the source.
                 if len(targets.shape) == 4:  # 2d sources -> (B, C, H, W)
-                    dims = ("samples", "H", "W")
+                    dims = ["samples", "H", "W"]
                 elif len(targets.shape) == 2:  # 0d sources -> (B, C)
-                    dims = "samples"
+                    dims = ["samples"]
                 # Fetch the names of the variables in the source
                 source_obj = pl_module.sources[source_name]
                 input_var_names = [v for v in source_obj.data_vars]
-                # Create xarray Dataset for targets
+                # Create xarray Dataset for targets. Each channel in the targets
+                # is a variable in the Dataset.
+                coords = {
+                    "samples": np.arange(targets.shape[0]),
+                    "lat": (dims, latlon[:, 0]),
+                    "lon": (dims, latlon[:, 1]),
+                    "dt": (("samples"), dt),
+                    "index": index,  # Add observation index as a coordinate
+                }
                 targets_ds = xr.Dataset(
                     {var: (dims, targets[:, i]) for i, var in enumerate(input_var_names)},
-                    coords={
-                        "samples": np.arange(targets.shape[0]),
-                        "lat": (dims, latlon[:, 0]),
-                        "lon": (dims, latlon[:, 1]),
-                        "dt": (("samples"), dt),
-                        "index": index,  # Add observation index as a coordinate
-                    },
+                    coords=coords,
                 )
                 targets_ds.to_netcdf(target_dir / f"{batch_idx}.nc")
 
@@ -118,41 +126,50 @@ class MultiSourceWriter(BasePredictionWriter):
                     # skip it.
                     output_dir = self.outputs_dir / source_name / str(index)
                     output_dir.mkdir(parents=True, exist_ok=True)
-                    outputs = pred[source_index_pair].detach().cpu().numpy()
+                    # Only keep variables that are in the source's output_vars
+                    outputs = pred[source_index_pair].detach().cpu().float().numpy()
                     output_var_names = [v for v in source_obj.output_vars]
-                    # Debug, to be removed
-                    if len(outputs.shape) == 4 and outputs.shape[1] > len(output_var_names):
-                        outputs = outputs[:, source_obj.get_output_variables_mask(), ...]
-                    # Create xarray Dataset for outputs
-                    outputs_ds = xr.Dataset(
-                        {var: (dims, outputs[:, i]) for i, var in enumerate(output_var_names)},
-                        coords={
-                            "samples": np.arange(outputs.shape[0]),
-                            "lat": (dims, latlon[:, 0]),
-                            "lon": (dims, latlon[:, 1]),
-                            "dt": (("samples"), dt),
-                            "index": index,  # Add observation index as a coordinate
-                        },
-                    )
+                    # Create xarray Dataset for outputs. Same principle as for targets.
+                    # However, the predictions may have an additional dimension
+                    # for multiple realizations.
+                    if self.multiple_realizations:
+                        dims = ["realization"] + dims
+                        coords["realization"] = np.arange(outputs.shape[0])
+                        outputs_ds = xr.Dataset(
+                            {
+                                var: (dims, outputs[:, :, i])  # Realization, batch, channel
+                                for i, var in enumerate(output_var_names)
+                            },
+                            coords=coords,
+                        )
+                    else:
+                        outputs_ds = xr.Dataset(
+                            {
+                                var: (dims, outputs[:, i])  # Batch, channel
+                                for i, var in enumerate(output_var_names)
+                            },
+                            coords=coords,
+                        )
                     outputs_ds.to_netcdf(output_dir / f"{batch_idx}.nc")
 
                 batch_size = latlon.shape[0]
-                # We'll also save the time deltas of the samples. The deltas
-                # in data['dt'] are coded as a fraction between 0 and 1 of the
-                # maximum datetime in the dataset. We'll convert them into
-                # actual Timedeltas here.
-                dt = data["dt"].detach().cpu().numpy() * self.dt_max
+                # Convert the time deltas from fractions of dt_max to absolute durations
+                # in hours.
+                dt = data["dt"].detach().cpu().float().numpy() * self.dt_max
                 dt = pd.Series(dt, name="dt")
+                # Store the information about that source's data for that batch
+                # in the info DataFrame.
                 info_df = pd.DataFrame(
                     {
                         "source_name": [source_name] * batch_size,
                         "index": [index] * batch_size,  # Add observation index
-                        "avail": avail_tensors[source_index_pair].detach().cpu().numpy(),
+                        "avail": avail_tensors[source_index_pair].detach().cpu().float().numpy(),
                         "batch_idx": [batch_idx] * batch_size,
                         "index_in_batch": np.arange(batch_size),
                         "dt": dt,
                         "channels": [targets.shape[1]] * batch_size,
                         "spatial_shape": [targets.shape[2:]] * batch_size,
+                        "has_multiple_realizations": [self.multiple_realizations] * batch_size,
                     },
                 )
                 include_header = not info_file.exists()

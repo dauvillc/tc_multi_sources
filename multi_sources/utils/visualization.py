@@ -55,10 +55,10 @@ def display_solution_html(batch, sol, time_grid, sample_index=0):
         for i, (source_index_pair, source_data) in enumerate(available_sources.items(), start=1):
             # Get prediction and ground truth
             pred = (
-                sol[source_index_pair][t, sample_index, 0].detach().cpu().numpy()
+                sol[source_index_pair][t, sample_index, 0].detach().cpu().float().numpy()
             )  # Use sample_index
             true = (
-                source_data["values"][sample_index, 0].detach().cpu().numpy()
+                source_data["values"][sample_index, 0].detach().cpu().float().numpy()
             )  # Use sample_index
 
             # For 2D sources
@@ -95,9 +95,11 @@ def display_solution_html(batch, sol, time_grid, sample_index=0):
     # Add the initial data to the figure
     for i, (source_index_pair, source_data) in enumerate(available_sources.items(), start=1):
         pred_init = (
-            sol[source_index_pair][0, sample_index, 0].detach().cpu().numpy()
+            sol[source_index_pair][0, sample_index, 0].detach().cpu().float().numpy()
         )  # Use sample_index
-        true = source_data["values"][sample_index, 0].detach().cpu().numpy()  # Use sample_index
+        true = (
+            source_data["values"][sample_index, 0].detach().cpu().float().numpy()
+        )  # Use sample_index
 
         if len(pred_init.shape) == 2:
             fig.add_trace(
@@ -248,12 +250,16 @@ def display_realizations(
                             # The images' borders may be NaN due to the batching system.
                             # Crop the NaN borders to display the images correctly.
                             pred = crop_nan_border(coords, [pred.unsqueeze(0)])[0].squeeze(0)
-                            pred = pred.detach().cpu().numpy()
+                            pred = pred.detach().cpu().float().numpy()
                             ax.imshow(pred, cmap="viridis")
                             # Add coords as axis labels
                             h, w = pred.shape
-                            x_vals = np.nanmean(coords[1, :, :w].detach().cpu().numpy(), axis=0)
-                            y_vals = np.nanmean(coords[0, :h, :].detach().cpu().numpy(), axis=1)
+                            x_vals = np.nanmean(
+                                coords[1, :, :w].detach().cpu().float().numpy(), axis=0
+                            )
+                            y_vals = np.nanmean(
+                                coords[0, :h, :].detach().cpu().float().numpy(), axis=1
+                            )
                             step_x = max(1, w // 5)
                             step_y = max(1, h // 5)
                             ax.set_xticks(range(0, w, step_x))
@@ -280,11 +286,11 @@ def display_realizations(
 
                 if len(true.shape) == 2:
                     true = crop_nan_border(coords, [true.unsqueeze(0)])[0].squeeze(0)
-                    true = true.detach().cpu().numpy()
+                    true = true.detach().cpu().float().numpy()
                     ax.imshow(true, cmap="viridis")
                     h, w = true.shape
-                    x_vals = np.nanmean(coords[1, :, :w].detach().cpu().numpy(), axis=0)
-                    y_vals = np.nanmean(coords[0, :h, :].detach().cpu().numpy(), axis=1)
+                    x_vals = np.nanmean(coords[1, :, :w].detach().cpu().float().numpy(), axis=0)
+                    y_vals = np.nanmean(coords[0, :h, :].detach().cpu().float().numpy(), axis=1)
                     step_x = max(1, w // 5)
                     step_y = max(1, h // 5)
                     ax.set_xticks(range(0, w, step_x))

@@ -24,3 +24,5 @@ trainer:
 dataloader:
   num_workers: 9
 
+writer: {}
+

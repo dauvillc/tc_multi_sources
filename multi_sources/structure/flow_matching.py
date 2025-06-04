@@ -61,6 +61,7 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
         validation_dir=None,
         compute_metrics_every_k_batches=5,
         display_realizations_every_k_batches=3,
+        n_realizations_per_sample=5,
         metrics={},
         use_modulation_in_output_layers=False,
         det_model_kwargs={},
@@ -95,6 +96,8 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
                 which require sampling with the ODE solver.
             display_realizations_every_kp_batches (int): Number of metrics evaluations between
                 two realizations display.
+            n_realizations_per_sample (int): Number of realizations to sample for each sample
+                during validation or testing.
             metrics (dict of str: callable): Metrics to compute during training and validation.
                 A metric should have the signature metric(y_pred, y_true, masks, **kwargs)
                 and return a dict {source: tensor of shape (batch_size,)}.
@@ -129,6 +132,7 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
         self.fm_path = CondOTProbPath()
         self.compute_metrics_every_k_batches = compute_metrics_every_k_batches
         self.display_realizations_every_k_batches = display_realizations_every_k_batches
+        self.n_realizations_per_sample = n_realizations_per_sample
 
         # Optional: deterministic model usage
         if self.use_det_model:
@@ -463,7 +467,10 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
                 # We'll sample a certain number of realizations for each sample.
                 # If we're displaying realizations, we'll sample 5 realizations. If we're
                 # simply computing the metrics, we'll sample 1 realization.
-                n_real = 1 if batch_idx % self.display_realizations_every_k_batches != 0 else 5
+                if batch_idx % self.display_realizations_every_k_batches == 0:
+                    n_real = self.n_realizations_per_sample
+                else:
+                    n_real = 1
                 # Sample with the ODE solver
                 avail_flags, time_grid, sol = self.sample(batch, n_realizations_per_sample=n_real)
 
@@ -501,14 +508,25 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
         return loss
 
     def predict_step(self, batch, batch_idx):
-        """Defines a prediction step for the model.
+        """Samples with the ODE solver and returns the predicted values
+        for each source, as well as the availability flags after masking.
         Returns:
-            batch (dict of str to dict of str to tensor): The input batch.
-            pred (dict of str to tensor): The predicted values.
-            avail_tensors (dict of str to tensor): The availability tensors for each source.
+            sol (dict): The predicted values for each source,
+                as tensors of shape (R, B, C, ...),
+                where R is the number of realizations sampled.
+            avail_flags (dict): The availability flags for each source,
+                after masking, as tensors of shape (B,).
         """
-        # TODO
-        pass
+        batch = self.preproc_input(batch)
+        # Mask the sources
+        masked_x, path_samples = self.mask(batch)
+
+        # Sample with the ODE solver
+        avail_flags, time_grid, sol = self.sample(
+            masked_x, n_realizations_per_sample=self.n_realizations_per_sample
+        )
+
+        return sol, avail_flags
 
 
 def load_model(checkpoint_path):

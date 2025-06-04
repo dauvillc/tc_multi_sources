@@ -56,7 +56,7 @@ def main(cfg: DictConfig):
     pl_module.load_state_dict(ckpt["state_dict"])
 
     # Custom BasePredictionWriter to save the preds and targets with metadata (eg coords).
-    writer = MultiSourceWriter(run_results_dir, dataset.dt_max, dataset=dataset)
+    writer = MultiSourceWriter(run_results_dir, dataset.dt_max, dataset=dataset, **cfg["writer"])
 
     trainer = pl.Trainer(
         **cfg["trainer"],
