@@ -65,6 +65,9 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
         metrics={},
         use_modulation_in_output_layers=False,
         det_model_kwargs={},
+        cfg_train_uncond_proba=0.0,
+        cfg_scale=None,
+        **kwargs,
     ):
         """
         Args:
@@ -105,6 +108,10 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
                 modulation to the values embeddings before projecting them to the output space.
             det_model_kwargs (dict): Arguments to pass to the deterministic model
                 constructor, if using a deterministic model.
+            cfg_train_uncond_proba (float): Probability of dropping the other sources
+                when training, for classifier-free guidance.
+            cfg_scale (float): Guidance scale for classifier-free guidance.
+                If None, no guidance is applied.
             **kwargs: Additional arguments to pass to the LightningModule constructor.
         """
         self.use_diffusion_t = True
@@ -133,6 +140,8 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
         self.compute_metrics_every_k_batches = compute_metrics_every_k_batches
         self.display_realizations_every_k_batches = display_realizations_every_k_batches
         self.n_realizations_per_sample = n_realizations_per_sample
+        self.cfg_train_uncond_proba = cfg_train_uncond_proba
+        self.cfg_scale = cfg_scale
 
         # Optional: deterministic model usage
         if self.use_det_model:
@@ -185,7 +194,6 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
         # First step: for each sample in the batch, select a subset of the sources to mask.
         avail_flags = super().select_sources_to_mask(x, masking_seed)
         # avail_flags[s][i] == 0 if the source s should be masked.
-        batch_size = avail_flags[list(avail_flags.keys())[0]].shape[0]
         device = next(self.parameters()).device
 
         # Second step: create a copy of the input dict and update the availability flag
@@ -206,34 +214,26 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
         if self.use_det_model:
             # Compute the deterministic predictions (which are set to 0 for unmasked sources)
             masked_x = self.make_deterministic_predictions(masked_x)
-            # Update the values of the sources with the predicted values
+            # Convert the target values to the residuals.
             for source_index_pair, data in masked_x.items():
                 pred_mean = masked_x[source_index_pair]["pred_mean"]
-                # Update the values with the predicted values
-                masked_x[source_index_pair]["pred_mean"] = pred_mean
-                # Set the values of the masked sources to the residual
-                is_masked = masked_x[source_index_pair]["avail"] == 0
-                is_masked = is_masked.view(batch_size, *([1] * (len(data["values"].shape) - 1)))
-                masked_x[source_index_pair]["values"] = torch.where(
-                    is_masked,
-                    data["values"] - pred_mean,
-                    data["values"],
-                )
+                # Note: pred_mean is set to 0 for unmasked sources, so no change in this case.
+                masked_x[source_index_pair]["values"] -= pred_mean
 
         # Last step: for each masked source, compute the noised values
         # and the diffusion timestep at which the source was masked.
         path_samples = {}
         for source_index_pair, masked_data in masked_x.items():
-            # The sources should be noised if they are masked.
-            should_mask = avail_flags[source_index_pair] == 0
-
             # NOISING
+            batch_size = masked_data["values"].shape[0]
             if pure_noise:
                 t = torch.zeros(batch_size, device=device)  # Means x_t = x_0
             else:
                 t = torch.rand(batch_size, device=device)  # Random diffusion timestep
             # Generate random noise with the same shape as the values
-            noise = torch.randn_like(masked_data["values"])
+            noise = torch.randn_like(masked_data["values"], device=device)
+            # The sources should be noised if they are masked.
+            should_mask = avail_flags[source_index_pair] == 0
             # Compute the noised values associated with the diffusion timesteps
             path_sample = self.fm_path.sample(
                 t=t, x_0=noise, x_1=masked_data["values"].detach().clone()
@@ -255,7 +255,9 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
         Args:
             x (dict): The input sources, masked, with (source_name, index) tuples as keys.
         Returns:
-            y (dict): The predicted values for each source.
+            y (dict): The predicted values for each source. If using CFG, the output
+                tensors will be double batches, where the first and second halves
+                correspond to the original batch and the unconditional copy, respectively.
         """
         # Save the shape of the tokens before they're embedded, so that we can
         # later remove the padding.
@@ -345,7 +347,8 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
             seed = torch.Generator().seed()
             all_sols = []  # Will store each realization of the solution
             for _ in range(n_realizations_per_sample):
-                # Mask the sources with pure noise
+                # Mask the sources with pure noise. If using CFG, also generate an unconditional version
+                # of the samples in a double batch.
                 masked_batch, path_samples = self.mask(batch, pure_noise=True, masking_seed=seed)
 
                 x_0 = {
@@ -367,11 +370,26 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
                         batch_t[source_index_pair]["values"][is_solved] = x_ts[is_solved]
                         batch_t[source_index_pair]["diffusion_t"][is_solved] = t
                     # Run the model
-                    vf = self.forward(batch_t)
+                    if self.cfg_scale is not None:
+                        # If using classifier-free guidance (CFG), we need to create a double batch
+                        # where the first half contains the original batch and the second half
+                        # contains an unconditional copy of the batch.
+                        vf = self.forward(self.to_double_batch(batch_t))
+                        # Split the conditional and unconditional batches and apply the
+                        # guidance scale.
+                        if self.cfg_scale is not None:
+                            half_batch = next(iter(vf.values())).shape[0] // 2
+                            for source_index_pair in vf:
+                                cond = vf[source_index_pair][:half_batch]
+                                uncond = vf[source_index_pair][half_batch:]
+                                vf[source_index_pair] = cond + self.cfg_scale * (cond - uncond)
+                    else:
+                        vf = self.forward(batch_t)
                     # Where the sources are not being solved, we'll set the velocity field to zero,
                     # so that those examples don't change in the solution.
                     for source_index_pair in vf:
                         vf[source_index_pair][batch_t[source_index_pair]["avail"] != 0] = 0
+
                     return vf
 
                 # Solve the ODE
@@ -427,6 +445,14 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
         batch_size = batch[list(batch.keys())[0]]["values"].shape[0]
         batch = self.preproc_input(batch)
         masked_x, path_samples = self.mask(batch)
+
+        # Classifier-free guidance (CFG) training
+        if self.cfg_train_uncond_proba > 0.0:
+            # Randomly select a subset of the batch to make unconditional
+            any_tensor = next(iter(masked_x.values()))["values"]
+            batch_size, device = any_tensor.shape[0], any_tensor.device
+            which_samples = torch.rand(batch_size, device=device) < self.cfg_train_uncond_proba
+            masked_x = self.to_unconditional_batch(masked_x, which_samples=which_samples)
 
         # Make predictions
         pred = self.forward(masked_x)
@@ -518,15 +544,98 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
                 after masking, as tensors of shape (B,).
         """
         batch = self.preproc_input(batch)
-        # Mask the sources
-        masked_x, path_samples = self.mask(batch)
 
         # Sample with the ODE solver
         avail_flags, time_grid, sol = self.sample(
-            masked_x, n_realizations_per_sample=self.n_realizations_per_sample
+            batch, n_realizations_per_sample=self.n_realizations_per_sample
         )
 
         return sol, avail_flags
+
+    def to_unconditional_batch(self, batch, which_samples=None):
+        """Given a batch where some of the sources are masked, creates an unconditional
+        copy of the batch where the unmasked sources are erased.
+        Extends the base class method to handle flow matching specific fields.
+        Args:
+            batch (dict of (source_name, index) to dict): The input batch. Expects
+                the same structure as is output by self.preproc_input().
+            which_samples (torch.Tensor, optional): If provided, boolean tensor of shape (B,)
+                indicating which samples in the batch should be made unconditional. The others
+                will be left unchanged. If None, all samples will be made unconditional.
+        Returns:
+            unconditional_batch (dict of (source_name, index) to dict): The unconditional copy
+                of the batch, where the unmasked sources are erased.
+                The structure is the same as the input batch.
+        """
+        # First get the base unconditional batch
+        unconditional_batch = super().to_unconditional_batch(batch, which_samples)
+
+        # Add flow matching specific fields
+        for source_index_pair, data in batch.items():
+            where_avail = data["avail"] == 1  # (B,)
+            if which_samples is not None:
+                where_avail = where_avail & which_samples
+
+            # For the unconditional copy, set the diffusion timestep to -1
+            # for the unmasked sources (as in self.mask()).
+            unconditional_batch[source_index_pair]["diffusion_t"] = torch.where(
+                where_avail, -1.0, data["diffusion_t"]
+            )
+
+            # If using deterministic model, handle predicted means
+            if self.use_det_model and "pred_mean" in data:
+                # Set the predicted means to 0 for the unmasked sources
+                unconditional_batch[source_index_pair]["pred_mean"] = torch.where(
+                    where_avail.view((-1,) + (1,) * (data["pred_mean"].ndim - 1)),
+                    torch.zeros_like(data["pred_mean"]),
+                    data["pred_mean"],
+                )
+
+        return unconditional_batch
+
+    def to_double_batch(self, batch, which_samples=None):
+        """Given a batch where some of the sources are masked, creates a double batch
+        where the first half contains the original batch and the second half contains
+        an unconditional copy of the batch, where the unmasked sources are erased.
+        This is used for classifier-free guidance (CFG) training.
+        Args:
+            batch (dict of (source_name, index) to dict): The input batch. Expects
+                the same structure as is output by self.preproc_input().
+            which_samples (torch.Tensor, optional): If provided, boolean tensor of shape (B,)
+                indicating which samples in the batch should be made unconditional. The others
+                will be left unchanged. If None, all samples will be made unconditional.
+        Returns:
+            double_batch (dict of (source_name, index) to dict): The double batch.
+        """
+        # Create the unconditional copy of the batch
+        unconditional_batch = self.to_unconditional_batch(batch, which_samples)
+
+        # Concatenate the original batch and the unconditional copy along the batch dimension
+        double_batch = {}
+        for source_index_pair, data in batch.items():
+            new_data = unconditional_batch[source_index_pair]
+            double_batch[source_index_pair] = {
+                "avail": torch.cat([data["avail"], new_data["avail"]], dim=0),
+                "dt": torch.cat([data["dt"], new_data["dt"]], dim=0),
+                "coords": torch.cat([data["coords"], new_data["coords"]], dim=0),
+                "values": torch.cat([data["values"], new_data["values"]], dim=0),
+                "landmask": torch.cat([data["landmask"], new_data["landmask"]], dim=0),
+                "avail_mask": torch.cat([data["avail_mask"], new_data["avail_mask"]], dim=0),
+                "dist_to_center": torch.cat(
+                    [data["dist_to_center"], new_data["dist_to_center"]], dim=0
+                ),
+                "diffusion_t": torch.cat([data["diffusion_t"], new_data["diffusion_t"]], dim=0),
+            }
+            if "characs" in data:
+                double_batch[source_index_pair]["characs"] = torch.cat(
+                    [data["characs"], new_data["characs"]], dim=0
+                )
+            if self.use_det_model and "pred_mean" in data:
+                double_batch[source_index_pair]["pred_mean"] = torch.cat(
+                    [data["pred_mean"], new_data["pred_mean"]], dim=0
+                )
+
+        return double_batch
 
 
 def load_model(checkpoint_path):
