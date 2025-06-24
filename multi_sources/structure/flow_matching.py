@@ -333,12 +333,15 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
             n_realizations_per_sample (int): Number Np of realizations to sample for each
                 element in the batch.
         Returns:
-            avail_flags (dict): The availability flags for each source,
-                after masking, as tensors of shape (B,).
-            time_grid (torch.Tensor): The time grid at which the ODE solver sampled the solution,
-                of shape (T,).
-            sol (dict): The solution of the ODE solver for each source,
-                as tensors of shape (Np, B, C, ...).
+            dict: A dictionary containing the following keys:
+                - avail_flags (dict): The availability flags for each source,
+                    after masking, as tensors of shape (B,).
+                - time_grid (torch.Tensor): The time grid at which the ODE solver sampled the solution,
+                    of shape (T,).
+                - sol (dict): The solution of the ODE solver for each source,
+                    as tensors of shape (Np, B, C, ...).
+                - pred_mean (dict): If using a deterministic model, the predicted means
+                    for each source, as tensors of shape (B, C, ...).
         """
         with torch.no_grad():
             # We'll use the same seed for the selection of the sources to mask,
@@ -416,7 +419,19 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
                 source_index_pair: torch.stack([sol[source_index_pair] for sol in all_sols])
                 for source_index_pair in batch
             }
-            return avail_flags, time_grid, all_sols
+
+            returned_dict = {
+                "avail_flags": avail_flags,
+                "time_grid": time_grid,
+                "sol": all_sols,
+            }
+            # If using a deterministic model, also return the predicted means
+            if self.use_det_model:
+                returned_dict["pred_mean"] = {
+                    source_index_pair: masked_batch[source_index_pair]["pred_mean"]
+                    for source_index_pair in masked_batch
+                }
+            return returned_dict
 
     def make_deterministic_predictions(self, masked_x):
         """Computes the deterministic predictions of the model.
@@ -498,7 +513,8 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
                 else:
                     n_real = 1
                 # Sample with the ODE solver
-                avail_flags, time_grid, sol = self.sample(batch, n_realizations_per_sample=n_real)
+                sampling_dict = self.sample(batch, n_realizations_per_sample=n_real)
+                sol, avail_flags = sampling_dict["sol"], sampling_dict["avail_flags"]
 
                 # If required, display the realizations
                 if batch_idx % self.display_realizations_every_k_batches == 0:
@@ -538,17 +554,35 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
         for each source, as well as the availability flags after masking.
         Returns:
             sol (dict): The predicted values for each source,
-                as tensors of shape (R, B, C, ...),
-                where R is the number of realizations sampled.
+                as tensors of shape:
+                * (R, B, C, ...),
+                where R is the number of realizations sampled if
+                no predicted mean is used,
+                * (R+1, B, C, ...),
+                if a deterministic model is used, where the first
+                realization corresponds to the predicted mean.
             avail_flags (dict): The availability flags for each source,
                 after masking, as tensors of shape (B,).
         """
         batch = self.preproc_input(batch)
 
         # Sample with the ODE solver
-        avail_flags, time_grid, sol = self.sample(
+        sampling_dict = self.sample(
             batch, n_realizations_per_sample=self.n_realizations_per_sample
         )
+
+        sol, avail_flags = sampling_dict["sol"], sampling_dict["avail_flags"]
+        # If using a deterministic model, add the predicted means as the first realization
+        if self.use_det_model:
+            # Add the predicted means as the first realization
+            for source_index_pair in sol:
+                sol[source_index_pair] = torch.cat(
+                    [
+                        sampling_dict["pred_mean"][source_index_pair].unsqueeze(0),
+                        sol[source_index_pair],
+                    ],
+                    dim=0,
+                )
 
         return sol, avail_flags
 
