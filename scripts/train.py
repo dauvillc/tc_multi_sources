@@ -29,13 +29,23 @@ def main(cfg: DictConfig):
             "If resume_run_id is set, resume_mode must be set to either"
             " 'resume' or 'fine_tune' with +resume_mode=..."
         )
-    # Create a random id for the run
-    run_id = get_random_code()
+    # Create the run's ID and retrieve its checkpoint path
     if resume_run_id:
-        run_id = resume_run_id + "-" + run_id
+        # If resuming a run, we'll use the ID "originalid-n" where n is the index of
+        # the resuming (0 for the first resuming, 1 for the second, etc.)
+        # - Check if the resume_run_id ends with "-n" where n is a number
+        split = resume_run_id.rsplit("-", 1)
+        if len(split) == 2 and split[1].isdigit():
+            original_run_id = split[0]
+            resuming_index = int(split[1])
+            run_id = f"{original_run_id}-{resuming_index + 1}"
+        else:
+            run_id = f"{resume_run_id}-0"
         _, checkpoint_path = load_experiment_cfg_from_checkpoint(
             cfg["paths"]["checkpoints"], resume_run_id
         )
+    else:
+        run_id = get_random_code()
     print("Run ID:", run_id)
 
     # Seed everything
