@@ -5,7 +5,6 @@ the masked tokens."""
 import torch
 import torch.nn as nn
 
-from multi_sources.losses.perceptual_loss import GeneralPerceptualLoss
 from multi_sources.structure.base_reconstructor import MultisourceAbstractReconstructor
 
 # Visualization imports
@@ -51,7 +50,6 @@ class MultisourceDeterministicReconstructor(MultisourceAbstractReconstructor):
         normalize_coords_across_sources=False,
         mask_only_sources=None,
         forecasting_mode=False,
-        perceptual_loss_weight=None,
         validation_dir=None,
         use_modulation_in_output_layers=False,
         metrics={},
@@ -82,8 +80,6 @@ class MultisourceDeterministicReconstructor(MultisourceAbstractReconstructor):
             forecasting_mode (bool): If True, will always mask all sources that are forecasted.
                 A source is forecasted if its time delta is negative.
                 Mutually exclusive with mask_only_sources.
-            perceptual_loss_weight (float): Weight of the perceptual loss in the total loss.
-                If None, no perceptual loss will be computed.
             validation_dir (optional, str or Path): Directory where to save the validation plots.
                 If None, no plots will be saved.
             metrics (dict of str: callable): Metrics to compute during training and validation.
@@ -114,11 +110,6 @@ class MultisourceDeterministicReconstructor(MultisourceAbstractReconstructor):
 
         # [MASK] token that will replace the embeddings of the masked tokens
         self.mask_token = nn.Parameter(torch.randn(1, self.values_dim))
-
-        # Optional perceptual loss
-        if perceptual_loss_weight is not None:
-            self.perceptual_loss_weight = perceptual_loss_weight
-            self.perceptual_loss = GeneralPerceptualLoss()
 
     def embed(self, x):
         """Embeds the input sources. The embedded tensors' shapes depend on the dimensionality
@@ -201,25 +192,6 @@ class MultisourceDeterministicReconstructor(MultisourceAbstractReconstructor):
                 # If all points are masked, we skip the loss computation for this source
                 continue
             losses[source_index_pair] = source_loss.sum() / mask_sum
-
-        # Optional perceptual loss
-        if hasattr(self, "perceptual_loss"):
-            for source_index_pair in pred:
-                # Compute the perceptual loss over the masked samples
-                masked = avail_flag[source_index_pair] == 0
-                if not masked.any():
-                    continue
-                pred_masked = pred[source_index_pair][masked]
-                target_masked = targets[source_index_pair][masked]
-                mask_masked = batch[source_index_pair]["avail_mask"][masked].clone()
-                lm_masked = batch[source_index_pair]["landmask"][masked]
-                mask_masked[lm_masked == 1] = -1
-                perceptual_loss = self.perceptual_loss(
-                    pred_masked,
-                    target_masked,
-                    mask_masked,
-                )
-                losses[source_index_pair] += perceptual_loss * self.perceptual_loss_weight
 
         # Compute the total loss
         loss = sum(losses.values()) / len(losses)
