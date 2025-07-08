@@ -218,6 +218,7 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
                 "embedded_values": v,
                 "embedded_coords": c,
                 "conditioning": cond,
+                "avail": data["avail"].clone(),
             }
 
         return output
