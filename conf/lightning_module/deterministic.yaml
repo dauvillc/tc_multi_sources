@@ -5,6 +5,7 @@ coords_dim: ${model.coords_dim}
 n_sources_to_mask: 1
 lr_scheduler_kwargs: ${lr_scheduler}
 loss_max_distance_from_center: null
+ignore_land_pixels_in_loss: false 
 adamw_kwargs: ${optimizer}
 metrics: ${metrics}
 
