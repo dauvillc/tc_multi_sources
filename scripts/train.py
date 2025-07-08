@@ -21,26 +21,20 @@ def main(cfg: DictConfig):
     cfg = OmegaConf.to_object(cfg)
 
     resume_run_id = cfg["resume_run_id"] if "resume_run_id" in cfg else None
-    # If a run is resuming, the resume_mode must be set to either 'resume' or 'fine_tune'
-    if resume_run_id and (
-        "resume_mode" not in cfg or cfg["resume_mode"] not in ["resume", "fine_tune"]
-    ):
-        raise ValueError(
-            "If resume_run_id is set, resume_mode must be set to either"
-            " 'resume' or 'fine_tune' with +resume_mode=..."
-        )
+    # If a run is resuming, the resume_mode option can be set to either "resume" or "fine_tune".
+    # By default, it is set to "resume".
+    if resume_run_id:
+        if "resume_mode" not in cfg:
+            cfg["resume_mode"] = "resume"
+        elif cfg["resume_mode"] not in ["resume", "fine_tune"]:
+            raise ValueError(
+                f"Invalid resume mode: {cfg['resume_mode']}. "
+                "It must be either 'resume' or 'fine_tune'."
+            )
     # Create the run's ID and retrieve its checkpoint path
     if resume_run_id:
-        # If resuming a run, we'll use the ID "originalid-n" where n is the index of
-        # the resuming (0 for the first resuming, 1 for the second, etc.)
-        # - Check if the resume_run_id ends with "-n" where n is a number
-        split = resume_run_id.rsplit("-", 1)
-        if len(split) == 2 and split[1].isdigit():
-            original_run_id = split[0]
-            resuming_index = int(split[1])
-            run_id = f"{original_run_id}-{resuming_index + 1}"
-        else:
-            run_id = f"{resume_run_id}-0"
+        print("Resuming run: ", resume_run_id)
+        run_id = resume_run_id
         _, checkpoint_path = load_experiment_cfg_from_checkpoint(
             cfg["paths"]["checkpoints"], resume_run_id
         )
