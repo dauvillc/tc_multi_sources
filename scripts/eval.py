@@ -39,6 +39,7 @@ evaluation class to be used. The class must inherit from
 AbstractEvaluationMetric and implement the method evaluate_source.
 """
 
+import os
 from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime
 from pathlib import Path
@@ -187,4 +188,6 @@ def main(cfg: DictConfig):
 
 
 if __name__ == "__main__":
+    # Enable the full errors in Hydra
+    os.environ["HYDRA_FULL_ERROR"] = "1"
     main()

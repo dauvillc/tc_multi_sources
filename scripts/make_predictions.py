@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 import hydra
@@ -69,4 +70,6 @@ def main(cfg: DictConfig):
 
 
 if __name__ == "__main__":
+    # Enable the full errors in Hydra
+    os.environ["HYDRA_FULL_ERROR"] = "1"
     main()
