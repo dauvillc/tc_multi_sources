@@ -132,6 +132,7 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
             validation_dir=validation_dir,
             metrics=metrics,
             use_modulation_in_output_layers=use_modulation_in_output_layers,
+            **kwargs,
         )
 
         # Flow matching ingredients

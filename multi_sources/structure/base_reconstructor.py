@@ -58,6 +58,7 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
         validation_dir=None,
         metrics={},
         use_modulation_in_output_layers=False,
+        include_coords_in_conditioning=True,
         **kwargs,
     ):
         """
@@ -92,6 +93,8 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
                 A metric should have the signature metric(y_pred, y_true, masks, **kwargs)
                 and return a dict {source: tensor of shape (batch_size,)}.
             use_modulation_in_output_layers (bool): If True, applies modulation to the output layers.
+            include_coords_in_conditioning (bool): If True, includes the coordinates
+                in the conditioning tensor used in the output layers.
             **kwargs: Additional arguments to pass to the LightningModule constructor.
         """
         super().__init__(
@@ -116,7 +119,7 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
         self.source_select_gen = torch.Generator()
 
         # Initialize the embedding layers
-        self.init_embedding_layers(use_modulation_in_output_layers)
+        self.init_embedding_layers(use_modulation_in_output_layers, include_coords_in_conditioning)
 
         self.mask_only_sources = None
         if mask_only_sources is not None:
@@ -127,7 +130,9 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
             self.mask_only_sources = set(mask_only_sources)
         self.forecasting_mode = forecasting_mode
 
-    def init_embedding_layers(self, use_modulation_in_output_layers):
+    def init_embedding_layers(
+        self, use_modulation_in_output_layers, include_coords_in_conditioning
+    ):
         """Initializes the weights of the embedding layers."""
         if not hasattr(self, "use_diffusion_t"):
             self.use_diffusion_t = False
@@ -159,6 +164,7 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
                         source.n_charac_variables(),
                         use_diffusion_t=self.use_diffusion_t,
                         pred_mean_channels=pred_mean_channels,
+                        include_coords_in_conditioning=include_coords_in_conditioning,
                     )
                     self.sourcetype_output_projs[source.type] = SourcetypeProjection2d(
                         self.values_dim,

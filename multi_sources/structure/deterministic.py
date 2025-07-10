@@ -52,6 +52,7 @@ class MultisourceDeterministicReconstructor(MultisourceAbstractReconstructor):
         forecasting_mode=False,
         validation_dir=None,
         use_modulation_in_output_layers=False,
+        include_coords_in_conditioning=True,
         metrics={},
     ):
         """
@@ -87,6 +88,8 @@ class MultisourceDeterministicReconstructor(MultisourceAbstractReconstructor):
                 and return a dict {source: tensor of shape (batch_size,)}.
             use_modulation_in_output_layers (bool): If True, applies modulation to the values
                 embeddings in the output layers.
+            include_coords_in_conditioning (bool): If True, includes the coordinates
+                in the conditioning tensor.
         """
         super().__init__(
             sources,
@@ -106,6 +109,7 @@ class MultisourceDeterministicReconstructor(MultisourceAbstractReconstructor):
             validation_dir=validation_dir,
             metrics=metrics,
             use_modulation_in_output_layers=use_modulation_in_output_layers,
+            include_coords_in_conditioning=include_coords_in_conditioning,
         )
 
         # [MASK] token that will replace the embeddings of the masked tokens
