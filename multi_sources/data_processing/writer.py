@@ -21,14 +21,18 @@ class MultiSourceWriter(BasePredictionWriter):
     - The outputs are of the form {source_name: v'} where v' are the predicted values.
         A source may not be included in the outputs.
 
+    The writer automatically detects whether the predictions include multiple realizations
+    (flow matching models) or a single prediction (deterministic models) based on the keys
+    in the prediction dictionary.
+
     The predictions are written to disk in the following format:
     root_dir/targets/source_name/<batch_idx>.npy
     root_dir/outputs/source_name/<batch_idx>.npy
     Additionally, the file root_dir/info.csv is written with the following columns:
-    source_name, avail, batch_idx, index_in_batch, dt, channels, spatial_shape.
+    source_name, avail, batch_idx, index_in_batch, dt, channels, spatial_shape, has_multiple_realizations.
     """
 
-    def __init__(self, root_dir, dt_max, dataset=None, multiple_realizations=False):
+    def __init__(self, root_dir, dt_max, dataset=None):
         """
         Args:
             root_dir (str or Path): The root directory where the predictions will be written.
@@ -37,15 +41,11 @@ class MultiSourceWriter(BasePredictionWriter):
                 normalize(values, source_name, denorm=False) that can be used to denormalize the
                 values before writing them to disk. If None, the values will
                 not be denormalized.
-            multiple_realizations (bool): If True, expects the predictions to include multiple
-                realizations for each source. The values tensors are expected to have an additional
-                leading dimension for the realizations.
         """
         super().__init__(write_interval="batch")
         self.root_dir = Path(root_dir)
         self.dt_max = dt_max
         self.dataset = dataset
-        self.multiple_realizations = multiple_realizations
 
     def setup(self, trainer, pl_module, stage):
         self.root_dir.mkdir(parents=True, exist_ok=True)
@@ -61,7 +61,27 @@ class MultiSourceWriter(BasePredictionWriter):
     def write_on_batch_end(
         self, trainer, pl_module, prediction, batch_indices, batch, batch_idx, dataloader_idx
     ):
-        pred, avail_tensors = prediction
+        # Extract the components from the prediction dictionary
+        if "sol" in prediction:
+            # Flow matching model output format
+            pred = prediction["sol"]
+            avail_tensors = prediction["avail_flags"]
+            # Flow matching models always have multiple realizations
+            has_multiple_realizations = True
+            # Extract predicted means if they exist
+            pred_means = prediction.get("pred_mean", None)
+        elif "predictions" in prediction:
+            # Deterministic model output format
+            pred = prediction["predictions"]
+            avail_tensors = prediction["avail_flags"]
+            # Deterministic models typically don't have multiple realizations
+            has_multiple_realizations = False
+            pred_means = None
+        else:
+            # Fallback for other formats
+            raise ValueError(
+                "Unexpected prediction format. Expected dictionary with 'sol'/'predictions' and 'avail_flags' keys."
+            )
 
         # We'll write to the info file in append mode
         info_file = self.root_dir / "info.csv"
@@ -83,7 +103,16 @@ class MultiSourceWriter(BasePredictionWriter):
                             pred[source_index_pair],
                             source_name,  # Use only source_name for normalization
                             denormalize=True,
-                            leading_dims=1 + int(self.multiple_realizations),
+                            leading_dims=1 + int(has_multiple_realizations),
+                            device=device,
+                        )
+                    # Denormalize predicted means if they exist
+                    if pred_means is not None and source_index_pair in pred_means:
+                        _, pred_means[source_index_pair] = self.dataset.normalize(
+                            pred_means[source_index_pair],
+                            source_name,
+                            denormalize=True,
+                            leading_dims=1,  # Pred means have batch dimension but no realization dimension
                             device=device,
                         )
 
@@ -129,18 +158,23 @@ class MultiSourceWriter(BasePredictionWriter):
                     # Only keep variables that are in the source's output_vars
                     outputs = pred[source_index_pair].detach().cpu().float().numpy()
                     output_var_names = [v for v in source_obj.output_vars]
+
                     # Create xarray Dataset for outputs. Same principle as for targets.
                     # However, the predictions may have an additional dimension
                     # for multiple realizations.
-                    if self.multiple_realizations:
-                        dims = ["realization"] + dims
-                        coords["realization"] = np.arange(outputs.shape[0])
+                    if has_multiple_realizations:
+                        dims_with_realization = ["realization"] + dims
+                        coords_with_realization = coords.copy()
+                        coords_with_realization["realization"] = np.arange(outputs.shape[0])
                         outputs_ds = xr.Dataset(
                             {
-                                var: (dims, outputs[:, :, i])  # Realization, batch, channel
+                                var: (
+                                    dims_with_realization,
+                                    outputs[:, :, i],
+                                )  # Realization, batch, channel
                                 for i, var in enumerate(output_var_names)
                             },
-                            coords=coords,
+                            coords=coords_with_realization,
                         )
                     else:
                         outputs_ds = xr.Dataset(
@@ -150,6 +184,25 @@ class MultiSourceWriter(BasePredictionWriter):
                             },
                             coords=coords,
                         )
+
+                    # Write predicted means if available
+                    if pred_means is not None and source_index_pair in pred_means:
+                        pred_mean_outputs = (
+                            pred_means[source_index_pair].detach().cpu().float().numpy()
+                        )
+
+                        # Create a dataset for the predicted means
+                        pred_mean_ds = xr.Dataset(
+                            {
+                                f"pred_mean_{var}": (dims, pred_mean_outputs[:, i])
+                                for i, var in enumerate(output_var_names)
+                            },
+                            coords=coords,
+                        )
+
+                        # Merge the datasets before writing to file
+                        outputs_ds = xr.merge([outputs_ds, pred_mean_ds])
+
                     outputs_ds.to_netcdf(output_dir / f"{batch_idx}.nc")
 
                 batch_size = latlon.shape[0]
@@ -157,6 +210,10 @@ class MultiSourceWriter(BasePredictionWriter):
                 # in hours.
                 dt = data["dt"].detach().cpu().float().numpy() * self.dt_max
                 dt = pd.Series(dt, name="dt")
+
+                # Add a flag to indicate whether predicted means are available
+                has_pred_means = pred_means is not None and source_index_pair in pred_means
+
                 # Store the information about that source's data for that batch
                 # in the info DataFrame.
                 info_df = pd.DataFrame(
@@ -169,7 +226,8 @@ class MultiSourceWriter(BasePredictionWriter):
                         "dt": dt,
                         "channels": [targets.shape[1]] * batch_size,
                         "spatial_shape": [targets.shape[2:]] * batch_size,
-                        "has_multiple_realizations": [self.multiple_realizations] * batch_size,
+                        "has_multiple_realizations": [has_multiple_realizations] * batch_size,
+                        "has_pred_means": [has_pred_means] * batch_size,  # New column
                     },
                 )
                 include_header = not info_file.exists()

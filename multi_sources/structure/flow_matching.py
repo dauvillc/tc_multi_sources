@@ -554,16 +554,14 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
         """Samples with the ODE solver and returns the predicted values
         for each source, as well as the availability flags after masking.
         Returns:
-            sol (dict): The predicted values for each source,
-                as tensors of shape:
-                * (R, B, C, ...),
-                where R is the number of realizations sampled if
-                no predicted mean is used,
-                * (R+1, B, C, ...),
-                if a deterministic model is used, where the first
-                realization corresponds to the predicted mean.
-            avail_flags (dict): The availability flags for each source,
-                after masking, as tensors of shape (B,).
+            outputs (dict): A dictionary containing:
+                - sol (dict): The predicted values for each source,
+                  as tensors of shape (R, B, C, ...),
+                  where R is the number of realizations sampled.
+                - avail_flags (dict): The availability flags for each source,
+                  after masking, as tensors of shape (B,).
+                - pred_mean (dict, optional): If using a deterministic model,
+                  the predicted means for each source, as tensors of shape (B, C, ...).
         """
         batch = self.preproc_input(batch)
 
@@ -573,19 +571,15 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
         )
 
         sol, avail_flags = sampling_dict["sol"], sampling_dict["avail_flags"]
-        # If using a deterministic model, add the predicted means as the first realization
-        if self.use_det_model:
-            # Add the predicted means as the first realization
-            for source_index_pair in sol:
-                sol[source_index_pair] = torch.cat(
-                    [
-                        sampling_dict["pred_mean"][source_index_pair].unsqueeze(0),
-                        sol[source_index_pair],
-                    ],
-                    dim=0,
-                )
 
-        return sol, avail_flags
+        # Create output dictionary with solutions and availability flags
+        output = {"sol": sol, "avail_flags": avail_flags}
+
+        # If using a deterministic model, add the predicted means as a separate key in the output
+        if self.use_det_model and "pred_mean" in sampling_dict:
+            output["pred_mean"] = sampling_dict["pred_mean"]
+
+        return output
 
     def to_unconditional_batch(self, batch, which_samples=None):
         """Given a batch where some of the sources are masked, creates an unconditional

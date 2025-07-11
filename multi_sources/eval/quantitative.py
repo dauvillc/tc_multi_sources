@@ -35,6 +35,7 @@ plt.rcParams.update(
 class QuantitativeEvaluation(AbstractMultisourceEvaluationMetric):
     """Computes MSE and MAE between targets and predictions for all common channels.
     Works with any channel shape and dimension count.
+    Applies to both deterministic and multi-realizations predictions.
     """
 
     def __init__(self, model_data, parent_results_dir, create_source_plots=True):
@@ -47,7 +48,7 @@ class QuantitativeEvaluation(AbstractMultisourceEvaluationMetric):
                 - run_id: Run ID
                 - pred_name: Prediction name
             parent_results_dir (Path): Parent directory for all results
-            create_source_plots (bool): Whether to create per-source plots (default: False)
+            create_source_plots (bool): Whether to create per-source plots (default: True)
                                         Set to False to reduce runtime and only create comparison plots
         """
         super().__init__(
@@ -99,12 +100,13 @@ class QuantitativeEvaluation(AbstractMultisourceEvaluationMetric):
             unique_batch_indices = info_df["batch_idx"].unique()
 
             # Create a DataFrame to store the results with columns:
-            # source_name, index, dt, MSE, MAE, n_sources_available, channel_name
+            # source_name, index, dt, realization (optional), MSE, MAE, n_sources_available, channel_name
             results_df = pd.DataFrame(
                 columns=[
                     "source_name",
                     "index",
                     "dt",
+                    "realization",  # This will be -1 for single-realization predictions
                     "MSE",
                     "MAE",
                     "n_sources_available",
@@ -136,7 +138,7 @@ class QuantitativeEvaluation(AbstractMultisourceEvaluationMetric):
                                 source_name, index, batch_idx, model_id
                             )
                             if targets is not None and preds is not None:
-                                compute_metrics(
+                                compute_metrics_unified(
                                     source_info,
                                     source_name,
                                     index,
@@ -161,7 +163,7 @@ class QuantitativeEvaluation(AbstractMultisourceEvaluationMetric):
                     for worker_id, chunk in enumerate(batch_chunks):
                         # Submit the chunk to be processed by a worker
                         future = executor.submit(
-                            process_batch_chunk,
+                            process_batch_chunk_unified,
                             self,
                             info_df,
                             chunk,
@@ -185,18 +187,20 @@ class QuantitativeEvaluation(AbstractMultisourceEvaluationMetric):
             results_df["model_id"] = model_id
             all_results.append(results_df)
 
-            # Compute and display results for this model
-            self.compute_and_display_results(results_df, model_results_dir)
+            # Compute and display results for this model if required
+            if self.create_source_plots:
+                self.compute_and_display_results(results_df, model_results_dir)
 
         # Combine all results for comparison
         if len(all_results) > 0:
             combined_results = pd.concat(all_results, ignore_index=True)
             self.create_model_comparison_plots(combined_results, comparison_fig_dir)
+            print(f"Successfully evaluated {len(all_results)} models")
         else:
             print("No results to compare!")
 
     def compute_and_display_results(self, results_df, results_dir):
-        """Computes aggregate statistics and displays histogram figures for each source.
+        """Computes aggregate statistics and displays figures for each source.
 
         Args:
             results_df (pd.DataFrame): DataFrame with the evaluation results.
@@ -206,11 +210,18 @@ class QuantitativeEvaluation(AbstractMultisourceEvaluationMetric):
         figures_dir = results_dir / "figures"
         figures_dir.mkdir(exist_ok=True)
 
-        # Calculate RMSE from MSE (square root of the mean of MSE values)
-        # Group by source_name and channel_name
+        # If there's no data, return early
+        if len(results_df) == 0:
+            print("No results to display.")
+            return
+
+        # For multi-realization data, we may need special handling
+        has_multiple_realizations = (results_df["realization"] != -1).any()
+
+        # Group by source and channel to calculate aggregated statistics
         source_channel_groups = results_df.groupby(["source_name", "channel_name"])
 
-        # Compute RMSE for each group (square root of mean MSE)
+        # Compute RMSE for each source-channel (square root of mean MSE)
         rmse_by_source_channel = (
             source_channel_groups["MSE"].mean().apply(np.sqrt).reset_index(name="RMSE")
         )
@@ -220,6 +231,12 @@ class QuantitativeEvaluation(AbstractMultisourceEvaluationMetric):
         overall_std_mae = results_df["MAE"].std()
         overall_mean_rmse = rmse_by_source_channel["RMSE"].mean()
 
+        # For multi-realization data, count the number of realizations
+        if has_multiple_realizations:
+            n_realizations = results_df[results_df["realization"] != -1]["realization"].nunique()
+            print(f"\nNumber of Realizations: {n_realizations}")
+
+        # Print summary statistics
         print("\nError Statistics:")
         print(f"  Mean RMSE: {overall_mean_rmse:.6f}")
         print(f"  Mean MAE: {overall_mean_mae:.6f}")
@@ -235,7 +252,7 @@ class QuantitativeEvaluation(AbstractMultisourceEvaluationMetric):
         # Set a color palette with enough distinct colors
         colors = sns.color_palette("colorblind", n_sources)
 
-        # Print statistics for each source and channel for all cases
+        # Print statistics for each source and channel
         for channel in channels:
             channel_data = rmse_by_source_channel[
                 rmse_by_source_channel["channel_name"] == channel
@@ -255,214 +272,144 @@ class QuantitativeEvaluation(AbstractMultisourceEvaluationMetric):
                 print(f"    RMSE: {rmse_value:.6f}")
                 print(f"    Sample count: {sample_count}")
 
-        # Only create source-wise plots if requested
-        if self.create_source_plots:
-            # For RMSE - Bar chart since it's a single value per source/channel
-            fig_height = max(3, 1.5 * n_channels)  # Adaptive height based on number of channels
-            fig_width = min(8, max(5, 2 + 0.5 * n_sources))  # Adaptive width
+        # Generate source-wise RMSE bar chart
+        fig_height = max(3, 1.5 * n_channels)
+        fig_width = min(8, max(5, 2 + 0.5 * n_sources))
 
-            plt.figure(figsize=(fig_width, fig_height))
+        plt.figure(figsize=(fig_width, fig_height))
 
-            for i, channel in enumerate(channels):
-                # Create subplot with shared x-axis if multiple channels
-                if n_channels > 1:
-                    ax = plt.subplot(n_channels, 1, i + 1)
-                else:
-                    ax = plt.subplot(1, 1, 1)
+        for i, channel in enumerate(channels):
+            # Create subplot with shared x-axis if multiple channels
+            if n_channels > 1:
+                ax = plt.subplot(n_channels, 1, i + 1)
+            else:
+                ax = plt.subplot(1, 1, 1)
 
-                # Filter data for this channel
-                channel_data = rmse_by_source_channel[
-                    rmse_by_source_channel["channel_name"] == channel
-                ]
+            # Filter data for this channel
+            channel_data = rmse_by_source_channel[
+                rmse_by_source_channel["channel_name"] == channel
+            ]
 
-                # Create bar plot for RMSE values
-                bars = ax.bar(
-                    channel_data["source_name"],
-                    channel_data["RMSE"],
-                    color=colors[: len(channel_data)],
+            # Create bar plot for RMSE values
+            bars = ax.bar(
+                channel_data["source_name"],
+                channel_data["RMSE"],
+                color=colors[: len(channel_data)],
+            )
+
+            # Add value labels on top of bars
+            for bar in bars:
+                height = bar.get_height()
+                ax.text(
+                    bar.get_x() + bar.get_width() / 2.0,
+                    height + height * 0.01,
+                    f"{height:.2f}",
+                    ha="center",
+                    va="bottom",
+                    fontsize=8,
+                    rotation=0,
                 )
 
-                # Add value labels on top of bars
-                for bar in bars:
-                    height = bar.get_height()
+            if n_channels > 1:
+                plt.title(f"{channel}", fontsize=10)
+            else:
+                plt.title(f"RMSE by Source - {channel}", fontsize=11)
+
+            plt.xlabel("" if i < n_channels - 1 else "Source")
+            plt.ylabel("RMSE")
+            plt.xticks(rotation=30, ha="right")
+
+            # Use ScalarFormatter instead of FormatStrFormatter for better control
+            ax.yaxis.set_major_formatter(ScalarFormatter(useOffset=False))
+            plt.ticklabel_format(style="plain", axis="y")
+            plt.grid(True, alpha=0.3, linestyle="--", axis="y")
+
+        plt.tight_layout()
+        rmse_path = figures_dir / "rmse_by_source_channel.pdf"
+        plt.savefig(rmse_path, bbox_inches="tight")
+        plt.savefig(figures_dir / "rmse_by_source_channel.png", dpi=300, bbox_inches="tight")
+        plt.close()
+
+        # Create MAE boxplot per source
+        plt.figure(figsize=(fig_width, fig_height))
+
+        for i, channel in enumerate(channels):
+            if n_channels > 1:
+                ax = plt.subplot(n_channels, 1, i + 1)
+            else:
+                ax = plt.subplot(1, 1, 1)
+
+            channel_data = results_df[results_df["channel_name"] == channel]
+
+            # Create more compact, publication-ready boxplot with proper hue
+            sns.boxplot(
+                x="source_name",
+                y="MAE",
+                data=channel_data,
+                width=0.6,
+                hue="source_name",
+                palette=colors,
+                legend=False,
+                showfliers=False,  # Hide outliers for cleaner appearance
+                medianprops={"color": "black"},
+                ax=ax,
+                order=sources,  # Use consistent order
+            )
+
+            # Add median value labels to each box
+            for j, source_name in enumerate(sources):
+                source_data = channel_data[channel_data["source_name"] == source_name]
+                if len(source_data) > 0:
+                    median_val = source_data["MAE"].median()
+                    # Get the position of the box
+                    q1 = source_data["MAE"].quantile(0.25)
+                    q3 = source_data["MAE"].quantile(0.75)
+                    # Position the text at the top-right of the box
+                    x_pos = j + 0.25
+                    y_pos = q3 + (q3 - q1) * 0.1
                     ax.text(
-                        bar.get_x() + bar.get_width() / 2.0,
-                        height + height * 0.01,
-                        f"{height:.2f}",  # Format to 2 decimal places
-                        ha="center",
+                        x_pos,
+                        y_pos,
+                        f"{median_val:.2f}",
+                        ha="left",
                         va="bottom",
-                        fontsize=8,
-                        rotation=0,
+                        fontsize=7,
+                        color="black",
+                        weight="bold",
+                        bbox=dict(facecolor="white", alpha=0.7, edgecolor="none", pad=1),
                     )
 
-                if n_channels > 1:
-                    plt.title(f"{channel}", fontsize=10)
-                else:
-                    plt.title(f"RMSE by Source - {channel}", fontsize=11)
+            if n_channels > 1:
+                plt.title(f"{channel}", fontsize=10)
+            else:
+                plt.title(f"MAE Distribution - {channel}", fontsize=11)
 
-                plt.xlabel("" if i < n_channels - 1 else "Source")
-                plt.ylabel("RMSE")
-                plt.xticks(rotation=30, ha="right")
+            plt.xlabel("" if i < n_channels - 1 else "Source")
+            plt.ylabel("MAE")
+            plt.xticks(rotation=30, ha="right")
 
-                # Use ScalarFormatter instead of FormatStrFormatter, which is compatible with ticklabel_format
-                ax.yaxis.set_major_formatter(ScalarFormatter(useOffset=False))
-                # Disable scientific notation
-                plt.ticklabel_format(style="plain", axis="y")
+            ax.yaxis.set_major_formatter(ScalarFormatter(useOffset=False))
+            plt.ticklabel_format(style="plain", axis="y")
+            plt.grid(True, alpha=0.3, linestyle="--", axis="y")
 
-                plt.grid(True, alpha=0.3, linestyle="--", axis="y")
+        plt.tight_layout()
+        mae_box_path = figures_dir / "mae_boxplot_by_source.pdf"
+        plt.savefig(mae_box_path, bbox_inches="tight")
+        plt.savefig(figures_dir / "mae_boxplot_by_source.png", dpi=300, bbox_inches="tight")
+        plt.close()
 
-            plt.tight_layout()
-            rmse_path = figures_dir / "rmse_by_source_channel.pdf"
-            plt.savefig(rmse_path, bbox_inches="tight")
-            # Also save as PNG for easy viewing
-            plt.savefig(figures_dir / "rmse_by_source_channel.png", dpi=300, bbox_inches="tight")
-            plt.close()
-
-            # For MAE - Compact density plots (keep this part from the original)
-            plt.figure(figsize=(7, fig_height))
-
-            for i, channel in enumerate(channels):
-                channel_data = results_df[results_df["channel_name"] == channel]
-
-                if n_channels > 1:
-                    ax = plt.subplot(n_channels, 1, i + 1)
-                else:
-                    ax = plt.subplot(1, 1, 1)
-
-                for j, source_name in enumerate(sources):
-                    source_data = channel_data[channel_data["source_name"] == source_name]
-                    if len(source_data) > 0:
-                        mean_mae = source_data["MAE"].mean()
-
-                        # Plot compact KDE
-                        sns.kdeplot(
-                            source_data["MAE"],
-                            label=f"{source_name} (μ={mean_mae:.2f})",  # Format to 2 decimal places
-                            color=colors[j],
-                            fill=True,
-                            alpha=0.3,
-                            linewidth=1.5,
-                        )
-
-                if n_channels > 1:
-                    plt.title(f"{channel}", fontsize=10)
-                else:
-                    plt.title(f"MAE Distribution - {channel}", fontsize=11)
-
-                plt.xlabel("MAE" if i == n_channels - 1 else "")
-                plt.ylabel("Density")
-
-                # Use ScalarFormatter instead of FormatStrFormatter, which is compatible with ticklabel_format
-                ax.xaxis.set_major_formatter(ScalarFormatter(useOffset=False))
-                # Disable scientific notation
-                plt.ticklabel_format(style="plain", axis="x")
-
-                # Only show legend in the first subplot if multiple channels
-                if i == 0 or n_channels == 1:
-                    plt.legend(fontsize=8, frameon=True, framealpha=0.7, loc="best")
-
-                plt.grid(True, alpha=0.3, linestyle="--")
-
-            plt.tight_layout()
-            mae_hist_path = figures_dir / "mae_density_by_source_channel.pdf"
-            plt.savefig(mae_hist_path, bbox_inches="tight")
-            plt.savefig(
-                figures_dir / "mae_density_by_source_channel.png", dpi=300, bbox_inches="tight"
-            )
-            plt.close()
-
-            print(f"\nDensity plots saved to: {figures_dir}")
-
-            # MAE box plot - similar compact style
-            plt.figure(figsize=(fig_width, fig_height))
-
-            for i, channel in enumerate(channels):
-                if n_channels > 1:
-                    ax = plt.subplot(n_channels, 1, i + 1)
-                else:
-                    ax = plt.subplot(1, 1, 1)
-
-                channel_data = results_df[results_df["channel_name"] == channel]
-
-                # Create more compact, publication-ready boxplot with proper hue
-                boxplot = sns.boxplot(
-                    x="source_name",
-                    y="MAE",
-                    data=channel_data,
-                    width=0.6,
-                    hue="source_name",
-                    palette=colors,
-                    legend=False,  # No legend needed since x-axis already shows sources
-                    showfliers=False,  # Hide outliers for cleaner appearance
-                    medianprops={"color": "black"},
-                    ax=ax,
-                    order=sources,  # Use sources instead of model_ids for source-wise plots
-                )
-
-                # Add median value labels to the top-right of each box
-                if len(channel_data) > 0:
-                    # For each source, calculate and display the median
-                    for j, source_name in enumerate(sources):
-                        source_data = channel_data[channel_data["source_name"] == source_name]
-                        if len(source_data) > 0:
-                            median_val = source_data["MAE"].median()
-                            # Get the position of the box
-                            q1 = source_data["MAE"].quantile(0.25)
-                            q3 = source_data["MAE"].quantile(0.75)
-                            # Position the text at the top-right of the box
-                            x_pos = j + 0.25  # Slightly to the right of the box center
-                            y_pos = q3 + (q3 - q1) * 0.1  # Slightly above the top of the box
-                            ax.text(
-                                x_pos,  # X position (slightly right of box center)
-                                y_pos,  # Y position (slightly above the top of the box)
-                                f"{median_val:.2f}",  # Format to 2 decimal places
-                                ha="left",
-                                va="bottom",
-                                fontsize=7,
-                                color="black",
-                                weight="bold",
-                                bbox=dict(facecolor="white", alpha=0.7, edgecolor="none", pad=1),
-                            )
-
-                if n_channels > 1:
-                    plt.title(f"{channel}", fontsize=10)
-                else:
-                    plt.title(f"MAE Distribution - {channel}", fontsize=11)
-
-                plt.xlabel("" if i < n_channels - 1 else "Source")
-                plt.ylabel("MAE")
-                plt.xticks(rotation=30, ha="right")
-
-                # Use ScalarFormatter instead of FormatStrFormatter, which is compatible with ticklabel_format
-                ax.yaxis.set_major_formatter(ScalarFormatter(useOffset=False))
-                # Disable scientific notation
-                plt.ticklabel_format(style="plain", axis="y")
-
-                plt.grid(True, alpha=0.3, linestyle="--", axis="y")
-
-            plt.tight_layout()
-            mae_box_path = figures_dir / "mae_boxplot_by_source_channel.pdf"
-            plt.savefig(mae_box_path, bbox_inches="tight")
-            plt.savefig(
-                figures_dir / "mae_boxplot_by_source_channel.png", dpi=300, bbox_inches="tight"
-            )
-            plt.close()
-
-            print(f"Publication-ready box plots saved to: {figures_dir}")
-        else:
-            print("\nSkipping source-wise plots as requested")
+        print(f"Source-wise plots saved to: {figures_dir}")
 
         # Save summary statistics to CSV
-        # Include both MSE and RMSE in the summary
-        mse_stats = (
+        summary_stats = (
             source_channel_groups[["MSE", "MAE"]]
             .agg(["mean", "std", "min", "max", "count"])
             .reset_index()
         )
 
-        # Add RMSE to summary statistics - no need to rename since it's already called "RMSE"
+        # Add RMSE to summary statistics
         summary_stats = pd.merge(
-            mse_stats,
+            summary_stats,
             rmse_by_source_channel[["source_name", "channel_name", "RMSE"]],
             on=["source_name", "channel_name"],
             how="left",
@@ -470,24 +417,23 @@ class QuantitativeEvaluation(AbstractMultisourceEvaluationMetric):
 
         summary_stats_path = results_dir / "summary_statistics.csv"
         summary_stats.to_csv(summary_stats_path, index=False)
-
         print(f"Summary statistics saved to: {summary_stats_path}")
 
     def create_model_comparison_plots(self, combined_results, comparison_dir):
-        """Creates plots comparing all models
+        """Creates plots comparing all models: overall RMSE and MAE boxplots.
 
         Args:
             combined_results (pd.DataFrame): Combined results from all models
             comparison_dir (Path): Directory to save comparison plots
         """
         if len(combined_results) == 0:
+            print("No results to plot for model comparison.")
             return
 
-        # Get model IDs in a consistent order (sorted) to ensure consistency across all plots
+        # Get model IDs in a consistent order
         model_ids = sorted(combined_results["model_id"].unique())
         n_models = len(model_ids)
 
-        # Continue even if there's only one model
         print("\nCreating model comparison plots...")
         channels = combined_results["channel_name"].unique()
         n_channels = len(channels)
@@ -497,38 +443,19 @@ class QuantitativeEvaluation(AbstractMultisourceEvaluationMetric):
         fig_width = min(8, max(5, 2 + 0.5 * n_models))  # Adaptive width
 
         # Color palette - create a consistent mapping of model IDs to colors
-        colors = sns.color_palette("colorblind", max(n_models, 2))  # Ensure at least 2 colors
+        colors = sns.color_palette("colorblind", max(n_models, 2))
         color_dict = dict(zip(model_ids, colors))
 
         # Calculate RMSE from MSE for each model and channel
-        # Group by model_id, source_name, and channel_name to compute RMSE
-        model_source_channel_groups = combined_results.groupby(
-            ["model_id", "source_name", "channel_name"]
-        )
-        # Calculate RMSE (square root of mean MSE)
-        rmse_values = (
-            model_source_channel_groups["MSE"].mean().apply(np.sqrt).reset_index(name="RMSE")
-        )
-
-        # Now group by model_id and channel_name for the comparison plots
+        # Group by model_id and channel_name
         model_channel_groups = combined_results.groupby(["model_id", "channel_name"])
+
+        # Calculate RMSE (square root of mean MSE)
         model_mean_rmse = (
-            model_channel_groups["MSE"].mean().apply(np.sqrt).reset_index(name="RMSE_mean")
-        )
-        model_mean_mae = model_channel_groups["MAE"].mean().reset_index()
-
-        # Get standard error for error bars (for MAE only since RMSE is a single value)
-        model_std_mae = model_channel_groups["MAE"].sem().reset_index()
-
-        # Merge mean and std for MAE plotting
-        model_mae_stats = pd.merge(
-            model_mean_mae,
-            model_std_mae,
-            on=["model_id", "channel_name"],
-            suffixes=("_mean", "_sem"),
+            model_channel_groups["MSE"].mean().apply(np.sqrt).reset_index(name="RMSE")
         )
 
-        # 1. RMSE bar chart
+        # 1. RMSE bar chart comparison across models
         plt.figure(figsize=(fig_width, fig_height))
 
         for i, channel in enumerate(channels):
@@ -545,7 +472,7 @@ class QuantitativeEvaluation(AbstractMultisourceEvaluationMetric):
             # Create bar plot for RMSE values
             bars = ax.bar(
                 channel_data["model_id"],
-                channel_data["RMSE_mean"],
+                channel_data["RMSE"],
                 color=[color_dict[model_id] for model_id in channel_data["model_id"]],
             )
 
@@ -555,7 +482,7 @@ class QuantitativeEvaluation(AbstractMultisourceEvaluationMetric):
                 ax.text(
                     bar.get_x() + bar.get_width() / 2.0,
                     height + height * 0.01,
-                    f"{height:.2f}",  # Format to 2 decimal places
+                    f"{height:.2f}",
                     ha="center",
                     va="bottom",
                     fontsize=8,
@@ -569,9 +496,9 @@ class QuantitativeEvaluation(AbstractMultisourceEvaluationMetric):
 
             plt.xlabel("" if i < n_channels - 1 else "Model")
             plt.ylabel("RMSE")
+
             # Only show x-axis tick labels for the bottom subplot
             if i < n_channels - 1:
-                # First get the tick positions, then set empty labels
                 ticks = plt.xticks()[0]
                 plt.xticks(ticks, labels=[], rotation=30, ha="right")
             else:
@@ -579,9 +506,7 @@ class QuantitativeEvaluation(AbstractMultisourceEvaluationMetric):
 
             # Remove scientific notation for y-axis
             ax.yaxis.set_major_formatter(ScalarFormatter(useOffset=False))
-            # Disable scientific notation
             plt.ticklabel_format(style="plain", axis="y")
-
             plt.grid(True, alpha=0.3, linestyle="--", axis="y")
 
         plt.tight_layout()
@@ -590,7 +515,7 @@ class QuantitativeEvaluation(AbstractMultisourceEvaluationMetric):
         plt.savefig(comparison_dir / "model_rmse_comparison.png", dpi=300, bbox_inches="tight")
         plt.close()
 
-        # 2. MAE boxplot
+        # 2. MAE boxplot comparison across models
         plt.figure(figsize=(fig_width, fig_height))
 
         for i, channel in enumerate(channels):
@@ -602,7 +527,7 @@ class QuantitativeEvaluation(AbstractMultisourceEvaluationMetric):
             channel_data = combined_results[combined_results["channel_name"] == channel]
 
             # Create more compact, publication-ready boxplot with proper hue
-            boxplot = sns.boxplot(
+            sns.boxplot(
                 x="model_id",
                 y="MAE",
                 data=channel_data,
@@ -613,12 +538,11 @@ class QuantitativeEvaluation(AbstractMultisourceEvaluationMetric):
                 medianprops={"color": "black"},
                 legend=False,
                 ax=ax,
-                order=model_ids,  # Explicitly set order to match our sorted model_ids
+                order=model_ids,  # Explicitly set order
             )
 
             # Add median value labels to the top-right of each box
             if len(channel_data) > 0:
-                # For each model, calculate and display the median
                 for j, model_id in enumerate(model_ids):
                     model_data = channel_data[channel_data["model_id"] == model_id]
                     if len(model_data) > 0:
@@ -627,12 +551,12 @@ class QuantitativeEvaluation(AbstractMultisourceEvaluationMetric):
                         q1 = model_data["MAE"].quantile(0.25)
                         q3 = model_data["MAE"].quantile(0.75)
                         # Position the text at the top-right of the box
-                        x_pos = j + 0.25  # Slightly to the right of the box center
-                        y_pos = q3 + (q3 - q1) * 0.1  # Slightly above the top of the box
+                        x_pos = j + 0.25
+                        y_pos = q3 + (q3 - q1) * 0.1
                         ax.text(
-                            x_pos,  # X position (slightly right of box center)
-                            y_pos,  # Y position (slightly above the top of the box)
-                            f"{median_val:.2f}",  # Format to 2 decimal places
+                            x_pos,
+                            y_pos,
+                            f"{median_val:.2f}",
                             ha="left",
                             va="bottom",
                             fontsize=7,
@@ -648,36 +572,43 @@ class QuantitativeEvaluation(AbstractMultisourceEvaluationMetric):
 
             plt.xlabel("" if i < n_channels - 1 else "Model")
             plt.ylabel("MAE")
+
             # Only show x-axis tick labels for the bottom subplot
             if i < n_channels - 1:
-                # First get the tick positions, then set empty labels
                 ticks = plt.xticks()[0]
                 plt.xticks(ticks, labels=[], rotation=30, ha="right")
             else:
                 plt.xticks(rotation=30, ha="right")
 
-            # Use ScalarFormatter instead of FormatStrFormatter, which is compatible with ticklabel_format
+            # Use ScalarFormatter to control display format
             ax.yaxis.set_major_formatter(ScalarFormatter(useOffset=False))
-            # Disable scientific notation
             plt.ticklabel_format(style="plain", axis="y")
-
             plt.grid(True, alpha=0.3, linestyle="--", axis="y")
 
         plt.tight_layout()
-        mae_box_path = comparison_dir / "model_mae_comparison_boxplot.pdf"
+        mae_box_path = comparison_dir / "model_mae_boxplot_comparison.pdf"
         plt.savefig(mae_box_path, bbox_inches="tight")
         plt.savefig(
-            comparison_dir / "model_mae_comparison_boxplot.png", dpi=300, bbox_inches="tight"
+            comparison_dir / "model_mae_boxplot_comparison.png", dpi=300, bbox_inches="tight"
         )
         plt.close()
 
         print(f"Publication-ready model comparison plots saved to: {comparison_dir}")
 
 
-def compute_metrics(
-    source_info, source_name, index, targets, preds, results_csv, run_id, pred_name, model_id
+def compute_metrics_unified(
+    source_info,
+    source_name,
+    index,
+    targets,
+    preds,
+    results_csv,
+    run_id,
+    pred_name,
+    model_id,
 ):
-    """Computes MSE and MAE between targets and predictions for all common channels.
+    """Computes MSE and MAE between targets and predictions for all common channels,
+    handling both single and multiple realizations in the predictions.
 
     Args:
         source_info (pd.DataFrame): DataFrame with at least the following columns:
@@ -685,7 +616,7 @@ def compute_metrics(
         source_name (str): Name of the source.
         index (int): Index of the source.
         targets (xarray.Dataset): Target dataset.
-        preds (xarray.Dataset): Predictions dataset.
+        preds (xarray.Dataset): Predictions dataset (with or without 'realization' dimension).
         results_csv (Path): Path to the CSV file where results will be saved.
         run_id (str): Run ID of the model
         pred_name (str): Prediction name
@@ -720,54 +651,118 @@ def compute_metrics(
 
     # Exclude 'dt', 'lat', 'lon' from the metrics calculation if they exist
     exclude_vars = {"dt", "lat", "lon", "longitude", "latitude"}
-    channel_names = [var for var in common_vars if var not in exclude_vars]
+
+    # Also exclude any variables that start with "pred_mean_"
+    channel_names = [
+        var for var in common_vars if var not in exclude_vars and not var.startswith("pred_mean_")
+    ]
 
     results_list = []
 
-    # Compute MSE and MAE for each channel across all samples
-    for channel in channel_names:
-        # Extract target and prediction data for this channel
-        target_data = filtered_targets[channel].values
-        pred_data = filtered_preds[channel].values
+    # Check if we have multiple realizations in the predictions
+    has_realizations = "realization" in filtered_preds.dims
 
-        # For each sample, compute MSE and MAE
-        for i in range(len(sample_indices)):
-            # Extract the sample data
-            sample_target = target_data[i]
-            sample_pred = pred_data[i]
+    if has_realizations:
+        # Get number of realizations
+        n_realizations = len(filtered_preds["realization"])
 
-            # Compute MSE and MAE regardless of channel dimensions/shape
-            # Flatten arrays to handle any dimensionality
-            sample_target_flat = sample_target.flatten()
-            sample_pred_flat = sample_pred.flatten()
+        # Compute MSE and MAE for each channel, sample, and realization
+        for channel in channel_names:
+            # Extract target data for this channel (no realization dimension)
+            target_data = filtered_targets[channel].values
 
-            # Compute difference and absolute difference (NaN will propagate)
-            diff_squared = (sample_target_flat - sample_pred_flat) ** 2
-            abs_diff = np.abs(sample_target_flat - sample_pred_flat)
+            # For each realization in the predictions
+            # Process all realizations since we don't have predicted means mixed in with realizations anymore
+            for r in range(n_realizations):
+                # Extract prediction data for this channel and realization
+                pred_data = filtered_preds[channel].isel(realization=r).values
 
-            # Use np.nanmean to calculate metrics, automatically ignoring NaN values
-            mse = np.nanmean(diff_squared)
-            mae = np.nanmean(abs_diff)
+                # For each sample, compute MSE and MAE
+                for i in range(len(sample_indices)):
+                    # Extract the sample data
+                    sample_target = target_data[i]
+                    sample_pred = pred_data[i]
 
-            # Skip if all values were NaN (resulting in NaN metrics)
-            if np.isnan(mse) or np.isnan(mae):
-                continue
+                    # Compute MSE and MAE regardless of channel dimensions/shape
+                    # Flatten arrays to handle any dimensionality
+                    sample_target_flat = sample_target.flatten()
+                    sample_pred_flat = sample_pred.flatten()
 
-            # Append results for this sample and channel
-            results_list.append(
-                {
-                    "source_name": source_name,
-                    "index": index,
-                    "dt": dt_values[i],
-                    "MSE": mse,
-                    "MAE": mae,
-                    "n_sources_available": n_available_sources[i],
-                    "channel_name": channel,
-                    "run_id": run_id,
-                    "pred_name": pred_name,
-                    "model_id": model_id,
-                }
-            )
+                    # Compute difference and absolute difference (NaN will propagate)
+                    diff_squared = (sample_target_flat - sample_pred_flat) ** 2
+                    abs_diff = np.abs(sample_target_flat - sample_pred_flat)
+
+                    # Use np.nanmean to calculate metrics, automatically ignoring NaN values
+                    mse = np.nanmean(diff_squared)
+                    mae = np.nanmean(abs_diff)
+
+                    # Skip if all values were NaN (resulting in NaN metrics)
+                    if np.isnan(mse) or np.isnan(mae):
+                        continue
+
+                    # Append results for this sample, channel and realization
+                    results_list.append(
+                        {
+                            "source_name": source_name,
+                            "index": index,
+                            "dt": dt_values[i],
+                            "realization": r,
+                            "MSE": mse,
+                            "MAE": mae,
+                            "n_sources_available": n_available_sources[i],
+                            "channel_name": channel,
+                            "run_id": run_id,
+                            "pred_name": pred_name,
+                            "model_id": model_id,
+                        }
+                    )
+    else:
+        # Single realization case - similar to the original compute_metrics function
+        for channel in channel_names:
+            # Extract target and prediction data for this channel
+            target_data = filtered_targets[channel].values
+            pred_data = filtered_preds[channel].values
+
+            # For each sample, compute MSE and MAE
+            for i in range(len(sample_indices)):
+                # Extract the sample data
+                sample_target = target_data[i]
+                sample_pred = pred_data[i]
+
+                # Compute MSE and MAE regardless of channel dimensions/shape
+                # Flatten arrays to handle any dimensionality
+                sample_target_flat = sample_target.flatten()
+                sample_pred_flat = sample_pred.flatten()
+
+                # Compute difference and absolute difference (NaN will propagate)
+                diff_squared = (sample_target_flat - sample_pred_flat) ** 2
+                abs_diff = np.abs(sample_target_flat - sample_pred_flat)
+
+                # Use np.nanmean to calculate metrics, automatically ignoring NaN values
+                mse = np.nanmean(diff_squared)
+                mae = np.nanmean(abs_diff)
+
+                # Skip if all values were NaN (resulting in NaN metrics)
+                if np.isnan(mse) or np.isnan(mae):
+                    continue
+
+                # Append results for this sample and channel
+                # Use -1 for the realization field to indicate a single realization
+                results_list.append(
+                    {
+                        "source_name": source_name,
+                        "index": index,
+                        "dt": dt_values[i],
+                        "realization": -1,  # -1 indicates a single realization
+                        "MSE": mse,
+                        "MAE": mae,
+                        "n_sources_available": n_available_sources[i],
+                        "channel_name": channel,
+                        "run_id": run_id,
+                        "pred_name": pred_name,
+                        "model_id": model_id,
+                    }
+                )
 
     # Create a DataFrame with all results and append to CSV
     if results_list:
@@ -775,7 +770,7 @@ def compute_metrics(
         results_df.to_csv(results_csv, mode="a", header=False, index=False)
 
 
-def process_batch_chunk(
+def process_batch_chunk_unified(
     evaluator,
     info_df,
     batch_indices,
@@ -786,7 +781,8 @@ def process_batch_chunk(
     run_id=None,
     pred_name=None,
 ):
-    """Process a chunk of batch indices in a single worker process.
+    """Process a chunk of batch indices in a single worker process,
+    handling both single and multiple realizations in predictions.
 
     Args:
         evaluator: The QuantitativeEvaluation instance
@@ -820,7 +816,7 @@ def process_batch_chunk(
             if len(source_info) > 0:
                 targets, preds = evaluator.load_batch(source_name, index, batch_idx, model_id)
                 if targets is not None and preds is not None:
-                    compute_metrics(
+                    compute_metrics_unified(
                         source_info,
                         source_name,
                         index,
@@ -836,7 +832,7 @@ def process_batch_chunk(
 
 
 # POST-PROCESSING FUNCTIONS
-# These are function that apply a specific post-processing to predictions
+# These are functions that apply a specific post-processing to predictions
 # and targets depending on the source, before computing the metrics.
 def apply_post_processing(targets, preds, source_name):
     """Apply post-processing to targets and predictions based on source type.
@@ -886,7 +882,12 @@ def process_era5(targets, preds, radius_around_center_km=1000):
     """
     # First compute the derived values using the original variable names
     targets["mslp"] = targets["pressure_msl"].min(dim=["H", "W"])
-    preds["mslp"] = preds["pressure_msl"].min(dim=["H", "W"])
+
+    # For predictions, we need to handle the realization dimension
+    if "realization" in preds.dims:
+        preds["mslp"] = preds["pressure_msl"].min(dim=["H", "W"])
+    else:
+        preds["mslp"] = preds["pressure_msl"].min(dim=["H", "W"])
 
     # Compute the wind speed from the u and v components
     targets["wind_speed_10m"] = np.sqrt(targets["u_wind_10m"] ** 2 + targets["v_wind_10m"] ** 2)
@@ -937,7 +938,14 @@ def process_pmw(targets, preds, radius_around_center_km=1000):
 
         # Set the values outside the radius to NaN
         targets["Brightness Temperature"] = targets["Brightness Temperature"].where(~dist_mask)
-        preds["Brightness Temperature"] = preds["Brightness Temperature"].where(~dist_mask)
+
+        # For predictions with multiple realizations, need to broadcast the mask properly
+        if "realization" in preds.dims:
+            # Create a compatible mask by expanding dims to include realization
+            expanded_mask = dist_mask.expand_dims({"realization": preds.realization})
+            preds["Brightness Temperature"] = preds["Brightness Temperature"].where(~expanded_mask)
+        else:
+            preds["Brightness Temperature"] = preds["Brightness Temperature"].where(~dist_mask)
 
         # After using dist_to_center for filtering, drop it so it's not included in error calculations
         targets = targets.drop_vars("dist_to_center")

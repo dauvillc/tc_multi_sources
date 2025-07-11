@@ -21,7 +21,7 @@ class AttentionMap(nn.Module):
         if self.relative_pos:
             self.rel_pos_scale = rel_pos_dim_head**-0.5
 
-    def forward(self, keys, queries, pos_key=None, pos_query=None, mask=None):
+    def forward(self, keys, queries, pos_key=None, pos_query=None, mask=None, coords_weight=None):
         """
         Args:
             keys: Tensor of shape (batch_size, num_keys, embed_dim), or

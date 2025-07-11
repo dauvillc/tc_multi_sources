@@ -287,4 +287,4 @@ class MultisourceDeterministicReconstructor(MultisourceAbstractReconstructor):
             source_index_pair: masked_batch[source_index_pair]["avail"]
             for source_index_pair in masked_batch
         }
-        return pred, avail_flags
+        return {"predictions": pred, "avail_flags": avail_flags}

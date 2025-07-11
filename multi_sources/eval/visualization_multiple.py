@@ -48,7 +48,6 @@ class VisualEvaluationMultiple(AbstractMultisourceEvaluationMetric):
         parent_results_dir,
         eval_fraction=1.0,
         max_realizations_to_display=6,
-        include_pred_mean=True,
     ):
         """
         Args:
@@ -64,9 +63,6 @@ class VisualEvaluationMultiple(AbstractMultisourceEvaluationMetric):
             max_realizations_to_display (int): Maximum number of realizations to display in the figure.
                 If the predictions contain more realizations, only the first `max_realizations_to_display`
                 will be shown.
-            include_pred_mean (bool): If True, expects the first realization in preds to be
-                the predicted mean.
-                It is then displayed as the first column after the target.
         """
         super().__init__(
             "visual_eval_multiple",
@@ -76,7 +72,6 @@ class VisualEvaluationMultiple(AbstractMultisourceEvaluationMetric):
         )
         self.eval_fraction = eval_fraction
         self.max_realizations_to_display = max_realizations_to_display
-        self.include_pred_mean = include_pred_mean
 
     def evaluate_sources(self, verbose=True, num_workers=0):
         """
@@ -132,7 +127,6 @@ class VisualEvaluationMultiple(AbstractMultisourceEvaluationMetric):
                         model_results_dir,
                         model_id,
                         self.max_realizations_to_display,
-                        self.include_pred_mean,
                     )
             else:
                 # Use parallel processing
@@ -156,7 +150,6 @@ class VisualEvaluationMultiple(AbstractMultisourceEvaluationMetric):
                             i,
                             model_id,
                             self.max_realizations_to_display,
-                            self.include_pred_mean,
                         )
                         futures.append(future)
 
@@ -173,7 +166,6 @@ def display_batch_multiple(
     results_dir,
     model_id,
     max_realizations_to_display,
-    include_pred_mean=True,
 ):
     """Displays the targets and all realizations of predictions for a given batch index. Auxiliary function
     for parallel execution in the VisualEvaluationMultiple class.
@@ -185,7 +177,6 @@ def display_batch_multiple(
         results_dir (Path): Directory where the results will be saved.
         model_id (str): ID of the model
         max_realizations_to_display (int): Maximum number of realizations to display.
-        include_pred_mean (bool): If True, expects the first realization in preds to be the predicted mean.
     """
     # For each sample, create a figure with the targets and predictions
     batch_indices = batch_info["index_in_batch"].unique()
@@ -212,7 +203,6 @@ def display_batch_multiple(
                 idx,
                 model_id,
                 max_realizations_to_display,
-                include_pred_mean=include_pred_mean,
             )
     finally:
         # Make sure to close all figures even if an error occurs
@@ -228,7 +218,6 @@ def plot_sample_multiple(
     sample_idx,
     model_id,
     max_realizations_to_display,
-    include_pred_mean=True,
 ):
     """Displays in a figure with multiple rows - one row per channel. From left to right:
     available sources, masked source target, and all realizations of predictions.
@@ -242,8 +231,6 @@ def plot_sample_multiple(
         sample_idx (int): Sample index within the batch.
         model_id (str): ID of the model
         max_realizations_to_display (int): Maximum number of realizations to display.
-        include_pred_mean (bool): If True, expects the first realization in preds to be the predicted mean.
-            It is then displayed as the first column after the target.
     """
     # Retrieve the list of all sources/index pairs that are available and not masked
     avail_pairs = sample_df[sample_df["avail"] == 1]
@@ -295,9 +282,22 @@ def plot_sample_multiple(
     # Calculate number of rows (one per channel) and columns
     num_rows = len(all_channels)
     num_avail_sources = len(avail_pairs)
+
+    # Check if any channel has predicted mean
+    has_any_pred_mean = False
+    masked_pair_key = (masked_source, masked_idx)
+    if masked_pair_key in preds and preds[masked_pair_key] is not None:
+        pred_ds = preds[masked_pair_key]
+        for channel in all_channels:
+            pred_mean_var_name = f"pred_mean_{channel}"
+            if pred_mean_var_name in pred_ds.data_vars:
+                has_any_pred_mean = True
+                break
+
     # 1 column for channel labels + num_avail_sources + 1 separator + 1 target
-    # + num_realizations predictions
-    num_cols = 1 + num_avail_sources + 1 + 1 + num_realizations
+    # + num_realizations predictions + (1 for pred mean if exists)
+    pred_mean_cols = 1 if has_any_pred_mean else 0
+    num_cols = 1 + num_avail_sources + 1 + 1 + num_realizations + pred_mean_cols
 
     # Create figure with custom gridspec
     fig = plt.figure(figsize=(3 * num_cols, 2.5 * num_rows))
@@ -355,6 +355,15 @@ def plot_sample_multiple(
                 if channel_in_pred:
                     target = masked_target_ds[channel].values
 
+                    # Check if there's a predicted mean for this channel
+                    has_pred_mean = False
+                    pred_mean_var_name = f"pred_mean_{channel}"
+                    pred_mean_data = None
+
+                    if pred_mean_var_name in pred_ds.data_vars:
+                        has_pred_mean = True
+                        pred_mean_data = pred_ds[pred_mean_var_name].values
+
                     # Get all realizations for this channel
                     if "realization" in pred_ds.dims:
                         pred_realizations = pred_ds[
@@ -369,16 +378,28 @@ def plot_sample_multiple(
                     # Limit to max_realizations_to_display
                     pred_realizations = pred_realizations[:max_realizations_to_display]
 
-                    # Crop NaN borders using only the target values for all data
+                    # Prepare list of all data for cropping NaN borders
                     all_data = [target] + [
                         pred_realizations[i] for i in range(len(pred_realizations))
                     ]
+
+                    # Add predicted mean to the data list if it exists
+                    if has_pred_mean:
+                        all_data.append(pred_mean_data)
+
+                    # Crop NaN borders using the target values for all data
                     cropped_data = crop_nan_border_numpy(target, all_data)
                     target = cropped_data[0]
-                    pred_realizations = cropped_data[1:]
+                    pred_realizations = cropped_data[1 : len(pred_realizations) + 1]
 
-                    # Calculate shared min/max values for this channel across target and all realizations
+                    # Get the cropped predicted mean if it exists
+                    if has_pred_mean:
+                        pred_mean_data = cropped_data[-1]
+
+                    # Calculate shared min/max values for this channel across target, realizations, and pred mean
                     all_values = [target] + pred_realizations
+                    if has_pred_mean:
+                        all_values.append(pred_mean_data)
                     vmin = min(np.nanmin(data) for data in all_values)
                     vmax = max(np.nanmax(data) for data in all_values)
 
@@ -394,19 +415,18 @@ def plot_sample_multiple(
                     ax.axis("off")
                     col_idx += 1
 
-                    # Plot all realizations (including predicted mean if enabled)
+                    # First plot predicted mean if available
+                    if has_pred_mean:
+                        ax = fig.add_subplot(gs[row_idx, col_idx])
+                        ax.imshow(pred_mean_data, cmap="viridis", vmin=vmin, vmax=vmax)
+                        title = f"{displayed_name}\nPredicted mean"
+                        ax.set_title(title, fontsize=8)
+                        ax.axis("off")
+                        col_idx += 1
+
+                    # Plot all realizations
                     for real_idx in range(len(pred_realizations)):
-                        # Check if this is the first realization and we want to show it as predicted mean
-                        if real_idx == 0 and include_pred_mean:
-                            title = f"{displayed_name}\nPredicted mean"
-                        else:
-                            if include_pred_mean:
-                                realization_number = real_idx
-                            else:
-                                realization_number = real_idx + 1
-
-                            title = f"{displayed_name}\nRealization {realization_number}"
-
+                        title = f"{displayed_name}\nRealization {real_idx + 1}"
                         ax = fig.add_subplot(gs[row_idx, col_idx])
                         ax.imshow(
                             pred_realizations[real_idx], cmap="viridis", vmin=vmin, vmax=vmax
@@ -416,18 +436,46 @@ def plot_sample_multiple(
                         col_idx += 1
                 else:
                     # Empty subplots with message if channel not in predictions
-                    for i in range(num_realizations + 1):  # +1 for target
+                    # First for target, then for predicted mean if needed, then for realizations
+                    displayed_name = " ".join(masked_source.split("_")[3:5])
+
+                    # Target subplot
+                    ax = fig.add_subplot(gs[row_idx, col_idx])
+                    ax.axis("off")
+                    ax.set_title(f"{displayed_name}\nTarget N/A", color="gray")
+                    col_idx += 1
+
+                    # Check if predicted means exist for any channel in this dataset
+                    has_any_pred_mean = False
+                    if pred_ds is not None:
+                        for ch in all_channels:
+                            if f"pred_mean_{ch}" in pred_ds.data_vars:
+                                has_any_pred_mean = True
+                                break
+
+                    # Predicted mean subplot if needed
+                    if has_any_pred_mean:
                         ax = fig.add_subplot(gs[row_idx, col_idx])
                         ax.axis("off")
-                        if i == 0:
-                            displayed_name = " ".join(masked_source.split("_")[3:5])
-                            ax.set_title(f"{displayed_name}\nTarget N/A", color="gray")
-                        else:
-                            ax.set_title(f"Realization {i}\nN/A", color="gray")
+                        ax.set_title(f"{displayed_name}\nPred. mean N/A", color="gray")
+                        col_idx += 1
+
+                    # Realization subplots
+                    for i in range(1, num_realizations + 1):
+                        ax = fig.add_subplot(gs[row_idx, col_idx])
+                        ax.axis("off")
+                        ax.set_title(f"Realization {i}\nN/A", color="gray")
                         col_idx += 1
             else:
                 # Empty subplots for target and predictions if masked source doesn't have this channel
-                for i in range(num_realizations + 1):  # +1 for target
+                # Calculate the total number of columns needed
+                total_cols = num_realizations + 1  # +1 for target
+
+                # Add a column for predicted mean if any channel has one
+                if has_any_pred_mean:
+                    total_cols += 1
+
+                for i in range(total_cols):
                     ax = fig.add_subplot(gs[row_idx, col_idx])
                     ax.axis("off")
                     col_idx += 1
@@ -451,7 +499,6 @@ def process_batch_chunk_multiple(
     process_id=None,
     model_id=None,
     max_realizations_to_display=5,
-    include_pred_mean=True,
 ):
     """Process a chunk of batches in parallel for multiple realizations visualization.
 
@@ -464,8 +511,6 @@ def process_batch_chunk_multiple(
         process_id (int): ID of the process (for debugging)
         model_id (str): ID of the model
         max_realizations_to_display (int): Maximum number of realizations to display
-        include_pred_mean (bool): If True, expects the first realization in preds to be
-            the predicted mean. It is then displayed as the first column after the target.
     """
     for batch_idx in tqdm(
         batch_indices, desc=f"Worker {process_id}", disable=not verbose, position=process_id
@@ -489,7 +534,6 @@ def process_batch_chunk_multiple(
             results_dir,
             model_id,
             max_realizations_to_display,
-            include_pred_mean=include_pred_mean,
         )
 
     # Make sure to close all figures to avoid memory leaks
