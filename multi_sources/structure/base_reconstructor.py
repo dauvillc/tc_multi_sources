@@ -58,7 +58,7 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
         validation_dir=None,
         metrics={},
         use_modulation_in_output_layers=False,
-        include_coords_in_conditioning=True,
+        include_coords_in_conditioning=False,
         **kwargs,
     ):
         """

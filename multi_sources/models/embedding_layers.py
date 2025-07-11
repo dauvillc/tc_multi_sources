@@ -91,7 +91,7 @@ class SourcetypeEmbedding2d(nn.Module):
         n_charac_vars=0,
         use_diffusion_t=True,
         pred_mean_channels=0,
-        include_coords_in_conditioning=True,
+        include_coords_in_conditioning=False,
     ):
         """
         Args:
