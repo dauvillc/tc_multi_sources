@@ -1,4 +1,0 @@
-visual_multiple:
-  _target_: multi_sources.eval.visualization_multiple.VisualEvaluationMultiple
-  eval_fraction: 1.0
-  max_realizations_to_display: 6
