@@ -26,6 +26,7 @@ class MultisourcesAnchoredCrossAttention(nn.Module):
         anchor_points_spacing,
         num_heads=8,
         dropout=0.0,
+        attention_coords_weight=1.0,
         **kwargs
     ):
         """
@@ -37,6 +38,8 @@ class MultisourcesAnchoredCrossAttention(nn.Module):
                 3 means that every third token along each axis is selected as an anchor point.
             num_heads (int): Number of heads in the attention block.
             dropout (float): Dropout rate.
+            attention_coords_weight (float): Weight to apply to the coordinates
+                in the attention map.
         """
         super().__init__()
         self.values_dim = values_dim
@@ -45,6 +48,7 @@ class MultisourcesAnchoredCrossAttention(nn.Module):
         self.anchor_points_spacing = anchor_points_spacing
         self.num_heads = num_heads
         self.dropout = dropout
+        self.attention_coords_weight = attention_coords_weight
 
         self.attention = ValuesCoordinatesAttentionInternal(
             values_dim, coords_dim, self.inner_dim, num_heads, dropout
@@ -107,7 +111,9 @@ class MultisourcesAnchoredCrossAttention(nn.Module):
         anchor_values = torch.cat([anchor_values[src] for src in inputs], dim=1)
         anchor_coords = torch.cat([anchor_coords[src] for src in inputs], dim=1)
         # Compute the attention across the anchor tokens
-        anchor_values = self.attention(anchor_values, anchor_coords)
+        anchor_values = self.attention(
+            anchor_values, anchor_coords, coords_weight=self.attention_coords_weight
+        )
         # Split back the sequence of anchor tokens to the sources
         anchor_values = torch.split(anchor_values, n_anchors_list, dim=1)
 
@@ -149,6 +155,7 @@ class SeparateWindowedValuesCoordinatesAttention(nn.Module):
         window_size=8,
         shifted=0,
         block_idx=None,
+        attention_coords_weight=1.0,
         **kwargs
     ):
         """
@@ -163,6 +170,8 @@ class SeparateWindowedValuesCoordinatesAttention(nn.Module):
             block_idx (int): Index of the block in the model. If specified, the shifting
                 will be determined by block_idx's parity: odd blocks shift the windows.
                 If not None, it overrides the shifted argument.
+            attention_coords_weight (float): Weight to apply to the coordinates
+                in the attention map.
         """
         super().__init__()
         self.values_dim = values_dim
@@ -174,6 +183,7 @@ class SeparateWindowedValuesCoordinatesAttention(nn.Module):
         self.shifted = shifted
         if block_idx is not None:  # Override the shifted argument if block_idx is specified
             self.shifted = bool(block_idx % 2)
+        self.attention_coords_weight = attention_coords_weight
 
         # Projection to values queries, keys and values.
         # For the queries and keys, we apply an RMSNorm to stabilize the training.
@@ -258,7 +268,9 @@ class SeparateWindowedValuesCoordinatesAttention(nn.Module):
             qc, kc = c.chunk(2, dim=6)
             qc, kc = qc.squeeze(6), kc.squeeze(6)
             # Matrix product for the queries and keys from the values and coordinates
-            dots = (qv @ kv.transpose(4, 5) + qc @ kc.transpose(4, 5)) / self.head_dim**0.5
+            dots = (
+                qv @ kv.transpose(4, 5) + self.attention_coords_weight * qc @ kc.transpose(4, 5)
+            ) / self.head_dim**0.5
             # (b H Wh Ww w**2 w**2)
             # Add the positional embeddings
             dots += self.pos_embeddings[

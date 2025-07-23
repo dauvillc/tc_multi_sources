@@ -21,7 +21,7 @@ class AttentionMap(nn.Module):
         if self.relative_pos:
             self.rel_pos_scale = rel_pos_dim_head**-0.5
 
-    def forward(self, keys, queries, pos_key=None, pos_query=None, mask=None, coords_weight=None):
+    def forward(self, keys, queries, pos_key=None, pos_query=None, mask=None, coords_weight=1.0):
         """
         Args:
             keys: Tensor of shape (batch_size, num_keys, embed_dim), or
@@ -32,6 +32,8 @@ class AttentionMap(nn.Module):
             pos_query: Tensor of shape (batch_size, num_queries, rel_pos_dim)
             mask: Tensor of shape (batch_size, num_keys) or (batch_size, heads, num_keys),
                 or None. Keys for which the mask is False will not be attended to.
+            coords_weight: float, optional, default=1.0
+                Weight to apply to the coordinates in the attention map.
         Returns:
             Tensor of shape (batch_size, num_queries, num_keys)
         """
@@ -40,7 +42,7 @@ class AttentionMap(nn.Module):
         # Optional relative positional encodings
         if self.relative_pos:
             rel_pos_dots = torch.matmul(pos_query, pos_key.transpose(-2, -1)) * self.rel_pos_scale
-            dots = dots + rel_pos_dots
+            dots = dots + coords_weight * rel_pos_dots
         # Mask the columns of the attention map that correspond to the masked tokens.
         if mask is not None:
             # Expand the mask in the middle to reach the same number of dimensions as dots.
@@ -58,6 +60,13 @@ class ValuesCoordinatesAttentionInternal(nn.Module):
     to compute the attention weights, as Softmax(QpKp^T + QcKc^T)."""
 
     def __init__(self, values_dim, coords_dim, inner_dim, num_heads=8, dropout=0.0):
+        """Args:
+        values_dim (int): Dimension of the values.
+        coords_dim (int): Dimension of the coordinates.
+        inner_dim (int): Dimension of the inner representations.
+        num_heads (int): Number of attention heads.
+        dropout (float): Dropout rate to apply to the attention map.
+        """
         super().__init__()
         self.num_heads = num_heads
 
@@ -77,11 +86,12 @@ class ValuesCoordinatesAttentionInternal(nn.Module):
         # Dropout on the attention map
         self.att_dropout = nn.Dropout(dropout)
 
-    def forward(self, values, coords, attention_mask=None):
+    def forward(self, values, coords, coords_weight=1.0, attention_mask=None):
         """
         Args:
             values (tensor): Tensor of shape (batch_size, seq_len, values_dim).
             coords (tensor): Tensor of shape (batch_size, seq_len, coords_dim).
+            coords_weight (float): Weight to apply to the coordinates in the attention map.
             attention_mask (tensor): Tensor of shape (batch_size, seq_len), or None.
         Returns:
             Tensor of shape (batch_size, seq_len, values_dim), the updated values.
@@ -99,7 +109,7 @@ class ValuesCoordinatesAttentionInternal(nn.Module):
 
         # Compute the attention map using two sets of keys and queries, one from the values
         # and one from the coordinates.
-        attn = self.attention_map(kv, qv, kc, qc, mask=attention_mask)
+        attn = self.attention_map(kv, qv, kc, qc, mask=attention_mask, coords_weight=coords_weight)
         # Apply dropout to the attention map
         attn = self.att_dropout(attn)
         out = torch.matmul(attn, vv)
