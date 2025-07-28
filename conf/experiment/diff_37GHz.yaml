@@ -6,7 +6,11 @@ defaults:
   - override /lightning_module: flow_matching
   - override /lr_scheduler: cosine_warmup_100epochs
   - override /metrics: default_fm
-  - override /model: msvit_12b_d512
+  - override /model: msvit_10b_d256
+
+lightning_module:
+  patch_size: 8
+  use_det_model_from_run: 1ugiaa9m
 
 wandb:
   name: diff_37GHz

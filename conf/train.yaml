@@ -1,16 +1,18 @@
 defaults:
-  - paths: jz
+  - paths: ???
   - wandb: default
   - sources: ???
   - dataset: default
   - data_augmentation: none
-  - dataloader: jz
+  - dataloader: default
   - lightning_module: flow_matching
   - model: ???
-  - trainer: ???
+  - trainer: default
   - lr_scheduler: cosine_warmup_50epochs
   - optimizer: default_adamw
   - metrics: none
+  - experiment: ???
+  - setup: ???
   - _self_
 
 seed: 42

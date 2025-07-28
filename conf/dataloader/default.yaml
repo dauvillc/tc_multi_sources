@@ -1,0 +1,4 @@
+# torch DataLoader kwargs
+num_workers: ???
+batch_size: ???
+pin_memory: true

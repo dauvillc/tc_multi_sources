@@ -23,7 +23,9 @@ def main(cfg: DictConfig):
 
     # Load the experiment configuration from the checkpoint
     exp_cfg, checkpoint_path = load_experiment_cfg_from_checkpoint(
-        cfg["paths"]["checkpoints"], run_id
+        cfg["paths"]["checkpoints"],
+        run_id,
+        best_or_latest="best",
     )
     # Update the experiment configuration with the current config.
     update(exp_cfg, cfg)

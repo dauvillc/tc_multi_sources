@@ -1,11 +1,10 @@
 # @package _global_
 defaults:
-  - override /paths: jz
-  - override /dataloader: jz
   - override /sources: sat_interp_37GHz
   - override /lightning_module: deterministic
   - override /lr_scheduler: cosine_warmup_100epochs
   - override /metrics: default_fm
+  - override /model: msvit_8b_d256
 
 wandb:
   name: det_37GHz
