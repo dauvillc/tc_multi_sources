@@ -149,7 +149,9 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
             ckpt_dir = Path(cfg["paths"]["checkpoints"])
             # Load the checkpoint and the configuration of the deterministic model
             det_cfg, ckpt_path = load_experiment_cfg_from_checkpoint(
-                ckpt_dir, use_det_model_from_run
+                ckpt_dir,
+                use_det_model_from_run,
+                best_or_latest="best",
             )
             self.det_model = instantiate(
                 det_cfg["lightning_module"],

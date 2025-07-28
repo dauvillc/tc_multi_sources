@@ -127,7 +127,7 @@ class SourcetypeEmbedding2d(nn.Module):
 
         # Conditioning embedding layers
         # - spatial conditioning
-        ch_spatial_cond = 1 + pred_mean_channels  # landmask + predicted mean
+        ch_spatial_cond = 1  # landmask
         ch_spatial_cond += int(self.include_coords_in_conditioning) * 3  # coords
         self.spatial_cond_embedding = ConvPatchEmbedding2d(
             ch_spatial_cond, patch_size, values_dim, norm=False
@@ -185,9 +185,6 @@ class SourcetypeEmbedding2d(nn.Module):
         # Spatial conditionings (embedded together via patch embedding)
         # - Land-sea mask
         spatial_cond = [landmask]
-        # - optionally, the predicted mean
-        if self.use_predicted_mean:
-            spatial_cond.append(data["pred_mean"])
         # - optionally, the spatial coordinates
         if self.include_coords_in_conditioning:
             spatial_cond.append(coords)

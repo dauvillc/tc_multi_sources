@@ -1,6 +1,7 @@
 dropout: 0.0
 values_dim: 512
 coords_dim: 256
+update_coords: true
 backbone:
   _target_: multi_sources.models.motif_double.backbone.MultisourceGeneralBackbone
   values_dim: ${lightning_module.values_dim}

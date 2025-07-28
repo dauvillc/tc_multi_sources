@@ -1,0 +1,13 @@
+dropout: 0.0
+values_dim: 256
+coords_dim: 128
+backbone:
+  _target_: multi_sources.models.perceiver_resampler.core.MultisourcePerceiverResampler
+  values_dim: ${model.values_dim}
+  coords_dim: ${model.coords_dim}
+  n_blocks: 10
+  latent_size: 64
+  inner_ratio: 2
+  num_heads: 8
+  mlp_inner_ratio: 2
+  dropout: ${model.dropout}

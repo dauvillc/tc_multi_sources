@@ -49,6 +49,7 @@ wandb/
 *.png
 *.jpg
 *.jpeg
+multi_sources/models/old
 
 # Hydra outputs
 multirun/
