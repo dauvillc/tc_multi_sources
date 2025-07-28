@@ -52,6 +52,7 @@ wandb/
 
 # Hydra outputs
 multirun/
+submitit/
 .hydra/
 
 # Local data that should not be versioned
