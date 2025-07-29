@@ -1,7 +1,5 @@
 # @package _global_
 defaults:
-  - override /paths: jz
-  - override /dataloader: jz
   - override /sources: sat_interp_37GHz
   - override /lightning_module: flow_matching
   - override /lr_scheduler: cosine_warmup_100epochs
