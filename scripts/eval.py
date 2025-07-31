@@ -52,6 +52,44 @@ from omegaconf import DictConfig, OmegaConf
 from multi_sources.eval.abstract_evaluation_metric import AbstractMultisourceEvaluationMetric
 
 
+def predictions_sanity_check(info_dfs):
+    """Performs a sanity check on the predictions info dataframes, to
+    ensure they were made on exactly the same data."""
+    # Check that all info_dfs have the same columns
+    if not all(info_df.columns.equals(info_dfs[0].columns) for info_df in info_dfs):
+        raise ValueError(
+            "Found models with different columns in their info_df. "
+            "Please ensure all models are evaluated on the same data."
+        )
+    # Check that they have the same number of rows (samples and sources)
+    if not all(len(info_df) == len(info_dfs[0]) for info_df in info_dfs):
+        raise ValueError(
+            "Found models with different number of rows in their info_df. "
+            "This indicates different samples or different sources. "
+        )
+    # Sort by batch index, then by index in batch, and then by source name
+    for info_df in info_dfs:
+        info_df.sort_values(by=["batch_idx", "index_in_batch", "source_name"], inplace=True)
+        info_df.reset_index(drop=True, inplace=True)
+    # Check that the batch index, index in batch, and source name are the same
+    for i in range(1, len(info_dfs)):
+        if not info_dfs[i][["batch_idx", "index_in_batch", "source_name"]].equals(
+            info_dfs[0][["batch_idx", "index_in_batch", "source_name"]]
+        ):
+            raise ValueError(
+                "Found models with different batch_idx, index_in_batch, or source_name in their info_df. "
+                "Please ensure all models are evaluated on exactly the same data."
+            )
+    # Check the availability flags match
+    for i in range(1, len(info_dfs)):
+        if not info_dfs[i]["avail"].equals(info_dfs[0]["avail"]):
+            raise ValueError(
+                "Found models with different availability flags in their info_df. "
+                "Make sure the models' masking selection is identical between"
+                "the prediction runs."
+            )
+
+
 @hydra.main(version_base=None, config_path="../conf", config_name="eval")
 def main(cfg: DictConfig):
     cfg = OmegaConf.to_object(cfg)
@@ -124,6 +162,9 @@ def main(cfg: DictConfig):
             "run_id": run_id,
             "pred_name": pred_name,
         }
+
+    # Perform a sanity check on the predictions info dataframes
+    predictions_sanity_check([data["info_df"] for data in model_data.values()])
 
     # Instantiate the evaluation classes
     evaluation_classes = cfg["eval_class"]

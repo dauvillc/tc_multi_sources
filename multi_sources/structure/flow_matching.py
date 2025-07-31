@@ -61,7 +61,7 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
         validation_dir=None,
         compute_metrics_every_k_batches=5,
         display_realizations_every_k_batches=3,
-        n_realizations_per_sample=5,
+        n_realizations_per_sample=3,
         metrics={},
         use_modulation_in_output_layers=False,
         det_model_kwargs={},
@@ -143,6 +143,7 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
         self.n_realizations_per_sample = n_realizations_per_sample
         self.cfg_train_uncond_proba = cfg_train_uncond_proba
         self.cfg_scale = cfg_scale
+        self.fm_rng = torch.Generator()  # For the noise and time sampling
 
         # Optional: deterministic model usage
         if self.use_det_model:
@@ -167,7 +168,7 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
             self.det_model.eval()
             self.det_model.requires_grad_(False)
 
-    def mask(self, x, pure_noise=False, masking_seed=None):
+    def mask(self, x, pure_noise=False, masking_generator=None):
         """Masks a portion of the sources. A missing source cannot be chosen to be masked.
         Supposes that there are at least as many non-missing sources as the number of sources
         to mask. The number of sources to mask is determined by self.masking ratio.
@@ -182,8 +183,8 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
                 where index counts observations (0 = most recent).
             pure_noise (bool): If True, the sources are masked with pure noise, without
                 following the noise schedule.
-            masking_seed (int, optional): Seed for the random number generator used to select
-                which sources to mask.
+            masking_generator (torch.Generator, optional): A generator to use for the selection
+                of which sources to mask. If None, the default generator is used.
         Returns:
             masked_x (dict): The input sources with a portion
                 of the sources masked. An entry "diffusion_t" is added
@@ -195,7 +196,7 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
         """
 
         # First step: for each sample in the batch, select a subset of the sources to mask.
-        avail_flags = super().select_sources_to_mask(x, masking_seed)
+        avail_flags = super().select_sources_to_mask(x, generator=masking_generator)
         # avail_flags[s][i] == 0 if the source s should be masked.
         device = next(self.parameters()).device
 
@@ -232,9 +233,13 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
             if pure_noise:
                 t = torch.zeros(batch_size, device=device)  # Means x_t = x_0
             else:
-                t = torch.rand(batch_size, device=device)  # Random diffusion timestep
+                t = torch.rand(batch_size, device=device, generator=self.fm_rng)
             # Generate random noise with the same shape as the values
-            noise = torch.randn_like(masked_data["values"], device=device)
+            noise = torch.randn(
+                masked_data["values"].shape,
+                generator=self.fm_rng,
+                dtype=masked_data["values"].dtype,
+            ).to(device)
             # The sources should be noised if they are masked.
             should_mask = avail_flags[source_index_pair] == 0
             # Compute the noised values associated with the diffusion timesteps
@@ -347,15 +352,17 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
                     for each source, as tensors of shape (B, C, ...).
         """
         with torch.no_grad():
-            # We'll use the same seed for the selection of the sources to mask,
-            # so that the realizations are consistent between samples and only the noise
-            # differs.
-            seed = torch.Generator().seed()
             all_sols = []  # Will store each realization of the solution
+            # We want to mask exactly the same sources for each realization. To do so we'll
+            # create a new generator here (using self.fm_rng's state) and pass clones
+            # of it to the masking function.
+            masking_rng = self.fm_rng.clone_state()
             for _ in range(n_realizations_per_sample):
                 # Mask the sources with pure noise. If using CFG, also generate an unconditional version
                 # of the samples in a double batch.
-                masked_batch, path_samples = self.mask(batch, pure_noise=True, masking_seed=seed)
+                masked_batch, _ = self.mask(
+                    batch, pure_noise=True, masking_generator=masking_rng.clone_state()
+                )
 
                 x_0 = {
                     source_index_pair: data["values"]
@@ -383,12 +390,11 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
                         vf = self.forward(self.to_double_batch(batch_t))
                         # Split the conditional and unconditional batches and apply the
                         # guidance scale.
-                        if self.cfg_scale is not None:
-                            half_batch = next(iter(vf.values())).shape[0] // 2
-                            for source_index_pair in vf:
-                                cond = vf[source_index_pair][:half_batch]
-                                uncond = vf[source_index_pair][half_batch:]
-                                vf[source_index_pair] = cond + self.cfg_scale * (cond - uncond)
+                        half_batch = next(iter(vf.values())).shape[0] // 2
+                        for source_index_pair in vf:
+                            cond = vf[source_index_pair][:half_batch]
+                            uncond = vf[source_index_pair][half_batch:]
+                            vf[source_index_pair] = cond + self.cfg_scale * (cond - uncond)
                     else:
                         vf = self.forward(batch_t)
                     # Where the sources are not being solved, we'll set the velocity field to zero,

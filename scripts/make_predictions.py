@@ -30,9 +30,6 @@ def main(cfg: DictConfig):
     # Update the experiment configuration with the current config.
     update(exp_cfg, cfg)
 
-    # Seed everything with the seed used in the experiment
-    pl.seed_everything(exp_cfg["seed"], workers=True)
-
     # Create the dataset and dataloader
     split = cfg["split"]
     dataset = hydra.utils.instantiate(
@@ -53,13 +50,21 @@ def main(cfg: DictConfig):
 
     # Instantiate the model and the lightning module
     pl_module = instantiate(
-        exp_cfg["lightning_module"], dataset.sources, exp_cfg, validation_dir=None
+        exp_cfg["lightning_module"],
+        dataset.sources,
+        exp_cfg,
+        validation_dir=None,
+        masking_selection_seed=cfg["seed"],
     )
     ckpt = torch.load(checkpoint_path, weights_only=False)
     pl_module.load_state_dict(ckpt["state_dict"])
 
     # Custom BasePredictionWriter to save the preds and targets with metadata (eg coords).
     writer = MultiSourceWriter(run_results_dir, dataset.dt_max, dataset=dataset, **cfg["writer"])
+
+    # Seed everything with the local seed, not the experiment's, to ensure
+    # different models are evaluated with the same seed.
+    pl.seed_everything(cfg["seed"], workers=True)
 
     trainer = pl.Trainer(
         **cfg["trainer"],

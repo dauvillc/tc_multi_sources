@@ -229,13 +229,13 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
 
         return output
 
-    def select_sources_to_mask(self, x, masking_seed=None):
+    def select_sources_to_mask(self, x, generator=None):
         """Given a multi-sources batch, randomly selects a source to mask in each sample.
         Does not actually perform the masking.
         Args:
             x (dict of (source_name, index) to dict of str to tensor): The input sources.
-            masking_seed (int, optional): Seed for the random number generator used to select
-                which sources to mask.
+            generator (torch.Generator, optional): The random number generator to use for
+                selecting the sources to mask. If None, uses the default generator.
         Returns:
             avail_flags (dict of (source_name, index) to tensor): The availability flags for each source,
                 as tensors of shape (B,), such that:
@@ -284,15 +284,12 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
                 )
         # Case where we randomly select the sources to mask
         else:
-            if masking_seed is not None:
-                self.source_select_gen.manual_seed(int(masking_seed))
+            gen = generator or self.source_select_gen
             # Select the sources to mask, which can differ between samples in the batch.
             # Missing sources cannot be masked.
             # Strategy: we'll generate a random noise tensor of shape (B, n_sources)
             # and for each row, mask the sources with the highest noise.
-            noise = torch.rand((batch_size, n_sources), generator=self.source_select_gen).to(
-                device
-            )
+            noise = torch.rand((batch_size, n_sources), generator=gen).to(device)
             for i, (source_index_pair, data) in enumerate(x.items()):
                 # Multiply the noise by the availability mask (-1 for missing sources, 1 otherwise)
                 noise[:, i] = noise[:, i] * data["avail"].squeeze(-1)

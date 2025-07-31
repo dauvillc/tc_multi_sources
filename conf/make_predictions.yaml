@@ -5,6 +5,8 @@ defaults:
   - inference_cfg: default
   - _self_
 
+seed: 123
+
 run_id: ???
 pred_name: ???
 split: val  # Defaults to the validation set
