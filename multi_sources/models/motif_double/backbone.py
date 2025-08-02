@@ -3,8 +3,8 @@ which can be used with custom blocks."""
 
 import torch.nn as nn
 
-from multi_sources.models.motif_double.factorized_attention import (
-    MultisourcesAnchoredCrossAttention,
+from multi_sources.models.motif_double.cross_attention import MultisourcesWindowedCrossAttention
+from multi_sources.models.motif_double.self_attention import (
     SeparateWindowedValuesCoordinatesAttention,
 )
 from multi_sources.models.motif_double.small_layers import FeedForward
@@ -29,10 +29,11 @@ class MultisourceGeneralBackbone(nn.Module):
         coords_dim,
         values_dim,
         update_coords=False,
-        att_inner_ratio=1,
+        att_inner_ratio=1.0,
+        cross_att_inner_ratio_v=1.0,
         num_heads=8,
-        anchor_points_spacing=4,
-        window_size=8,
+        cross_att_window_size=4,
+        iwsa_window_size=8,
         mlp_inner_ratio=2,
         dropout=0.0,
     ):
@@ -57,15 +58,12 @@ class MultisourceGeneralBackbone(nn.Module):
             block = nn.ModuleList(
                 [
                     AdapativeConditionalNormalization(
-                        MultisourcesAnchoredCrossAttention(
+                        MultisourcesWindowedCrossAttention(
                             values_dim,
                             coords_dim,
-                            att_inner_ratio,
-                            anchor_points_spacing,
-                            update_coords=update_coords,
-                            num_heads=num_heads,
-                            shifted=shifted,
-                            dropout=dropout,
+                            inner_ratio_qk=att_inner_ratio,
+                            window_size=cross_att_window_size,
+                            inner_ratio_v=cross_att_inner_ratio_v,
                         ),
                         values_dim,
                         coords_dim,
@@ -79,7 +77,7 @@ class MultisourceGeneralBackbone(nn.Module):
                             att_inner_ratio,
                             update_coords,
                             num_heads=num_heads,
-                            window_size=window_size,
+                            window_size=iwsa_window_size,
                             dropout=dropout,
                             shifted=shifted,
                         ),

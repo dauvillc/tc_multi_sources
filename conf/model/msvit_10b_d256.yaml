@@ -7,8 +7,8 @@ backbone:
   coords_dim: ${lightning_module.coords_dim}
   n_blocks: 10
   dropout: ${model.dropout}
-  att_inner_ratio: 1
-  mlp_inner_ratio: 2
+  att_inner_ratio: 1.0
+  mlp_inner_ratio: 2.0
   num_heads: 8
-  anchor_points_spacing: 4
-  window_size: 8
+  cross_att_window_size: 4
+  iwsa_window_size: 8

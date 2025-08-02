@@ -23,8 +23,8 @@ class FeedForward(nn.Module):
         """
         super().__init__()
         self.update_coords = update_coords
-        values_inner_dim = values_dim * inner_ratio
-        coords_inner_dim = coords_dim * inner_ratio
+        values_inner_dim = int(values_dim * inner_ratio)
+        coords_inner_dim = int(coords_dim * inner_ratio)
 
         # Network for values
         self.values_net = nn.Sequential(
