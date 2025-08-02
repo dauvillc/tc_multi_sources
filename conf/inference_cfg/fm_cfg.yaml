@@ -1,0 +1,26 @@
+# @package _global_
+pred_name: fm_cfg
+
+lightning_module:
+  cfg_scale: 5
+  n_realizations_per_sample: 1
+
+trainer:
+  limit_predict_batches: 0.2
+
+dataset:
+  val:
+    dt_max: 6
+    min_ref_time_delta: 1
+    min_available_sources: 2
+    select_most_recent: false
+    forecasting_sources: null
+    forecasting_lead_time: null
+  test:
+    dt_max: ${dataset.val.dt_max}
+    min_ref_time_delta: ${dataset.val.min_ref_time_delta}
+    min_available_sources: ${dataset.val.min_available_sources}
+    select_most_recent: ${dataset.val.select_most_recent}
+    forecasting_sources: ${dataset.val.forecasting_sources}
+    forecasting_lead_time: ${dataset.val.forecasting_lead_time}
+

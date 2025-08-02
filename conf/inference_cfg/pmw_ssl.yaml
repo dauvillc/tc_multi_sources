@@ -1,10 +1,10 @@
 # @package _global_
-pred_name: pmw_reconstruction
+pred_name: pmw_ssl
 
 dataset:
   val:
-    dt_max: 24
-    min_ref_time_delta: 24
+    dt_max: 6
+    min_ref_time_delta: 1
     min_available_sources: 2
     select_most_recent: false
     forecasting_sources: null
