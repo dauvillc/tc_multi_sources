@@ -35,9 +35,18 @@ class TrainJob(submitit.helpers.Checkpointable):
                     "It must be either 'resume' or 'fine_tune'."
                 )
 
-            # Create the run's ID and retrieve its checkpoint path
             print("Resuming run: ", resume_run_id)
-            run_id = resume_run_id
+            # Create the run's ID and retrieve its checkpoint path.
+            # Since resuming W&B offline runs is unstable, we won't use exactly the same run ID.
+            # Instead, we'll use run-n where n starts at 1 (first resume) and increments by 1
+            # for each subsequent resume.
+            split = resume_run_id.split("-")
+            if len(split) > 1 and split[-1].isdigit():
+                # If the run ID ends with a number, increment it.
+                run_id = "-".join(split[:-1]) + "-" + str(int(split[-1]) + 1)
+            else:
+                # If the run ID does not end with a number, append "-1".
+                run_id = resume_run_id + "-1"
             _, checkpoint_path = load_experiment_cfg_from_checkpoint(
                 cfg["paths"]["checkpoints"], resume_run_id, best_or_latest="latest"
             )
