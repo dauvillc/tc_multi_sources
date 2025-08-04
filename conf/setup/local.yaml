@@ -1,7 +1,6 @@
 # @package _global_
 defaults:
   - override /paths: local
-  - override /trainer: local
 
 launch_without_submitit: true
 

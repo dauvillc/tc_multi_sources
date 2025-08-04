@@ -3,6 +3,8 @@ defaults:
   - paths: jz
   - data_augmentation: none
   - inference_cfg: default
+  - trainer: predict
+  - setup: ???
   - _self_
 
 seed: 123
@@ -18,13 +20,6 @@ dataset:
     dataset_dir: ${paths.preprocessed_dataset}
   test:
     dataset_dir: ${paths.preprocessed_dataset}
-
-trainer:
-  accelerator: gpu
-  devices: 1
-
-dataloader:
-  num_workers: 9
 
 writer: {}
 

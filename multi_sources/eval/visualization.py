@@ -247,6 +247,7 @@ def get_available_sources(sample_data):
 def get_global_color_limits(sample_data, first_channel):
     """Calculate global min/max for consistent color scaling."""
     vmin, vmax = float("inf"), float("-inf")
+    pred_mean_channel = f"pred_mean_{first_channel}"
 
     def update_limits(data):
         nonlocal vmin, vmax
@@ -264,24 +265,38 @@ def get_global_color_limits(sample_data, first_channel):
 
         # Check predictions
         for pred_ds in model_data["preds"].values():
-            if pred_ds is not None and first_channel in pred_ds.data_vars:
-                if "realization" in pred_ds.dims:
-                    for r in range(pred_ds.sizes["realization"]):
-                        update_limits(pred_ds[first_channel].isel(realization=r).values)
-                else:
-                    update_limits(pred_ds[first_channel].values)
+            if pred_ds is not None:
+                # Check regular channel predictions
+                if first_channel in pred_ds.data_vars:
+                    if "realization" in pred_ds.dims:
+                        for r in range(pred_ds.sizes["realization"]):
+                            update_limits(pred_ds[first_channel].isel(realization=r).values)
+                    else:
+                        update_limits(pred_ds[first_channel].values)
+
+                # Check predicted mean channel
+                if pred_mean_channel in pred_ds.data_vars:
+                    update_limits(pred_ds[pred_mean_channel].values)
 
     return (0, 1) if vmin == float("inf") or vmax == float("-inf") else (vmin, vmax)
 
 
 def plot_available_sources(
-    fig, avail_pairs, sample_data, first_channel, vmin, vmax, max_cols, num_models
+    fig,
+    avail_pairs,
+    sample_data,
+    first_channel,
+    vmin,
+    vmax,
+    max_avail_cols,
+    num_models,
+    total_cols,
 ):
     """Plot available sources and targets in the top row."""
     first_model_id = list(sample_data.keys())[0]
 
     for i, (_, row) in enumerate(avail_pairs.iterrows()):
-        if i >= max_cols:  # Limit columns
+        if i >= max_avail_cols:  # Limit columns
             break
 
         src, idx = row["source_name"], row["index"]
@@ -297,7 +312,7 @@ def plot_available_sources(
                 data = target_ds[first_channel].values
                 data = crop_nan_border_numpy(data, [data])[0]
 
-                ax = fig.add_subplot(1 + num_models, max_cols, i + 1)  # Top row
+                ax = fig.add_subplot(1 + num_models, total_cols, i + 1)  # Top row
                 ax.imshow(data, cmap="viridis", vmin=vmin, vmax=vmax)
                 ax.set_title(f"{src} ({dt_str})\n{label}", fontsize=9)
                 ax.set_xticks([])
@@ -319,6 +334,7 @@ def plot_model_predictions(
     target_pair = target_pairs.iloc[0]  # Use first target source
     src, idx = target_pair["source_name"], target_pair["index"]
     source_pair = (src, idx)
+    pred_mean_channel = f"pred_mean_{first_channel}"
 
     im = None
     # Create one row per model (starting from row 2, since row 1 is for available sources)
@@ -326,27 +342,52 @@ def plot_model_predictions(
         model_data = sample_data[model_id]
         row_idx = model_idx + 2  # Start from row 2 (1-indexed for subplot)
 
-        # Plot realizations for this model across columns
-        for col_idx in range(max_cols):
-            if col_idx >= max_realizations:
-                break
+        # Check if predicted mean is available for this model
+        has_pred_mean = (
+            source_pair in model_data["preds"]
+            and model_data["preds"][source_pair] is not None
+            and pred_mean_channel in model_data["preds"][source_pair].data_vars
+        )
 
+        # Plot predictions for this model across columns
+        for col_idx in range(max_cols):
             ax = fig.add_subplot(1 + num_models, max_cols, (row_idx - 1) * max_cols + col_idx + 1)
 
             if source_pair in model_data["preds"] and model_data["preds"][source_pair] is not None:
                 pred_ds = model_data["preds"][source_pair]
 
-                if first_channel in pred_ds.data_vars:
+                # First column: plot predicted mean if available, otherwise first realization
+                if col_idx == 0 and has_pred_mean:
+                    # Plot predicted mean
+                    data = pred_ds[pred_mean_channel].values
+
+                    # Get target for cropping reference
+                    if source_pair in model_data["targets"]:
+                        target_data = model_data["targets"][source_pair][first_channel].values
+                        data = crop_nan_border_numpy(target_data, [data])[0]
+
+                    im = ax.imshow(data, cmap="viridis", vmin=vmin, vmax=vmax)
+                    ax.set_title(f"Model: {model_id}\nPred. Mean", fontsize=9)
+
+                elif first_channel in pred_ds.data_vars:
+                    # Calculate realization index, accounting for predicted mean in first column
+                    real_idx = col_idx - (1 if has_pred_mean else 0)
+
+                    # Skip if we've exceeded available realizations
+                    if real_idx >= max_realizations:
+                        ax.axis("off")
+                        continue
+
                     # Get data for this realization
                     if "realization" in pred_ds.dims:
-                        if col_idx < pred_ds.sizes["realization"]:
-                            data = pred_ds[first_channel].isel(realization=col_idx).values
+                        if real_idx >= 0 and real_idx < pred_ds.sizes["realization"]:
+                            data = pred_ds[first_channel].isel(realization=real_idx).values
                         else:
                             # Empty subplot if no realization available
                             ax.axis("off")
                             continue
                     else:
-                        if col_idx == 0:  # Only show single prediction in first column
+                        if real_idx == 0:  # Only show single prediction in first realization slot
                             data = pred_ds[first_channel].values
                         else:
                             # Empty subplot for other columns
@@ -360,11 +401,11 @@ def plot_model_predictions(
 
                     im = ax.imshow(data, cmap="viridis", vmin=vmin, vmax=vmax)
 
-                    # Add title for first column to identify the model
-                    if col_idx == 0:
-                        ax.set_title(f"Model: {model_id}\nReal. {col_idx + 1}", fontsize=9)
+                    # Add title
+                    if col_idx == 0 and not has_pred_mean:
+                        ax.set_title(f"Model: {model_id}\nReal. {real_idx + 1}", fontsize=9)
                     else:
-                        ax.set_title(f"Real. {col_idx + 1}", fontsize=9)
+                        ax.set_title(f"Real. {real_idx + 1}", fontsize=9)
                 else:
                     # Empty subplot if no predictions for this channel
                     ax.axis("off")
@@ -402,20 +443,45 @@ def create_sample_visualization(sample_data, results_dir, batch_idx, sample_idx,
 
         # Calculate grid dimensions
         num_models = len(sample_data)
-        max_cols = min(len(avail_pairs), max_realizations)
-        max_cols = min(max_cols, 8)  # Reasonable limit
+
+        # For available sources row: limit to available sources or max_realizations
+        max_avail_cols = min(len(avail_pairs), max_realizations)
+
+        # For prediction rows: check if any model has predicted means to determine max columns needed
+        max_pred_cols = max_realizations
+        for model_data in sample_data.values():
+            for pred_ds in model_data["preds"].values():
+                if pred_ds is not None:
+                    pred_mean_channel = f"pred_mean_{first_channel}"
+                    if pred_mean_channel in pred_ds.data_vars:
+                        # Add 1 for predicted mean column
+                        max_pred_cols = max_realizations + 1
+                        break
+            if max_pred_cols > max_realizations:
+                break
+
+        # Use the maximum of both requirements
+        max_cols = max(max_avail_cols, max_pred_cols)
 
         # Total rows: 1 for available sources + 1 per model
         total_rows = 1 + num_models
 
-        # Create figure - adjust height based on number of rows
-        fig_width = 3 * max_cols
+        # Create figure - adjust width to account for colorbar
+        fig_width = 3 * max_cols + 1.5  # Add more space for colorbar
         fig_height = 2.5 * total_rows  # Adjust height per row
         fig = plt.figure(figsize=(fig_width, fig_height))
 
         # Plot available sources (top row)
         plot_available_sources(
-            fig, avail_pairs, sample_data, first_channel, vmin, vmax, max_cols, num_models
+            fig,
+            avail_pairs,
+            sample_data,
+            first_channel,
+            vmin,
+            vmax,
+            max_avail_cols,
+            num_models,
+            max_cols,
         )
 
         # Plot model predictions (one row per model)
@@ -423,18 +489,21 @@ def create_sample_visualization(sample_data, results_dir, batch_idx, sample_idx,
             fig, sample_data, first_channel, vmin, vmax, max_realizations, max_cols, num_models
         )
 
-        # Add colorbar if we have an image
+        # Add vertical colorbar on the right if we have an image
         if im is not None:
+            # Use plt.subplots_adjust to make room for colorbar
+            plt.subplots_adjust(right=0.85)
             fig.colorbar(
                 im,
                 ax=fig.get_axes(),
-                orientation="horizontal",
-                fraction=0.03,
-                pad=0.08,
+                orientation="vertical",
+                fraction=0.05,
+                pad=0.02,
                 shrink=0.8,
             )
 
-        plt.tight_layout()
+        else:
+            plt.tight_layout()
 
         # Save figure
         if not isinstance(results_dir, Path):

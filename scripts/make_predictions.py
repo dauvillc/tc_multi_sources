@@ -54,7 +54,6 @@ def main(cfg: DictConfig):
         dataset.sources,
         exp_cfg,
         validation_dir=None,
-        masking_selection_seed=cfg["seed"],
     )
     ckpt = torch.load(checkpoint_path, weights_only=False)
     pl_module.load_state_dict(ckpt["state_dict"])
