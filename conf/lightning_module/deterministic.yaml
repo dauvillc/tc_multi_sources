@@ -10,3 +10,5 @@ adamw_kwargs: ${optimizer}
 metrics: ${metrics}
 
 backbone: ${model.backbone}
+output_resnet_blocks: ${model.output_resnet_blocks}
+output_resnet_channels: ${model.output_resnet_channels}

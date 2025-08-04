@@ -233,7 +233,7 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
             if pure_noise:
                 t = torch.zeros(batch_size, device=device)  # Means x_t = x_0
             else:
-                t = torch.rand(batch_size, device=device, generator=self.fm_rng)
+                t = torch.rand(batch_size, generator=self.fm_rng).to(device)
             # Generate random noise with the same shape as the values
             noise = torch.randn(
                 masked_data["values"].shape,

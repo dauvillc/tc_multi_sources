@@ -53,6 +53,7 @@ class MultisourceDeterministicReconstructor(MultisourceAbstractReconstructor):
         validation_dir=None,
         use_modulation_in_output_layers=False,
         include_coords_in_conditioning=True,
+        return_embeddings_in_predict=False,
         metrics={},
     ):
         """
@@ -90,6 +91,8 @@ class MultisourceDeterministicReconstructor(MultisourceAbstractReconstructor):
                 embeddings in the output layers.
             include_coords_in_conditioning (bool): If True, includes the coordinates
                 in the conditioning tensor.
+            return_embeddings_in_predict (bool): If True, the predict step will also
+                return the embedded data for each source.
         """
         super().__init__(
             sources,
@@ -111,6 +114,7 @@ class MultisourceDeterministicReconstructor(MultisourceAbstractReconstructor):
             use_modulation_in_output_layers=use_modulation_in_output_layers,
             include_coords_in_conditioning=include_coords_in_conditioning,
         )
+        self.return_embeddings_in_predict = return_embeddings_in_predict
 
         # [MASK] token that will replace the embeddings of the masked tokens
         self.mask_token = nn.Parameter(torch.randn(1, self.values_dim))
@@ -279,7 +283,10 @@ class MultisourceDeterministicReconstructor(MultisourceAbstractReconstructor):
         # Mask the sources
         masked_batch = self.mask(batch)
         # Make predictions
-        pred = self.forward(masked_batch)
+        pred = self.forward(masked_batch, return_embeddings=self.return_embeddings_in_predict)
+        if self.return_embeddings_in_predict:
+            pred, embeddings = pred
+        output = {"predictions": pred}
         # Fetch the availability flags for each source, so that
         # whatever processes the output can know which elements
         # were masked.
@@ -287,4 +294,7 @@ class MultisourceDeterministicReconstructor(MultisourceAbstractReconstructor):
             source_index_pair: masked_batch[source_index_pair]["avail"]
             for source_index_pair in masked_batch
         }
-        return {"predictions": pred, "avail_flags": avail_flags}
+        output["avail_flags"] = avail_flags
+        if self.return_embeddings_in_predict:
+            output["embeddings"] = embeddings
+        return output

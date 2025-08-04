@@ -13,3 +13,5 @@ cfg_scale: null
 cfg_train_uncond_proba: 0.0
 
 backbone: ${model.backbone}
+output_resnet_channels: ${model.output_resnet_channels}
+output_resnet_blocks: ${model.output_resnet_blocks}

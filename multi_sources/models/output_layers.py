@@ -12,7 +12,13 @@ class SourcetypeProjection2d(nn.Module):
     """
 
     def __init__(
-        self, values_dim, out_channels, patch_size, use_modulation=False, **unused_kwargs
+        self,
+        values_dim,
+        out_channels,
+        patch_size,
+        use_modulation=False,
+        resnet_channels=16,
+        resnet_blocks=2,
     ):
         """
         Args:
@@ -20,6 +26,8 @@ class SourcetypeProjection2d(nn.Module):
             out_channels (int): Number of channels in the output space.
             patch_size (int): Size of the embedding patches.
             use_modulation (bool): If True, applies modulation to the values embeddings.
+            resnet_channels (int): Number of channels in the output ResNet.
+            resnet_blocks (int): Number of blocks in the output ResNet.
         """
         super().__init__()
         self.patch_size = patch_size
@@ -39,7 +47,7 @@ class SourcetypeProjection2d(nn.Module):
         self.pixel_shuffle = nn.PixelShuffle(patch_size)
 
         # Final ResNet to correct the artifacts
-        self.resnet = ResNet(out_channels, 16, 2)
+        self.resnet = ResNet(out_channels, resnet_channels, resnet_blocks)
         # Apply the ICNR initialization to the deconvolution, to reduce checkerboard artifacts
         weight = ICNR(
             self.conv.weight, initializer=nn.init.kaiming_normal_, upscale_factor=patch_size

@@ -12,3 +12,6 @@ backbone:
   num_heads: 8
   cross_att_window_size: 4
   iwsa_window_size: 8
+
+output_resnet_blocks: 2
+output_resnet_channels: 16

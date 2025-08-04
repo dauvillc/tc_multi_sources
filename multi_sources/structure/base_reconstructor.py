@@ -59,6 +59,8 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
         metrics={},
         use_modulation_in_output_layers=False,
         include_coords_in_conditioning=False,
+        output_resnet_channels=16,
+        output_resnet_blocks=2,
         **kwargs,
     ):
         """
@@ -95,6 +97,8 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
             use_modulation_in_output_layers (bool): If True, applies modulation to the output layers.
             include_coords_in_conditioning (bool): If True, includes the coordinates
                 in the conditioning tensor used in the output layers.
+            output_resnet_channels (int): Number of channels in the output ResNet.
+            output_resnet_blocks (int): Number of blocks in the output ResNet.
             **kwargs: Additional arguments to pass to the LightningModule constructor.
         """
         super().__init__(
@@ -119,7 +123,12 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
         self.source_select_gen = torch.Generator()
 
         # Initialize the embedding layers
-        self.init_embedding_layers(use_modulation_in_output_layers, include_coords_in_conditioning)
+        self.init_embedding_layers(
+            use_modulation_in_output_layers,
+            include_coords_in_conditioning,
+            output_resnet_channels,
+            output_resnet_blocks,
+        )
 
         self.mask_only_sources = None
         if mask_only_sources is not None:
@@ -131,7 +140,11 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
         self.forecasting_mode = forecasting_mode
 
     def init_embedding_layers(
-        self, use_modulation_in_output_layers, include_coords_in_conditioning
+        self,
+        use_modulation_in_output_layers,
+        include_coords_in_conditioning,
+        output_resnet_channels,
+        output_resnet_blocks,
     ):
         """Initializes the weights of the embedding layers."""
         if not hasattr(self, "use_diffusion_t"):
@@ -171,6 +184,8 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
                         n_output_channels,
                         self.patch_size,
                         use_modulation=use_modulation_in_output_layers,
+                        resnet_channels=output_resnet_channels,
+                        resnet_blocks=output_resnet_blocks,
                     )
                 elif source.dim == 0:
                     self.sourcetype_embeddings[source.type] = SourcetypeEmbedding0d(
@@ -315,12 +330,15 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
     def mask(self, x, masking_seed=None):
         pass
 
-    def forward(self, x):
+    def forward(self, x, return_embeddings=False):
         """Computes the forward pass of the model.
         Args:
             x (dict of (source_name, index) to dict of str to tensor): The input sources, masked.
+            return_embeddings (bool): If True, also returns the embedded values and coordinates.
         Returns:
             y (dict of (source_name, index) to tensor): The predicted values for each source.
+            embeddings (optional, dict of (source_name, index) to dict of str to tensor):
+                The embedded data for each source, if return_embeddings is True.
         """
         # Save the shape of the tokens before they're embedded, so that we can
         # later remove the padding.
@@ -348,6 +366,8 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
             pred[source_index_pair] = pred[source_index_pair][
                 ..., : spatial_shape[0], : spatial_shape[1]
             ]
+        if return_embeddings:
+            return x
         return pred
 
     @abstractmethod
