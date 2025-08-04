@@ -1,0 +1,27 @@
+# @package _global_
+defaults:
+  - override /sources: sat_interp_37GHz
+  - override /lightning_module: flow_matching
+  - override /lr_scheduler: cosine_warmup_100epochs
+  - override /metrics: default_fm
+  - override /model: msvit_10b_d256
+
+lightning_module:
+  patch_size: 8
+  cfg_train_uncond_proba: 0.0
+  cfg_scale: null
+  use_det_model_from_run: mir6s1vr
+
+wandb:
+  name: diff_37GHz_residual
+  group: diff_37GHz
+
+dataset:
+  train:
+    dt_max: 6
+    min_available_sources: 2
+    source_types_max_avail:
+      pmw: 1
+  
+trainer:
+  strategy: ddp
