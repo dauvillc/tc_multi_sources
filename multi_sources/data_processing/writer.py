@@ -1,5 +1,6 @@
 """Implements the MultiSourceWriter class"""
 
+import gc
 import shutil
 from pathlib import Path
 
@@ -295,3 +296,11 @@ class MultiSourceWriter(BasePredictionWriter):
                 info_df = info_df[info_df["avail"] != -1]
                 include_header = not info_file.exists()
             info_df.to_csv(info_file, mode="a", header=include_header, index=False)
+
+            # The lightning Trainer object keeps the predictions in memory for
+            # write_on_epoch_end. Since we'll never call that method, we can clear the predictions
+            # to limit the memory usage to that of a single batch.
+            trainer.predict_loop._predictions = [
+                [] for _ in range(trainer.predict_loop.num_dataloaders)
+            ]
+            gc.collect()

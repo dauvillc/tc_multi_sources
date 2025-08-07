@@ -78,7 +78,7 @@ def main(cfg: DictConfig):
         logger=False,
         max_epochs=1,
     )
-    trainer.predict(pl_module, dataloader)
+    trainer.predict(pl_module, dataloader, return_predictions=False)
 
 
 if __name__ == "__main__":
