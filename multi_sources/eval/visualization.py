@@ -51,7 +51,7 @@ class VisualEvaluationComparison(AbstractMultisourceEvaluationMetric):
             **kwargs: Additional keyword arguments (num_workers not used for visualization)
         """
         for sample_df, sample_data in tqdm(
-            self.samples_iterator(), desc="Evaluating samples", total=len(self.samples_df)
+            self.samples_iterator(), desc="Evaluating samples", total=self.n_samples
         ):
             sample_index = sample_df["sample_index"].iloc[0]
             # Choose a channel to plot for each source

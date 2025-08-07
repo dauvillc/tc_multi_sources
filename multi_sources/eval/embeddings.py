@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns
 from scipy.spatial.distance import cosine
+from tqdm import tqdm
 
 from multi_sources.eval.abstract_evaluation_metric import AbstractMultisourceEvaluationMetric
 
@@ -56,7 +57,11 @@ class EmbeddingsComparisonEvaluation(AbstractMultisourceEvaluationMetric):
                 'coords_similarity', 'cond_similarity'.
         """
         results = []  # List of dictionaries that we'll concatenate later into a DataFrame.
-        for sample_df, sample_data in self.samples_iterator():
+        for sample_df, sample_data in tqdm(
+            self.samples_iterator(),
+            desc="Evaluating embeddings similarities",
+            total=self.n_samples,
+        ):
             sample_index = sample_df["sample_index"].iloc[0]
             # For each target source, compute the similarity with each available, non-target
             # source. To do so, we'll first retrieve the availability flags of all sources.
@@ -221,8 +226,9 @@ class EmbeddingsComparisonEvaluation(AbstractMultisourceEvaluationMetric):
                 y=metric,
                 hue="model_id",
                 bins=30,
-                pthresh=0.05,
+                pthresh=0.01,
             )
+            plt.xlim(0.5, 1)
             plt.title(f"{metric.upper()} vs Coordinates Similarity")
             plt.xlabel("Maximum Coordinates Similarity in available sources")
             plt.ylabel(metric.upper())
@@ -243,6 +249,7 @@ class EmbeddingsComparisonEvaluation(AbstractMultisourceEvaluationMetric):
                 bins=30,
                 pthresh=0.05,
             )
+            plt.xlim(0.5, 1)
             plt.title(f"{metric.upper()} vs Conditioning Similarity")
             plt.xlabel("Maximum Conditioning Similarity in available sources")
             plt.ylabel(metric.upper())

@@ -89,6 +89,7 @@ class AbstractMultisourceEvaluationMetric(abc.ABC):
             .drop_duplicates()
             .reset_index(drop=True)
         )
+        self.n_samples = self.samples_df["sample_index"].nunique()
 
     def samples_iterator(self):
         """Iterator over the samples in the evaluation.

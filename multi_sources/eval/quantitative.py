@@ -53,7 +53,7 @@ class QuantitativeEvaluation(AbstractMultisourceEvaluationMetric):
         """
         results = []  # List of dictionaries that we'll concatenate later into a DataFrame
         for sample_df, sample_data in tqdm(
-            self.samples_iterator(), desc="Evaluating samples", total=len(self.samples_df)
+            self.samples_iterator(), desc="Evaluating samples", total=self.n_samples
         ):
             sample_index = sample_df["sample_index"].iloc[0]
             for src, target_data in sample_data["targets"].items():
