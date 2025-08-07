@@ -20,3 +20,4 @@ dataset:
 
 lightning_module:
   forecasting_mode: false
+  return_embeddings_in_predict: true

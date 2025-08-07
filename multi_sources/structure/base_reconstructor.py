@@ -61,6 +61,7 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
         include_coords_in_conditioning=False,
         output_resnet_channels=16,
         output_resnet_blocks=2,
+        sources_selection_seed=123,
         **kwargs,
     ):
         """
@@ -99,6 +100,8 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
                 in the conditioning tensor used in the output layers.
             output_resnet_channels (int): Number of channels in the output ResNet.
             output_resnet_blocks (int): Number of blocks in the output ResNet.
+            sources_selection_seed (int, optional): Seed for the random number generator used to select
+                the sources to mask.
             **kwargs: Additional arguments to pass to the LightningModule constructor.
         """
         super().__init__(
@@ -120,7 +123,7 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
         self.coords_dim = coords_dim
 
         # RNG that will be used to select the sources to mask
-        self.source_select_gen = torch.Generator()
+        self.source_select_gen = torch.Generator().manual_seed(sources_selection_seed)
 
         # Initialize the embedding layers
         self.init_embedding_layers(
@@ -244,13 +247,11 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
 
         return output
 
-    def select_sources_to_mask(self, x, generator=None):
+    def select_sources_to_mask(self, x):
         """Given a multi-sources batch, randomly selects a source to mask in each sample.
         Does not actually perform the masking.
         Args:
             x (dict of (source_name, index) to dict of str to tensor): The input sources.
-            generator (torch.Generator, optional): The random number generator to use for
-                selecting the sources to mask. If None, uses the default generator.
         Returns:
             avail_flags (dict of (source_name, index) to tensor): The availability flags for each source,
                 as tensors of shape (B,), such that:
@@ -299,12 +300,13 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
                 )
         # Case where we randomly select the sources to mask
         else:
-            gen = generator or self.source_select_gen
             # Select the sources to mask, which can differ between samples in the batch.
             # Missing sources cannot be masked.
             # Strategy: we'll generate a random noise tensor of shape (B, n_sources)
             # and for each row, mask the sources with the highest noise.
-            noise = torch.rand((batch_size, n_sources), generator=gen).to(device)
+            noise = torch.rand((batch_size, n_sources), generator=self.source_select_gen).to(
+                device
+            )
             for i, (source_index_pair, data) in enumerate(x.items()):
                 # Multiply the noise by the availability mask (-1 for missing sources, 1 otherwise)
                 noise[:, i] = noise[:, i] * data["avail"].squeeze(-1)
@@ -367,7 +369,7 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
                 ..., : spatial_shape[0], : spatial_shape[1]
             ]
         if return_embeddings:
-            return x
+            return pred, x
         return pred
 
     @abstractmethod

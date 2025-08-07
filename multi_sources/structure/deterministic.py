@@ -55,6 +55,7 @@ class MultisourceDeterministicReconstructor(MultisourceAbstractReconstructor):
         include_coords_in_conditioning=True,
         return_embeddings_in_predict=False,
         metrics={},
+        **kwargs,
     ):
         """
         Args:
@@ -93,6 +94,7 @@ class MultisourceDeterministicReconstructor(MultisourceAbstractReconstructor):
                 in the conditioning tensor.
             return_embeddings_in_predict (bool): If True, the predict step will also
                 return the embedded data for each source.
+            kwargs (dict): Additional arguments to pass to the LightningModule constructor.
         """
         super().__init__(
             sources,
@@ -113,6 +115,7 @@ class MultisourceDeterministicReconstructor(MultisourceAbstractReconstructor):
             metrics=metrics,
             use_modulation_in_output_layers=use_modulation_in_output_layers,
             include_coords_in_conditioning=include_coords_in_conditioning,
+            **kwargs,
         )
         self.return_embeddings_in_predict = return_embeddings_in_predict
 
@@ -138,7 +141,7 @@ class MultisourceDeterministicReconstructor(MultisourceAbstractReconstructor):
 
         return y
 
-    def mask(self, x, masking_seed=None):
+    def mask(self, x):
         """Masks a portion of the sources. A missing source cannot be chosen to be masked.
         Supposes that there are at least as many non-missing sources as the number of sources
         to mask. The number of sources to mask is determined by self.masking ratio.
@@ -148,14 +151,12 @@ class MultisourceDeterministicReconstructor(MultisourceAbstractReconstructor):
             x (dict of (source_name, index) to dict of str to tensor): The input sources.
             target_source (optional, str): If specified, the source to mask. If None, the source
                 to mask is chosen randomly for each sample in the batch.
-            masking_seed (int, optional): Seed for the random number generator used to select
-                which sources to mask.
         Returns:
             masked_x (dict of (source_name, index) to dict of str to tensor):
                 The input sources with a portion of the sources masked.
         """
         # Choose the sources to mask.
-        avail_flags = super().select_sources_to_mask(x, masking_seed)
+        avail_flags = super().select_sources_to_mask(x)
         # avail_flags[s][i] == 0 if the source s should be masked.
 
         # We just need to update the avail flag of each source. Where the flag is set to 0,

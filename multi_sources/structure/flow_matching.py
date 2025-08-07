@@ -168,7 +168,7 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
             self.det_model.eval()
             self.det_model.requires_grad_(False)
 
-    def mask(self, x, pure_noise=False, masking_generator=None):
+    def mask(self, x, pure_noise=False):
         """Masks a portion of the sources. A missing source cannot be chosen to be masked.
         Supposes that there are at least as many non-missing sources as the number of sources
         to mask. The number of sources to mask is determined by self.masking ratio.
@@ -183,8 +183,6 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
                 where index counts observations (0 = most recent).
             pure_noise (bool): If True, the sources are masked with pure noise, without
                 following the noise schedule.
-            masking_generator (torch.Generator, optional): A generator to use for the selection
-                of which sources to mask. If None, the default generator is used.
         Returns:
             masked_x (dict): The input sources with a portion
                 of the sources masked. An entry "diffusion_t" is added
@@ -196,7 +194,7 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
         """
 
         # First step: for each sample in the batch, select a subset of the sources to mask.
-        avail_flags = super().select_sources_to_mask(x, generator=masking_generator)
+        avail_flags = super().select_sources_to_mask(x)
         # avail_flags[s][i] == 0 if the source s should be masked.
         device = next(self.parameters()).device
 
@@ -353,16 +351,19 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
         """
         with torch.no_grad():
             all_sols = []  # Will store each realization of the solution
-            # We want to mask exactly the same sources for each realization. To do so we'll
-            # create a new generator here (using self.fm_rng's state) and pass clones
-            # of it to the masking function.
-            masking_rng = self.fm_rng.clone_state()
-            for _ in range(n_realizations_per_sample):
+            # We want to mask exactly the same sources for each realization,
+            # which depends on self.source_select_gen (see the parent class).
+            # To do so, we'll save reset the state of the generator after each realization
+            # except the last one (so that the state still advances for the next time we
+            # mask).
+            source_select_rng_state = self.source_select_gen.get_state()
+            for k in range(n_realizations_per_sample):
                 # Mask the sources with pure noise. If using CFG, also generate an unconditional version
                 # of the samples in a double batch.
-                masked_batch, _ = self.mask(
-                    batch, pure_noise=True, masking_generator=masking_rng.clone_state()
-                )
+                masked_batch, _ = self.mask(batch, pure_noise=True)
+                # Reset the sources selection generator to the initial state
+                if k < n_realizations_per_sample - 1:
+                    self.source_select_gen.set_state(source_select_rng_state)
 
                 x_0 = {
                     source_index_pair: data["values"]

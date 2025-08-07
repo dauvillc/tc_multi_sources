@@ -8,7 +8,51 @@ from pathlib import Path
 import xarray as xr
 
 
-class AbstractEvaluationMetric(abc.ABC):
+def models_info_sanity_check(info_dfs):
+    """Performs a sanity check on the predictions info dataframes, to
+    ensure they were made on exactly the same data."""
+    # Check that all info_dfs have the same columns
+    if not all(info_df.columns.equals(info_dfs[0].columns) for info_df in info_dfs):
+        raise ValueError(
+            "Found models with different columns in their info_df. "
+            "Please ensure all models are evaluated on the same data."
+        )
+    # Check that they have the same number of rows (samples and sources)
+    if not all(len(info_df) == len(info_dfs[0]) for info_df in info_dfs):
+        raise ValueError(
+            "Found models with different number of rows in their info_df. "
+            "This indicates different samples or different sources. "
+        )
+    # Sort by sample_index, then by source name and then by source index
+    for info_df in info_dfs:
+        info_df.sort_values(by=["sample_index", "source_name", "source_index"], inplace=True)
+        info_df.reset_index(drop=True, inplace=True)
+    # Check that you the sample_index, source_name, source_index columns are the same
+    for col in ["sample_index", "source_name", "source_index"]:
+        if not all(info_df[col].equals(info_dfs[0][col]) for info_df in info_dfs):
+            raise ValueError(
+                f"Found models with different values in the {col} column of their info_df. "
+                "Please ensure all models are evaluated on the same data."
+            )
+    # Check that are no duplicates in the (sample_index, source_name, source_index) triples
+    for info_df in info_dfs:
+        if info_df.duplicated(subset=["sample_index", "source_name", "source_index"]).any():
+            raise ValueError(
+                "Found duplicates in the (sample_index, source_name, source_index) triples "
+                "of the info_df. There may be a bug, as a a pair (src_name, src_index) should "
+                "be unique within a sample."
+            )
+    # Check the availability flags match
+    for i in range(1, len(info_dfs)):
+        if not info_dfs[i]["avail"].equals(info_dfs[0]["avail"]):
+            raise ValueError(
+                "Found models with different availability flags in their info_df. "
+                "Make sure the models' masking selection is identical between"
+                "the prediction runs."
+            )
+
+
+class AbstractMultisourceEvaluationMetric(abc.ABC):
     """Base class for all evaluation metrics."""
 
     def __init__(self, id_name, full_name, model_data, parent_results_dir):
@@ -34,99 +78,103 @@ class AbstractEvaluationMetric(abc.ABC):
         self.metric_results_dir = self.parent_results_dir / id_name
         self.metric_results_dir.mkdir(parents=True, exist_ok=True)
 
-        # Store directories for each model
-        self.model_dirs = {}
-        for model_id, data in model_data.items():
-            model_results_dir = self.metric_results_dir / model_id
+        # Perform sanity checks on the model data (also sorts the dataframes)
+        info_dfs = [model_spec["info_df"] for model_spec in model_data.values()]
+        models_info_sanity_check(info_dfs)
 
-            # Create or reset the directory
-            if model_results_dir.exists():
-                for item in model_results_dir.iterdir():
-                    if item.is_file():
-                        item.unlink()
-            else:
-                model_results_dir.mkdir(parents=True, exist_ok=True)
-
-            self.model_dirs[model_id] = {
-                "predictions_dir": data["root_dir"],
-                "results_dir": model_results_dir,
-            }
-
-    def load_batch(self, source_name, index, batch_idx, model_id):
-        """
-        Loads a batch (targets and predictions) for a given source at a specific index.
-
-        Args:
-            source_name (str): Name of the source.
-            index (int): Index of the observation (0 = most recent).
-            batch_idx (int): Index of the batch.
-            model_id (str): Identifier for the model (run_id_pred_name)
-        Returns:
-            targets (xarray.Dataset or None): The targets dataset, or None if not available.
-            predictions (xarray.Dataset or None): The predictions dataset, or None if not available.
-        """
-        predictions_dir = self.model_dirs[model_id]["predictions_dir"]
-        targets_path = predictions_dir / "targets" / source_name / str(index) / f"{batch_idx}.nc"
-        predictions_path = (
-            predictions_dir / "outputs" / source_name / str(index) / f"{batch_idx}.nc"
+        # Isolate a model-agnostic DataFrame with the columns that don't depend on the model:
+        # sample_index, source_name, source_index, avail, dt
+        self.samples_df = (
+            info_dfs[0][["sample_index", "source_name", "source_index", "avail", "dt"]]
+            .drop_duplicates()
+            .reset_index(drop=True)
         )
-        if not targets_path.exists():
-            return None, None
-        targets = xr.open_dataset(targets_path)
-        if not predictions_path.exists():
-            return targets, None
-        predictions = xr.open_dataset(predictions_path)
 
-        return targets, predictions
-
-
-class AbstractSourcewiseEvaluationMetric(AbstractEvaluationMetric):
-    """Base class for evaluation metrics that process each source separately."""
-
-    @abc.abstractmethod
-    def evaluate_source(self, source_name, info_df, **kwargs):
+    def samples_iterator(self):
+        """Iterator over the samples in the evaluation.
+        Yields:
+            pandas.DataFrame: A DataFrame with the columns:
+                - sample_index: Index of the sample (same for all rows)
+                - source_name: Name of the source
+                - source_index: Index of the source
+                - avail: Availability flag (1 for available, 0 for target)
+                - dt: Timestamp of the sample
+                only the data for a single sample (sample_index) is yielded at a time.
+            dict: A dictionary with the keys:
+                - targets: Dict (source_name, source_index) -> xarray.Dataset
+                    The targets are the same for all models.
+                - predictions: Dict model_id -> Dict (source_name, source_index) -> xarray.Dataset
+                - embeddings: Dict model_id -> Dict (source_name, source_index) -> xarray.Dataset
+                    Only available for models that return their embeddings.
+        The missing (source_name, source_index) pairs, i.e. those with an availability flag
+        of -1, are removed from both the DataFrame and xarray datasets.
         """
-        Processes the data for a given source.
+        for sample_index in self.samples_df["sample_index"].unique():
+            targets, predictions, embeddings = self.load_data(sample_index)
+            sample_df = self.samples_df[self.samples_df["sample_index"] == sample_index]
+            sample_df = sample_df.set_index(["source_name", "source_index"])
 
+            sample_data = {
+                "targets": {},
+                "predictions": {model_id: {} for model_id in self.model_data},
+                "embeddings": {model_id: {} for model_id in self.model_data},
+            }
+            for src in sample_df.index:
+                # Get the availability flag to know whether this src is available
+                avail = sample_df.loc[src, "avail"]
+                if avail == -1:
+                    continue
+                sample_data["targets"][src] = targets[src]
+                for model_id in self.model_data:
+                    sample_data["predictions"][model_id][src] = predictions[model_id][src]
+                    if model_id in embeddings and src in embeddings[model_id]:
+                        sample_data["embeddings"][model_id][src] = embeddings[model_id][src]
+
+            # Remove the rows from the DataFrame that are not available
+            sample_df = sample_df[sample_df["avail"] != -1]
+            yield sample_df, sample_data
+
+    def load_data(self, sample_index):
+        """Loads the data for all models as xarray datasets stored in individual
+        netCDF4 files.
         Args:
-            source_name (str): Name of the source.
-            info_df (pd.DataFrame): DataFrame with at least the following columns:
-                avail, batch_idx, index_in_batch, dt.
-            **kwargs: Additional keyword arguments including:
-                - run_id: Run ID
-                - pred_name: Prediction name
-                - model_id: Model identifier
-        """
-        pass
-
-    def create_source_results_dir(self, source_name, model_id, index=None):
-        """Creates the directory for the results of a given source at a specific index.
-
-        Args:
-            source_name (str): Name of the source.
-            model_id (str): Identifier for the model (run_id_pred_name)
-            index (optional): Index of the observation (0 = most recent). If None, index is not included in the path.
-
+            sample_index (int): Index of the sample to load.
         Returns:
-            Path: Path to the results directory.
+            targets (dict): Dict (src_name, src_index) -> xarray.Dataset
+               The targets are the same for all models.
+            predictions (dict): Dict model_id -> (src_name, src_index) -> xarray.Dataset
+            embeddings (dict): Dict model_id -> (src_name, src_index) -> xarray.Dataset
+                Only if embeddings are available.
         """
-        model_results_dir = self.model_dirs[model_id]["results_dir"]
+        targets, predictions, embeddings = {}, {}, {}
+        for i, (model_id, model_spec) in enumerate(self.model_data.items()):
+            predictions[model_id], embeddings[model_id] = {}, {}
+            info_df = model_spec["info_df"]
+            info_df = info_df[info_df["sample_index"] == sample_index]
+            root_dir = model_spec["root_dir"]
 
-        if index is None:
-            source_dir = model_results_dir / source_name
-        else:
-            source_dir = model_results_dir / source_name / str(index)
-        source_dir.mkdir(parents=True, exist_ok=True)
-        return source_dir
+            # Isolate the unique pairs (source_name, source_index) for this model
+            source_pairs = info_df[["source_name", "source_index"]].drop_duplicates()
+            for _, row in source_pairs.iterrows():
+                src, index = row["source_name"], row["source_index"]
+                # Load targets for the first model only (since they are the same for all)
+                if i == 0:
+                    target_path = root_dir / "targets" / src / str(index) / f"{sample_index}.nc"
+                    targets[(src, index)] = xr.open_dataset(target_path)
+                # Load predictions for all models
+                pred_path = root_dir / "predictions" / src / str(index) / f"{sample_index}.nc"
+                predictions[model_id][(src, index)] = xr.open_dataset(pred_path)
+                # Load embeddings if available
+                emb_path = root_dir / "embeddings" / src / str(index) / f"{sample_index}.nc"
+                if emb_path.exists():
+                    embeddings[model_id][(src, index)] = xr.open_dataset(emb_path)
 
-
-class AbstractMultisourceEvaluationMetric(AbstractEvaluationMetric):
-    """Base class for evaluation metrics that process all sources together."""
+        return targets, predictions, embeddings
 
     @abc.abstractmethod
-    def evaluate_sources(self, **kwargs):
+    def evaluate(self, **kwargs):
         """
-        Processes the data for all sources across all models.
+        Main evaluation method.
 
         Args:
             **kwargs: Additional keyword arguments including:

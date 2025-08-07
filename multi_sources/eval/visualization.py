@@ -112,7 +112,7 @@ class VisualEvaluationComparison(AbstractMultisourceEvaluationMetric):
 
             targets, preds = {}, {}
             for _, row in batch_info.iterrows():
-                src, index = row["source_name"], row["index"]
+                src, index = row["source_name"], row["source_index"]
                 targets[(src, index)], preds[(src, index)] = self.load_batch(
                     src, index, batch_idx, model_id
                 )
@@ -143,7 +143,7 @@ class VisualEvaluationComparison(AbstractMultisourceEvaluationMetric):
 
             sample_targets, sample_preds = {}, {}
             for _, row in sample_df.iterrows():
-                src, index = row["source_name"], row["index"]
+                src, index = row["source_name"], row["source_index"]
                 source_pair = (src, index)
 
                 if source_pair in data["targets"] and data["targets"][source_pair] is not None:
@@ -180,7 +180,7 @@ def process_batch_chunk(
 
             targets, preds = {}, {}
             for _, row in batch_info.iterrows():
-                src, index = row["source_name"], row["index"]
+                src, index = row["source_name"], row["source_index"]
                 targets[(src, index)], preds[(src, index)] = load_batch_fn(
                     src, index, batch_idx, model_id
                 )
@@ -210,7 +210,7 @@ def extract_sample_data(batch_data, sample_idx):
 
         sample_targets, sample_preds = {}, {}
         for _, row in sample_df.iterrows():
-            src, index = row["source_name"], row["index"]
+            src, index = row["source_name"], row["source_index"]
             source_pair = (src, index)
 
             if source_pair in data["targets"] and data["targets"][source_pair] is not None:
@@ -299,7 +299,7 @@ def plot_available_sources(
         if i >= max_avail_cols:  # Limit columns
             break
 
-        src, idx = row["source_name"], row["index"]
+        src, idx = row["source_name"], row["source_index"]
         source_pair = (src, idx)
         dt_str = strfdelta(row["dt"], "%D days %H:%M")
 
@@ -332,7 +332,7 @@ def plot_model_predictions(
         return None  # No target source found
 
     target_pair = target_pairs.iloc[0]  # Use first target source
-    src, idx = target_pair["source_name"], target_pair["index"]
+    src, idx = target_pair["source_name"], target_pair["source_index"]
     source_pair = (src, idx)
     pred_mean_channel = f"pred_mean_{first_channel}"
 

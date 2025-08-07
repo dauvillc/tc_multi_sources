@@ -35,8 +35,14 @@ def main(cfg: DictConfig):
     dataset = hydra.utils.instantiate(
         exp_cfg["dataset"][split],
     )
+    # To ensure reproducibility, we seed a generator for the DataLoader specifically.
+    dataloader_rng = torch.Generator().manual_seed(cfg["dataloader_seed"])
     dataloader = DataLoader(
-        dataset, **exp_cfg["dataloader"], shuffle=False, collate_fn=multi_source_collate_fn
+        dataset,
+        **exp_cfg["dataloader"],
+        shuffle=False,
+        collate_fn=multi_source_collate_fn,
+        generator=dataloader_rng,
     )
     print("Dataset size:", len(dataset), f" ({split} split)")
 

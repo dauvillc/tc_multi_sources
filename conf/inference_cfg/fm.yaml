@@ -5,9 +5,6 @@ lightning_module:
   cfg_scale: null
   n_realizations_per_sample: 1
 
-trainer:
-  limit_predict_batches: 0.2
-
 dataset:
   val:
     dt_max: 6

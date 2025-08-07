@@ -107,7 +107,8 @@ def crop_nan_border_numpy(src_image, tgt_images):
 
     Args:
         src_image (numpy.ndarray): The source image of shape (H, W).
-        tgt_images (list of numpy.ndarray): Target images of shape (H, W).
+        tgt_images (list of numpy.ndarray): Target images of shape (..., H, W),
+            where ... is an arbitrary number of leading dimensions.
 
     Returns:
         list of numpy.ndarray: The cropped target images.
@@ -132,7 +133,7 @@ def crop_nan_border_numpy(src_image, tgt_images):
     # Crop target images
     tgt_images_cropped = []
     for tgt_image in tgt_images:
-        tgt_image_cropped = tgt_image[first_row:last_row, first_col:last_col]
+        tgt_image_cropped = tgt_image.T[first_col:last_col, first_row:last_row].T
         tgt_images_cropped.append(tgt_image_cropped)
     return tgt_images_cropped
 
