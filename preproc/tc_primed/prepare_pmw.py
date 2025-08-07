@@ -48,13 +48,12 @@ IGNORE = [
     "F16_S1",
     "F16_S3",
     "F17_S1",
-    "17_S3",
+    "F17_S3",
     "F18_S1",
     "F18_S3",
     "F19_S1",
     "F19_S3",
     "TRMM_S1",
-    "MHS",  # To remove for 89GHz experiments
 ]
 
 
