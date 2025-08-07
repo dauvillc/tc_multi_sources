@@ -3,4 +3,3 @@ num_workers: ???
 batch_size: ???
 pin_memory: true
 persistent_workers: true
-pin_memory_device: cuda
