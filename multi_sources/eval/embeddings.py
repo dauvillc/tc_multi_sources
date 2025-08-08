@@ -159,18 +159,18 @@ class EmbeddingsComparisonEvaluation(AbstractMultisourceEvaluationMetric):
         print(f"Embeddings similarity plot saved to: {plot_file}")
 
     def _evaluate_error_vs_embeddings_similarities(self, embeddings_results):
-        """Evaluates the error metrics (MAE, MSE) against the embeddings similarities for all models.
+        """Evaluates the MSE against the embeddings similarities for all models.
 
         Since there are multiple embeddings similarities in each sample (one per
         (source, target source) pair), we'll use the maximum similarity for each
         (sample, source_name, source_index) triplet: for each target source T, we'll
-        look at the maximum similarity to T across all available sources S.
+        look at either the maximum or the average similarity to T
+        across all available sources S.
 
-        Assumes that the MAE and MSE per-sample have already been computed using the
+        Assumes that the MSE per-sample have already been computed using the
         QuantitativeEvaluation class.
-        - Generates a figure showing the joint distribution of the MAE against the coordinates
+        - Generates a figure showing the joint distribution of the MSE against the coordinates
         embeddings similarities.
-        - Generates the same figure with the MSE instead of the MAE.
         - Generates the same figures but with the conditioning embeddings similarities.
         Args:
             embeddings_results (pd.DataFrame): DataFrame containing the embeddings similarities results.
@@ -188,74 +188,76 @@ class EmbeddingsComparisonEvaluation(AbstractMultisourceEvaluationMetric):
             quantitative_results_file, orient="records", lines=True
         )
 
-        # Compute the highest embeddings similarities for each sample and target source.
-        max_similarities = (
+        # Compute the highest and mean embeddings similarities for each sample and target source
+        aggregated_similarities = (
             embeddings_results.groupby(
                 ["sample_index", "target_source_name", "target_source_index"]
             )["coords_similarity", "cond_similarity"]
-            .max()
+            .agg(["max", "mean"])
             .reset_index()
         )
-        # Rename the columns "target_source_name" and "target_source_index"
-        # to "source_name" and "source_index" to match the quantitative results.
-        max_similarities.rename(
-            columns={"target_source_name": "source_name", "target_source_index": "source_index"},
-            inplace=True,
-        )
-        # Sanity check: there should be exactly the same number of samples
-        assert len(max_similarities) == len(quantitative_results), (
-            "The number of samples in the embeddings similarities results does not match "
+        # Rename the columns to match the error results dataframe.
+        aggregated_similarities.columns = [
+            "sample_index",
+            "source_name",  # target_source_name
+            "source_index",  # target_source_index
+            "coords_similarity_max",
+            "coords_similarity_mean",
+            "cond_similarity_max",
+            "cond_similarity_mean",
+        ]
+        # Sanity check: the aggregated similarities should have the same number
+        # of rows as the quantitative results.
+        assert len(aggregated_similarities) == len(quantitative_results), (
+            "The number of samples in the aggregated similarities results does not match "
             "the number of samples in the quantitative results."
         )
-        # Merge the quantitative results with the embeddings similarities results.
+        # Merge the quantitative results with the aggregated similarities.
         merged_results = pd.merge(
             quantitative_results,
-            max_similarities,
+            aggregated_similarities,
             on=["sample_index", "source_name", "source_index"],
             how="left",
         )
 
         # Plotting.
         sns.set_theme(style="whitegrid")
-        for metric in ["mae", "mse"]:
-            # Versus coordinates similarity
-            plt.figure(figsize=(10, 6))
-            sns.histplot(
-                data=merged_results,
-                x="coords_similarity",
-                y=metric,
-                hue="model_id",
-                bins=30,
-                pthresh=0.01,
+        for model_id in self.model_data:
+            model_results = merged_results[merged_results["model_id"] == model_id]
+            # For Coordinates Similarity: create two subplots side by side,
+            # for max and mean similarities.
+            fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+            sns.regplot(
+                data=model_results,
+                x="coords_similarity_max",
+                y="mse",
+                ax=axes[0],
+                order=2,  # Polynomial regression of order 2
+                marker="x",
+                color=".3",
+                line_kws={"color": "red"},
             )
-            plt.xlim(0.5, 1)
-            plt.title(f"{metric.upper()} vs Coordinates Similarity")
-            plt.xlabel("Maximum Coordinates Similarity in available sources")
-            plt.ylabel(metric.upper())
-            plt.legend(title="Model ID")
+            axes[0].set_title("MSE vs Max Coordinates Similarity - Model: " + model_id)
+            axes[0].set_xlabel("Max Coordinates Similarity")
+            axes[0].set_ylabel("Mean Squared Error (MSE)")
+            axes[0].set_xlim(0.9, 1.0)
+            sns.regplot(
+                data=model_results,
+                x="coords_similarity_mean",
+                y="mse",
+                ax=axes[1],
+                order=2,  # Polynomial regression of order 2
+                marker="x",
+                color=".3",
+                line_kws={"color": "red"},
+            )
+            axes[1].set_title("MSE vs Mean Coordinates Similarity - Model: " + model_id)
+            axes[1].set_xlabel("Mean Coordinates Similarity")
+            axes[1].set_ylabel("Mean Squared Error (MSE)")
+            axes[1].set_xlim(0.9, 1.0)
+            sns.despine()
             plt.tight_layout()
-            plot_file = self.metric_results_dir / f"{metric}_vs_coords_similarity.png"
+            plot_file = self.metric_results_dir / f"mse_vs_coords_similarity_{model_id}.png"
             plt.savefig(plot_file)
             plt.close()
-            print(f"{metric.upper()} vs Coordinates similarity plot saved to: {plot_file}")
-
-            # Versus conditioning similarity
-            plt.figure(figsize=(10, 6))
-            sns.histplot(
-                data=merged_results,
-                x="cond_similarity",
-                y=metric,
-                hue="model_id",
-                bins=30,
-                pthresh=0.05,
-            )
-            plt.xlim(0.5, 1)
-            plt.title(f"{metric.upper()} vs Conditioning Similarity")
-            plt.xlabel("Maximum Conditioning Similarity in available sources")
-            plt.ylabel(metric.upper())
-            plt.legend(title="Model ID")
-            plt.tight_layout()
-            plot_file = self.metric_results_dir / f"{metric}_vs_cond_similarity.png"
-            plt.savefig(plot_file)
-            plt.close()
-            print(f"{metric.upper()} vs Conditioning similarity plot saved to: {plot_file}")
+            print(f"MSE vs Coordinates Similarity plot for {model_id} saved to: {plot_file}")
