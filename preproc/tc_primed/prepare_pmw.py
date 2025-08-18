@@ -139,7 +139,7 @@ def initialize_pmw_metadata(ds, source, ifovs_path, dest_dir):
 def process_pmw_file(file, source, source_groups, dest_dir, regridding_res, check_exist=False):
     """Processes a single PMW file.
     Args:
-        file (str): Path to the PMW file.
+        file (str): Path to the PMW file in netCDF4 format.
         source (str): Source name.
         source_groups (list): List of groups in the source file.
         dest_dir (Path): Destination directory.
@@ -177,6 +177,8 @@ def process_pmw_file(file, source, source_groups, dest_dir, regridding_res, chec
         storm_lat = overpass_storm_metadata["storm_latitude"][0].item()
         storm_lon = overpass_storm_metadata["storm_longitude"][0].item()
         storm_lon = (storm_lon + 180) % 360 - 180  # Standardize longitude values
+        # Intensity
+        intensity = overpass_storm_metadata["intensity"][0].item()
 
         sample_metadata = {
             "source_name": "tc_primed_" + source,
@@ -186,13 +188,14 @@ def process_pmw_file(file, source, source_groups, dest_dir, regridding_res, chec
             "season": season,
             "storm_latitude": storm_lat,
             "storm_longitude": storm_lon,
+            "intensity": intensity,
             "basin": basin,
             "dim": 2,  # Spatial dimensionality
         }
         dest_file = dest_dir / f"{sid}_{time.strftime('%Y%m%dT%H%M%S')}.nc"
         sample_metadata["data_path"] = dest_file
 
-        # Check if the file already exists. If it does, skip processing.
+        # Check if the file already exists.
         if check_exist and dest_file.exists():
             return sample_metadata
 
