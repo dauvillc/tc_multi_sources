@@ -37,6 +37,7 @@ class MultisourcesWindowedCrossAttention(nn.Module):
         window_size,
         inner_ratio_v=0.25,
         num_heads=8,
+        learned_coords_weight=True,
         dropout=0.0,
     ):
         """
@@ -48,6 +49,8 @@ class MultisourcesWindowedCrossAttention(nn.Module):
             window_size (int): Size of the window for attention.
             update_coords (bool): Whether to update the coordinates based on attention.
             num_heads (int, optional): Number of attention heads. Defaults to 8.
+            learned_coords_weight (bool, optional): Whether to weigh the coordinates term in
+                the attention computation by a learned parameter.
             dropout (float, optional): Dropout rate for attention weights. Defaults to 0.0.
         """
         super().__init__()
@@ -78,6 +81,11 @@ class MultisourcesWindowedCrossAttention(nn.Module):
         )  # We don't normalize the projected values
         # Projection back to the original values dimension
         self.values_v_back_proj = nn.Linear(self.inner_v_v_dim, values_dim, bias=False)
+
+        # Parameter that weighs the coordinates in the attention computation
+        self.coords_weight = nn.Parameter(torch.randn(1), dtype=torch.float32)
+        if not learned_coords_weight:
+            self.coords_weight.requires_grad = False
 
         # Attention dropout
         self.attn_dropout = nn.Dropout(dropout)
@@ -164,7 +172,7 @@ class MultisourcesWindowedCrossAttention(nn.Module):
         # Compute attention weights
         attn_weights = (queries_v @ keys_v.transpose(-2, -1)) / self.inner_qk_v_dim**0.5 + (
             queries_c @ keys_c.transpose(-2, -1)
-        ) / self.inner_qk_c_dim**0.5
+        ) * self.coords_weight / self.inner_qk_c_dim**0.5
         attn_weights = F.softmax(attn_weights, dim=-1)
         attn_weights = self.attn_dropout(attn_weights)
 
