@@ -7,11 +7,11 @@ This script processes PMW data and saves it in a standardized format with metada
 
 import json
 import warnings
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor
+from itertools import repeat
 from pathlib import Path
 
 import hydra
-import numpy as np
 import pandas as pd
 import xarray as xr
 import yaml
@@ -28,33 +28,26 @@ from multi_sources.data_processing.grid_functions import (
 )
 
 # Local imports
-from preproc.utils import list_tc_primed_sources
+from preproc.utils import list_tc_primed_overpass_files_by_sensat
 
 CROSS_TRACK_INSTRUMENTS = ["AMSU", "ATMS", "MHS"]
-# List of swaths that won't be used in the experiments and should be ignored.
-# Not the full source names, the script will check if the source name contains
-# any of the strings in this list.
-IGNORE = [
-    "GCOMW1_S1",
-    "GCOMW1_S2",
-    "GCOMW1_S3",
-    "AQUA_S1",
-    "AQUA_S2",
-    "AQUA_S3",
-    "ATMS_NPP_S1",
-    "ATMS_NPP_S2",
-    "ATMS_NPP_S4",
-    "GMI_GPM_S2",
-    "F16_S1",
-    "F16_S3",
-    "F17_S1",
-    "F17_S3",
-    "F18_S1",
-    "F18_S3",
-    "F19_S1",
-    "F19_S3",
-    "TRMM_S1",
-]
+# Dict of instrument -> swath -> frequencies to process. Other ones will be ignored.
+# Written from the TC-PRIMED documentation.
+SENSOR_VARIABLES = {
+    "AMSR2": {"S4": ["36.5H", "36.5V"], "S5": ["A89.0H", "A89.0V"], "S6": ["B89.0H", "B89.0V"]},
+    "AMSU": {"S1": ["89.0_0.9QV"]},
+    "ATMS": {"S3": ["88.2QV"]},
+    "GMI": {"S1": ["36.64H", "36.64V", "89.0H", "89.0V"]},
+    "MHS": {"S1": ["89.0V"]},
+    "SSMI": {"S1": ["37.0H", "37.0V"], "S2": ["85.5H", "85.5V"]},
+    "SSMIS": {"S2": ["37.0H", "37.0V"], "S4": ["91.665H", "91.665V"]},
+    "TMI": {"S2": ["37.0H", "37.0V"], "S3": ["85.5H", "85.5V"]},
+}
+# Add the "TB_" prefix to every variable name.
+SENSOR_VARIABLES = {
+    sensor: {swath: ["TB_" + var for var in vars] for swath, vars in swaths.items()}
+    for sensor, swaths in SENSOR_VARIABLES.items()
+}
 
 
 def parse_frequency(pm_var_name):
@@ -71,24 +64,24 @@ def preprocess_pmw(ds):
     return ds
 
 
-def initialize_pmw_metadata(ds, source, ifovs_path, dest_dir):
+def initialize_pmw_metadata(ds, sensat, swath, ifovs_path, dest_dir):
     """Given a PMW dataset, retrieves the list of all data and
     characteristic variables of a source; and writes the source metadata file.
     Args:
         ds (xr.Dataset): any sample from the source.
-        source (str): Source name.
+        sensat (str): Sensor / Satellite pair (e.g. "AMSR2_GCOMW1").
+        swath (str): Swath name (e.g. "S4").
         dest_dir (Path): Destination directory.
     Returns:
         bool: True if the metadata was successfully written, False otherwise.
     """
-    # Retrieve the list of data variables from the sample.
-    data_vars = [var for var in ds.data_vars if var.startswith("TB")]
-
+    sensor = sensat.split("_")[0]
+    data_vars = SENSOR_VARIABLES[sensor][swath]
     # Variables that give information about the storm of the sample.
     storm_vars = ["storm_latitude", "storm_longitude", "intensity"]
     # Dict that contains the source's metadata.
     source_metadata = {
-        "source_name": "tc_primed_" + source,
+        "source_name": "tc_primed_" + sensat + "_" + swath,
         "source_type": "pmw",
         "dim": 2,
         "data_vars": data_vars,
@@ -107,16 +100,11 @@ def initialize_pmw_metadata(ds, source, ifovs_path, dest_dir):
     # manually filled based on the documentation).
     with open(ifovs_path, "r") as f:
         ifovs = yaml.safe_load(f)
-    # Extract the name of the instrument and swath from the source name.
-    source_parts = source.split("_")
-    instrument = "_".join(source_parts[1:-1])
-    swath = source_parts[-1]
     # Check if the IFOV values are available for the instrument and swath.
-    if instrument not in ifovs or swath not in ifovs[instrument]:
-        print(f"IFOV values not found for {source}.")
+    if sensat not in ifovs or swath not in ifovs[sensat]:
+        print(f"IFOV values not found for {sensat}.")
         return False
-    # Get the IFOV values for the instrument and swath.
-    ifov_values = ifovs[instrument][swath]
+    ifov_values = ifovs[sensat][swath]
     # Now, the IFOV values are either a list or a dict.
     # - If a list, then the IFOV values are the same for all variables, so
     # we'll just repeat the list for each variable.
@@ -136,12 +124,12 @@ def initialize_pmw_metadata(ds, source, ifovs_path, dest_dir):
     return True
 
 
-def process_pmw_file(file, source, source_groups, dest_dir, regridding_res, check_exist=False):
+def process_pmw_file(file, sensat, swath, dest_dir, regridding_res, check_exist=False):
     """Processes a single PMW file.
     Args:
         file (str): Path to the PMW file in netCDF4 format.
-        source (str): Source name.
-        source_groups (list): List of groups in the source file.
+        sensat (str): Sensor / Satellite pair (e.g. "AMSR2_GCOMW1").
+        swath (str): Swath name (e.g. "S4").
         dest_dir (Path): Destination directory.
         regridding_res (float): Resolution of the target grid, in degrees.
         check_exist (bool): Flag to check if the file already exists.
@@ -149,19 +137,16 @@ def process_pmw_file(file, source, source_groups, dest_dir, regridding_res, chec
         dict or None: Sample metadata, or None if the sample is discarded.
     """
     with Dataset(file) as raw_sample:
-        # Access data group
-        ds = raw_sample
-        for group in source_groups:
-            if group in ds.groups:
-                ds = ds[group]
+        ds = raw_sample["passive_microwave"][swath]
 
-        # Open and preprocess dataset
+        # Open in xarray and preprocess dataset
         ds = xr.open_dataset(NetCDF4DataStore(ds), decode_times=False)
         ds = preprocess_pmw(ds)
 
         # Extract data variables
-        data_vars = [var for var in ds.data_vars if var.startswith("TB")]
-        # Check for missing data
+        sensor = sensat.split("_")[0]
+        data_vars = SENSOR_VARIABLES[sensor][swath]
+        # If any variable is fully missing data, skip
         if any(ds[var].isnull().all() for var in data_vars):
             return None
 
@@ -181,7 +166,7 @@ def process_pmw_file(file, source, source_groups, dest_dir, regridding_res, chec
         intensity = overpass_storm_metadata["intensity"][0].item()
 
         sample_metadata = {
-            "source_name": "tc_primed_" + source,
+            "source_name": "tc_primed_" + sensat + "_" + swath,
             "source_type": "pmw",
             "sid": sid,
             "time": time,
@@ -206,14 +191,16 @@ def process_pmw_file(file, source, source_groups, dest_dir, regridding_res, chec
         try:
             # For cross-track instruments, we'll crop the borders as the pixels
             # at the edges have an unusable IFOV.
-            if any(instrument in source for instrument in CROSS_TRACK_INSTRUMENTS):
+            sensor = sensat.split("_")[0]
+            if sensor in CROSS_TRACK_INSTRUMENTS:
                 ds = ds.isel(pixel=slice(10, -10))
+            # Regrid from satellite geometry to a regular lat/lon grid
             ds = regrid(ds, regridding_res)
-            # Check if any variable is fully null after regridding
+            # Check if any variable is fully null after regridding. If so, skip the sample.
             for variable in ds.variables:
                 if ds[variable].isnull().all():
                     warnings.warn(f"Variable {variable} is null for sample {file}.")
-
+                    return None
             # Compute the land-sea mask
             land_mask = globe.is_land(
                 ds["latitude"].values,
@@ -240,25 +227,6 @@ def process_pmw_file(file, source, source_groups, dest_dir, regridding_res, chec
         return sample_metadata
 
 
-# Helper function to process a chunk of files in parallel.
-def process_chunk(
-    file_list, source, pmw_groups, source_dest_dir, regridding_res, check_exist, verbose=False
-):
-    local_metadata = []
-    discarded = 0
-
-    iterator = tqdm(file_list, desc="Processing chunk") if verbose else file_list
-    for file in iterator:
-        meta = process_pmw_file(
-            file, source, pmw_groups, source_dest_dir, regridding_res, check_exist
-        )
-        if meta is None:
-            discarded += 1
-        else:
-            local_metadata.append(meta)
-    return local_metadata, discarded
-
-
 @hydra.main(config_path="../../conf/", config_name="preproc", version_base=None)
 def main(cfg):
     """Main function to process PMW data."""
@@ -271,114 +239,92 @@ def main(cfg):
     # Resolution of the target grid, in degrees
     regridding_res = cfg["regridding_resolution"]
     check_exist = cfg.get("check_exist", False)
-    process_only = cfg.get("process_only", None)
 
-    # Get PMW sources only
-    sources, source_files, source_groups = list_tc_primed_sources(
-        tc_primed_path, source_type="satellite"
-    )
-    pmw_files = {s: files for s, files in source_files.items() if s.startswith("pmw_")}
-    pmw_groups = {s: source_groups[s] for s in pmw_files.keys()}
-
-    # Optionally: process only a specific source
-    if process_only:
-        pmw_files = {process_only: pmw_files[process_only]}
-        pmw_groups = {process_only: pmw_groups[process_only]}
-
-    # Remove ignored sources
-    for source_name_part in IGNORE:
-        pmw_files = {
-            source: files for source, files in pmw_files.items() if source_name_part not in source
-        }
-        pmw_groups = {
-            source: groups
-            for source, groups in pmw_groups.items()
-            if source_name_part not in source
-        }
+    # Retrieve all TC-PRIMED overpass files as a dict {sen_sat: <file_list>}
+    pmw_files = list_tc_primed_overpass_files_by_sensat(tc_primed_path)
 
     # Process only a specific source if provided in cfg
     if "process_only" in cfg:
         process_source = cfg["process_only"]
         if process_source in pmw_files:
             pmw_files = {process_source: pmw_files[process_source]}
-            pmw_groups = {process_source: pmw_groups[process_source]}
         else:
             print(
                 f"Source {process_source} not found in available sources: {list(pmw_files.keys())}"
             )
             return
 
-    # Process each PMW source
-    for source in pmw_files:
-        print(f"Processing {source}")
-        source_dest_dir = dest_path / f"tc_primed_{source}"
-        # Create destination directory
-        source_dest_dir.mkdir(parents=True, exist_ok=True)
+    # Process each PMW source. "sensat" stands for Sensor/Satellite (e.g. "AMSR2_GCOMW1").
+    for sensat in pmw_files:
+        sensor = sensat.split("_")[0]
+        for swath in SENSOR_VARIABLES[sensor].keys():
+            source_dest_dir = dest_path / f"tc_primed_{sensat}_{swath}"
+            # Create destination directory
+            source_dest_dir.mkdir(parents=True, exist_ok=True)
 
-        # Initialize metadata using first file
-        with Dataset(pmw_files[source][0]) as raw_sample:
-            # Recursively access groups associated with the source
-            ds = raw_sample
-            for group in pmw_groups[source]:
-                ds = ds[group]
-            ds = xr.open_dataset(NetCDF4DataStore(ds), decode_times=False)
-            if not initialize_pmw_metadata(ds, source, ifovs_path, source_dest_dir):
-                # Remove directory if metadata could not be initialized
-                source_dest_dir.rmdir()
-                print(f"Skipping {source}")
-                continue
+            # Initialize metadata using first file
+            with Dataset(pmw_files[sensat][0]) as raw_sample:
+                # Recursively access groups associated with the source
+                ds = raw_sample
+                ds = xr.open_dataset(NetCDF4DataStore(ds), decode_times=False)
+                if not initialize_pmw_metadata(ds, sensat, swath, ifovs_path, source_dest_dir):
+                    # Remove directory if metadata could not be initialized
+                    source_dest_dir.rmdir()
+                    print(f"Skipping {sensat}")
+                    continue
 
-        # Process all files, and keep count of discarded files and save the metadata of
-        # each sample.
-        discarded, samples_metadata = 0, []
-        num_workers = cfg.get("num_workers", 1)
+            # Process all files, and keep count of discarded files and save the metadata of
+            # each sample.
+            discarded, samples_metadata = 0, []
+            num_workers = cfg.get("num_workers", 1)
+            chunksize = cfg.get("chunksize", 64)
 
-        if num_workers > 1:
-            chunks = np.array_split(pmw_files[source], num_workers)
-            with ProcessPoolExecutor(max_workers=num_workers) as executor:
-                futures = []
-                for i, chunk in enumerate(chunks):
-                    futures.append(
-                        executor.submit(
-                            process_chunk,
-                            list(chunk),
-                            source,
-                            pmw_groups[source],
-                            source_dest_dir,
-                            regridding_res,
-                            check_exist,
-                            verbose=(i == 0),
-                        )
+            if num_workers <= 1:
+                for file in tqdm(pmw_files[sensat], desc=f"Processing {sensat} swath {swath}"):
+                    sample_metadata = process_pmw_file(
+                        file, sensat, swath, source_dest_dir, regridding_res, check_exist
                     )
-                for future in as_completed(futures):
-                    meta_chunk, discarded_chunk = future.result()
-                    samples_metadata.extend(meta_chunk)
-                    discarded += discarded_chunk
-        else:
-            for file in tqdm(pmw_files[source], desc=f"Processing {source}"):
-                sample_metadata = process_pmw_file(
-                    file, source, pmw_groups[source], source_dest_dir, regridding_res, check_exist
-                )
-                if sample_metadata is None:
-                    discarded += 1
-                else:
-                    samples_metadata.append(sample_metadata)
+                    if sample_metadata is None:
+                        discarded += 1
+                    else:
+                        samples_metadata.append(sample_metadata)
+            else:
+                with ProcessPoolExecutor(max_workers=num_workers) as executor:
+                    iterator = executor.map(
+                        process_pmw_file,
+                        pmw_files[sensat],
+                        repeat(sensat),
+                        repeat(swath),
+                        repeat(source_dest_dir),
+                        repeat(regridding_res),
+                        repeat(check_exist),
+                        chunksize=chunksize,
+                    )
+                    for sample_metadata in tqdm(
+                        iterator,
+                        desc=f"Processing {sensat} swath {swath}",
+                        total=len(pmw_files[sensat]),
+                    ):
+                        if sample_metadata is None:
+                            discarded += 1
+                        else:
+                            samples_metadata.append(sample_metadata)
 
-        # If all files were discarded, remove all files inside the directory
-        # and remove the directory itself.
-        if discarded == len(pmw_files[source]):
-            for file in source_dest_dir.iterdir():
-                file.unlink()
-            source_dest_dir.rmdir()
-            print(f"Found no valid samples for {source}, removing directory.")
-        else:
-            if discarded > 0:
-                percent = discarded / len(pmw_files[source]) * 100
-                print(f"Discarded {discarded} samples for {source} ({percent:.2f}%)")
-            # Concatenate the samples metadata into a DataFrame and save it
-            samples_metadata = pd.DataFrame(samples_metadata)
-            samples_metadata_path = source_dest_dir / "samples_metadata.csv"
-            samples_metadata.to_csv(samples_metadata_path, index=False)
+            # If all files were discarded, remove all files inside the directory
+            # and remove the directory itself.
+            if discarded == len(pmw_files[sensat]):
+                for file in source_dest_dir.iterdir():
+                    file.unlink()
+                source_dest_dir.rmdir()
+                print(f"Found no valid samples for {sensat}/{swath}, removing directory.")
+            else:
+                if discarded > 0:
+                    percent = discarded / len(pmw_files[sensat]) * 100
+                    print(f"Discarded {discarded} samples for {sensat}/{swath} ({percent:.2f}%)")
+                # Concatenate the samples metadata into a DataFrame and save it
+                samples_metadata = pd.DataFrame(samples_metadata)
+                samples_metadata_path = source_dest_dir / "samples_metadata.csv"
+                samples_metadata.to_csv(samples_metadata_path, index=False)
 
 
 if __name__ == "__main__":

@@ -1,5 +1,8 @@
 """Implements small functions for preprocessing."""
 
+from collections import defaultdict
+from itertools import chain
+
 import netCDF4 as nc
 
 
@@ -86,6 +89,26 @@ def list_tc_primed_sources(tc_primed_path, exclude_years=None, source_type="all"
         all_sources.append("infrared")
 
     return all_sources, source_files, source_groups
+
+
+def list_tc_primed_overpass_files_by_sensat(tc_primed_path, exclude_years=None):
+    """Lists all overpass files in TC-PRIMED, grouped by sensor / satellite pair ("sensat").
+
+    Args:
+        tc_primed_path (Path): Path to the root directory of TC-PRIMED.
+        exclude_years (list of int, optional): List of years to exclude from the search.
+
+    Returns:
+        dict: A dictionary mapping each sensor / satellite pair to the list of corresponding overpass files.
+    """
+    # Retrieve the list of all overpass files
+    overpass_files, _ = list_tc_primed_storm_files(tc_primed_path, exclude_years)
+    # Group overpass files by sensor / satellite pair
+    grouped_files = defaultdict(list)
+    for file in chain(*overpass_files.values()):
+        sensat_pair = "_".join(file.stem.split("_")[3:5])
+        grouped_files[sensat_pair].append(file)
+    return grouped_files
 
 
 def list_tc_primed_storm_files(tc_primed_path, exclude_years=None):
