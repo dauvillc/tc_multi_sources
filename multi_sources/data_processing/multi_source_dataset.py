@@ -429,7 +429,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                     output_source["characs"] = CA
 
                 # (Optional) Data augmentation
-                if self.data_augmentation is not None:
+                if self.data_augmentation:
                     output_source = self.data_augmentation(output_source, source.type)
 
                 if source.dim == 2:
