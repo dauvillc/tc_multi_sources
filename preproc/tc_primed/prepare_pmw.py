@@ -35,7 +35,8 @@ CROSS_TRACK_INSTRUMENTS = ["AMSU", "ATMS", "MHS"]
 # Written from the TC-PRIMED documentation.
 SENSOR_VARIABLES = {
     "AMSR2": {"S4": ["36.5H", "36.5V"], "S5": ["A89.0H", "A89.0V"], "S6": ["B89.0H", "B89.0V"]},
-    "AMSU": {"S1": ["89.0_0.9QV"]},
+    "AMSRE": {"S4": ["36.5H", "36.5V"], "S5": ["A89.0H", "A89.0V"], "S6": ["B89.0H", "B89.0V"]},
+    "AMSUB": {"S1": ["89.0_0.9QV"]},
     "ATMS": {"S3": ["88.2QV"]},
     "GMI": {"S1": ["36.64H", "36.64V", "89.0H", "89.0V"]},
     "MHS": {"S1": ["89.0V"]},
@@ -124,7 +125,7 @@ def initialize_pmw_metadata(ds, sensat, swath, ifovs_path, dest_dir):
     return True
 
 
-def process_pmw_file(file, sensat, swath, dest_dir, regridding_res, check_exist=False):
+def process_pmw_file(file, sensat, swath, dest_dir, regridding_res, check_older=None):
     """Processes a single PMW file.
     Args:
         file (str): Path to the PMW file in netCDF4 format.
@@ -132,7 +133,8 @@ def process_pmw_file(file, sensat, swath, dest_dir, regridding_res, check_exist=
         swath (str): Swath name (e.g. "S4").
         dest_dir (Path): Destination directory.
         regridding_res (float): Resolution of the target grid, in degrees.
-        check_exist (bool): Flag to check if the file already exists.
+        check_older (timedelta or None): if a timedelta dt, checks if there is a pre-existing
+            file younger than dt. If so, skips processing.
     Returns:
         dict or None: Sample metadata, or None if the sample is discarded.
     """
@@ -180,9 +182,11 @@ def process_pmw_file(file, sensat, swath, dest_dir, regridding_res, check_exist=
         dest_file = dest_dir / f"{sid}_{time.strftime('%Y%m%dT%H%M%S')}.nc"
         sample_metadata["data_path"] = dest_file
 
-        # Check if the file already exists.
-        if check_exist and dest_file.exists():
-            return sample_metadata
+        # Check if the file already exists and is younger than the max timedelta
+        if dest_file.exists() and check_older is not None:
+            mtime = pd.to_datetime(dest_file.stat().st_mtime, unit="s")
+            if pd.Timestamp.now() - mtime < check_older:
+                return sample_metadata
 
         # Standardize longitude values to [-180, 180]
         ds["longitude"] = (ds["longitude"] + 180) % 360 - 180
@@ -238,21 +242,12 @@ def main(cfg):
     dest_path = Path(cfg["paths"]["preprocessed_dataset"]) / "prepared"
     # Resolution of the target grid, in degrees
     regridding_res = cfg["regridding_resolution"]
-    check_exist = cfg.get("check_exist", False)
+
+    check_older = cfg.get("check_older", None)
+    check_older = pd.to_timedelta(check_older) if check_older is not None else None
 
     # Retrieve all TC-PRIMED overpass files as a dict {sen_sat: <file_list>}
     pmw_files = list_tc_primed_overpass_files_by_sensat(tc_primed_path)
-
-    # Process only a specific source if provided in cfg
-    if "process_only" in cfg:
-        process_source = cfg["process_only"]
-        if process_source in pmw_files:
-            pmw_files = {process_source: pmw_files[process_source]}
-        else:
-            print(
-                f"Source {process_source} not found in available sources: {list(pmw_files.keys())}"
-            )
-            return
 
     # Process each PMW source. "sensat" stands for Sensor/Satellite (e.g. "AMSR2_GCOMW1").
     for sensat in pmw_files:
@@ -282,7 +277,7 @@ def main(cfg):
             if num_workers <= 1:
                 for file in tqdm(pmw_files[sensat], desc=f"Processing {sensat} swath {swath}"):
                     sample_metadata = process_pmw_file(
-                        file, sensat, swath, source_dest_dir, regridding_res, check_exist
+                        file, sensat, swath, source_dest_dir, regridding_res, check_older
                     )
                     if sample_metadata is None:
                         discarded += 1
@@ -297,7 +292,7 @@ def main(cfg):
                         repeat(swath),
                         repeat(source_dest_dir),
                         repeat(regridding_res),
-                        repeat(check_exist),
+                        repeat(check_older),
                         chunksize=chunksize,
                     )
                     for sample_metadata in tqdm(
