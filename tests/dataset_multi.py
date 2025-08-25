@@ -20,9 +20,10 @@ def main(cfg: DictConfig):
     cfg = OmegaConf.to_object(cfg)
     # Create the dataset
     dataset_dir = cfg["paths"]["preprocessed_dataset"]
-    split = "train"
     included_vars = read_variables_dict(cfg["sources"])
-    dataset = MultiSourceDataset(dataset_dir, split, included_vars)
+    dataset = MultiSourceDataset(
+        dataset_dir, "train", included_vars, dt_max=24, min_available_sources=2
+    )
 
     print(f"Dataset length: {len(dataset)} samples")
     # Try loading one sample
@@ -49,7 +50,7 @@ def main(cfg: DictConfig):
         dataset,
         batch_size=32,
         num_workers=cfg["num_workers"],
-        shuffle=True,
+        shuffle=False,
         collate_fn=multi_source_collate_fn,
     )
 
