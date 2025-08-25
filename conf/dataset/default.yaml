@@ -24,16 +24,6 @@ train:
   min_ref_time_delta: 0
   # Number of workers for the data loading
   num_workers: ${dataloader.num_workers}
-  # Dict {source_type: proba} to randomly drop sources
-  # of a given type with a given probability.
-  # For example, to drop the IR and ERA5 sources half the time:
-  # randomly_drop_sources:
-  #   tc_primed_era5: 0.5
-  #   tc_primed_infrared: 0.5
-  randomly_drop_sources: {}
-  # List of source types to forcefully drop. Source types listed here
-  # can be dropped even below their values in source_types_min_avail.
-  force_drop_sources: []
   # By default, don't select the most recent sources
   select_most_recent: false
   # Whether to mask the spatial coordinates of the sources
@@ -58,8 +48,6 @@ val:
   source_types_max_avail: ${dataset.train.source_types_max_avail}
   min_ref_time_delta: ${dataset.train.min_ref_time_delta}
   num_workers: ${dataset.train.num_workers}
-  randomly_drop_sources: ${dataset.train.randomly_drop_sources}
-  force_drop_sources: ${dataset.train.force_drop_sources}
   select_most_recent: ${dataset.train.select_most_recent}
   forecasting_lead_time: ${dataset.train.forecasting_lead_time}
   forecasting_sources: ${dataset.train.forecasting_sources}
@@ -80,8 +68,6 @@ test:
   source_types_max_avail: ${dataset.train.source_types_max_avail}
   min_ref_time_delta: ${dataset.train.min_ref_time_delta}
   num_workers: ${dataset.train.num_workers}
-  randomly_drop_sources: ${dataset.train.randomly_drop_sources}
-  force_drop_sources: ${dataset.train.force_drop_sources}
   select_most_recent: ${dataset.train.select_most_recent}
   forecasting_lead_time: ${dataset.train.forecasting_lead_time}
   forecasting_sources: ${dataset.train.forecasting_sources}
