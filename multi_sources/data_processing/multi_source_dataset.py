@@ -8,8 +8,8 @@ import numpy as np
 import pandas as pd
 import torch
 from netCDF4 import Dataset
+from tqdm import tqdm
 
-from multi_sources.data_processing.data_augmentation import MultisourceDataAugmentation
 from multi_sources.data_processing.grid_functions import crop_nan_border
 from multi_sources.data_processing.source import Source
 from multi_sources.data_processing.utils import (
@@ -275,12 +275,35 @@ class MultiSourceDataset(torch.utils.data.Dataset):
             )
 
         # ========================================================================================
-        # Pre-computation to speed up the data loading
-        # Map {sid: subset of self.df}
-        print(f"{split}: Pre-computing the sid to dataframe mapping...")
-        self.sid_to_df = {}
-        for sid in self.reference_df["sid"].unique():
-            self.sid_to_df[sid] = self.df[self.df["sid"] == sid]
+        # Pre-computation to speed up the data loading: instead of isolating the rows
+        # of self.df in __getitem__, we'll pre-compute them now.
+        # We'll obtain a list [sample_df_1, sample_df_2, ...] where each element corresponds to a
+        # a row of self.reference_df (i.e. an item in self.__getitem__).
+        print(f"{split}: Pre-computing the samples...")
+        self.sample_dfs = []
+        for _, row in tqdm(self.reference_df.iterrows(), total=len(self.reference_df)):
+            sid, t0 = row["sid"], row["time"]
+            sample_df = self.df[self.df["sid"] == sid]
+            # Only keep the rows where the time is within the time window
+            # defined by the reference time t0.
+            min_t = t0 - self.forecasting_lead_time - self.dt_max
+            max_t = t0 - self.forecasting_lead_time
+            time_mask = (sample_df["time"] <= max_t) & (sample_df["time"] > min_t)
+            # For the forecast sources, we also keep the rows where the time is
+            # exactly the forecast time.
+            if self.forecasting_sources:
+                forecast_mask = (
+                    sample_df["source_name"].isin(self.forecasting_sources) & sample_df["time"]
+                    == t0
+                )
+                time_mask = time_mask | forecast_mask
+            sample_df = sample_df[time_mask]
+
+            # If we're selecting the sources chronologically, we can pre-compute the sorted order.
+            if self.select_most_recent:
+                sample_df = sample_df.sort_values("time", ascending=False)
+
+            self.sample_dfs.append(sample_df)
 
         # ========================================================================================
         # Load the data means and stds
@@ -332,137 +355,105 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                 where index is an integer representing the observation index
                 (0 = most recent, 1 = second most recent, etc.)
         """
-        sample = self.reference_df.iloc[idx]
-        sid, t0 = sample["sid"], sample["time"]
-        # Isolate the rows of self.df corresponding to the sample sid
-        sample_df = self.sid_to_df[sid]
+        sample_df = self.sample_dfs[idx]
+        t0 = self.reference_df.iloc[idx]["time"]
 
-        if self.select_most_recent:
-            sample_df = sample_df.sort_values("time", ascending=False)
-        else:
+        # If selecting the sources randomly, we do it here so that it changes
+        # between epochs.
+        if not self.select_most_recent:
             sample_df = sample_df.sample(frac=1, random_state=self.rng.integers(0, 1e6))
 
-        sample_sources = [
-            self.sources_dict[src_name] for src_name in sample_df["source_name"].unique()
-        ]
-        sample_source_types = set([source.type for source in sample_sources])
-
         # For each source type, only keep the maximum number of sources
-        # indicated
-        n_max = {
-            src_type: self.source_types_max_avail.get(src_type, len(sample_df))
-            for src_type in sample_source_types
-        }
+        # indicate.
         sample_df = sample_df.groupby("source_type", group_keys=False).apply(
-            lambda g: g.head(n_max[g.name])
+            lambda g: g.head(self.source_types_max_avail.get(g.name, len(g)))
         )
 
         # For each source, try to load the element at the given time
         output = {}
-        # Track the observations for each source to assign indices
-        source_observations = defaultdict(list)
+        sources_cnt = defaultdict(int)  # {source_name: number of obs from that source added}
 
-        for source in sample_sources:
-            source_name = source.name
-            df = sample_df[sample_df["source_name"] == source_name]
+        for _, row in sample_df.iterrows():
+            source_name = row["source_name"]
+            source = self.sources_dict[source_name]
 
-            # Isolate the rows of sample_df where the time is within the time window
-            # defined by the reference time t0.
-            min_t = t0 - self.forecasting_lead_time - self.dt_max
-            max_t = t0 - self.forecasting_lead_time
-            time_mask = (df["time"] <= max_t) & (df["time"] > min_t)
-            # For the forecast sources, we also keep the rows where the time is
-            # exactly the forecast time.
-            if self.forecasting_sources is not None and source_name in self.forecasting_sources:
-                time_mask = time_mask | (df["time"] == t0)
-            df = df[time_mask]
+            time = row["time"]
+            dt = t0 - self.forecasting_lead_time - time
+            DT = torch.tensor(
+                dt.total_seconds() / self.dt_max.total_seconds(),
+                dtype=torch.float32,
+            )
 
-            # Collect all available observations for this source
-            for _, row in df.iterrows():
-                time = row["time"]
+            # Load the npy file containing the data for the given storm, time, and source
+            filepath = Path(row["data_path"])
+            with Dataset(filepath) as ds:
+                # Coordinates
+                lat = load_nc_with_nan(ds["latitude"])
+                lon = load_nc_with_nan(ds["longitude"])
+                # Make sure the longitude is in the range [-180, 180]
+                lon = np.where(lon > 180, lon - 360, lon)
+                C = np.stack([lat, lon], axis=0)
+                C = torch.tensor(C, dtype=torch.float32)
+                # Load the land mask and distance to the center of the storm
+                LM = torch.tensor(load_nc_with_nan(ds["land_mask"]), dtype=torch.float32)
+                D = torch.tensor(load_nc_with_nan(ds["dist_to_center"]), dtype=torch.float32)
+                # If the spatial coordinates should be masked, set them to zeros
+                if source_name in self.mask_spatial_coords:
+                    C = torch.zeros_like(C)
+                    LM = torch.zeros_like(LM)
+                    D = torch.zeros_like(D)
 
-                dt = t0 - self.forecasting_lead_time - time
-                DT = torch.tensor(
-                    dt.total_seconds() / self.dt_max.total_seconds(),
-                    dtype=torch.float32,
-                )
+                # Characterstic variables
+                if source.n_charac_variables() == 0:
+                    CA = None
+                else:
+                    CA = torch.tensor(source.get_charac_values(), dtype=torch.float32)
 
-                # Load the npy file containing the data for the given storm, time, and source
-                filepath = Path(row["data_path"])
-                with Dataset(filepath) as ds:
-                    # Coordinates
-                    lat = load_nc_with_nan(ds["latitude"])
-                    lon = load_nc_with_nan(ds["longitude"])
-                    # Make sure the longitude is in the range [-180, 180]
-                    lon = np.where(lon > 180, lon - 360, lon)
-                    C = np.stack([lat, lon], axis=0)
-                    C = torch.tensor(C, dtype=torch.float32)
-                    # Load the land mask and distance to the center of the storm
-                    LM = torch.tensor(load_nc_with_nan(ds["land_mask"]), dtype=torch.float32)
-                    D = torch.tensor(load_nc_with_nan(ds["dist_to_center"]), dtype=torch.float32)
-                    # If the spatial coordinates should be masked, set them to zeros
-                    if source_name in self.mask_spatial_coords:
-                        C = torch.zeros_like(C)
-                        LM = torch.zeros_like(LM)
-                        D = torch.zeros_like(D)
+                # Values
+                # Load the variables in the order specified in the source
+                V = np.stack([load_nc_with_nan(ds[var]) for var in source.data_vars], axis=0)
+                V = torch.tensor(V, dtype=torch.float32)
 
-                    # Characterstic variables
-                    if source.n_charac_variables() == 0:
-                        CA = None
-                    else:
-                        CA = torch.tensor(source.get_charac_values(), dtype=torch.float32)
+                # Normalize the characs and values tensors
+                CA, V = self.normalize(V, source, characs=CA)
 
-                    # Values
-                    # Load the variables in the order specified in the source
-                    V = np.stack([load_nc_with_nan(ds[var]) for var in source.data_vars], axis=0)
-                    V = torch.tensor(V, dtype=torch.float32)
+                # Assemble the output dict for that source
+                output_source = {
+                    "dt": DT,
+                    "coords": C,
+                    "landmask": LM,
+                    "dist_to_center": D,
+                    "values": V,
+                }
+                if CA is not None:
+                    output_source["characs"] = CA
 
-                    # Normalize the characs and values tensors
-                    CA, V = self.normalize(V, source, characs=CA)
+                # (Optional) Data augmentation
+                if self.data_augmentation is not None:
+                    output_source = self.data_augmentation(output_source, source.type)
 
-                    # Assemble the output dict for that source
-                    output_source = {
-                        "dt": DT,
-                        "coords": C,
-                        "landmask": LM,
-                        "dist_to_center": D,
-                        "values": V,
-                    }
-                    if CA is not None:
-                        output_source["characs"] = CA
+                if source.dim == 2:
+                    # For images only.
+                    # The values can contain borders that are fully NaN (due to the sources
+                    # originally having multiple channels that are not aligned geographically).
+                    # Compute how much we can crop them, and apply that cropping to all spatial
+                    # tensors to keep the spatial alignment.
+                    V, C = output_source["values"], output_source["coords"]
+                    LM, D = output_source["landmask"], output_source["dist_to_center"]
+                    V, C, LM, D = crop_nan_border(V, [V, C, LM, D])
+                    output_source["values"], output_source["coords"] = V, C
+                    output_source["landmask"], output_source["dist_to_center"] = LM, D
 
-                    # (Optional) Data augmentation
-                    if isinstance(self.data_augmentation, MultisourceDataAugmentation):
-                        output_source = self.data_augmentation(output_source, source.type)
-
-                    if source.dim == 2:
-                        # For images only.
-                        # The values can contain borders that are fully NaN (due to the sources
-                        # originally having multiple channels that are not aligned geographically).
-                        # Compute how much we can crop them, and apply that cropping to all spatial
-                        # tensors to keep the spatial alignment.
-                        V, C = output_source["values"], output_source["coords"]
-                        LM, D = output_source["landmask"], output_source["dist_to_center"]
-                        V, C, LM, D = crop_nan_border(V, [V, C, LM, D])
-                        output_source["values"], output_source["coords"] = V, C
-                        output_source["landmask"], output_source["dist_to_center"] = LM, D
-
-                    # Add the processed observation to the list for this source
-                    source_observations[source_name].append((time, output_source))
-
-        # Process each source's observations and assign indices (0 = most recent)
-        for source_name, observations in source_observations.items():
-            # Sort by time in descending order (most recent first)
-            observations.sort(key=lambda x: x[0], reverse=True)
-            # Create entries with (source_name, index) as keys
-            for idx, (_, source_data) in enumerate(observations):
-                output[(source_name, idx)] = source_data
+                # Add the processed observation to the list for this source
+                output[(source_name, sources_cnt[source_name])] = output_source
+                sources_cnt[source_name] += 1
 
         if len(output) <= 1:
+            sid, t0 = self.reference_df.iloc[idx][["sid", "time"]]
+            print(sample_df)
+            print(f"t0 = {t0}, sid = {sid}")
             raise ValueError(
                 f"Sample {sid} at time {t0} has only {len(output)} sources available."
-                " Check the parameters of the experiment; random sources dropping might"
-                " make leave only 1 or 0 source available. "
             )
         return output
 
