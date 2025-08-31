@@ -65,11 +65,10 @@ def preprocess_pmw(ds):
     return ds
 
 
-def initialize_pmw_metadata(ds, sensat, swath, ifovs_path, dest_dir):
-    """Given a PMW dataset, retrieves the list of all data and
+def initialize_pmw_metadata(sensat, swath, ifovs_path, dest_dir):
+    """Retrieves the list of all data and
     characteristic variables of a source; and writes the source metadata file.
     Args:
-        ds (xr.Dataset): any sample from the source.
         sensat (str): Sensor / Satellite pair (e.g. "AMSR2_GCOMW1").
         swath (str): Swath name (e.g. "S4").
         dest_dir (Path): Destination directory.
@@ -82,7 +81,7 @@ def initialize_pmw_metadata(ds, sensat, swath, ifovs_path, dest_dir):
     storm_vars = ["storm_latitude", "storm_longitude", "intensity"]
     # Dict that contains the source's metadata.
     source_metadata = {
-        "source_name": "tc_primed_" + sensat + "_" + swath,
+        "source_name": "tc_primed_pmw_" + sensat + "_" + swath,
         "source_type": "pmw",
         "dim": 2,
         "data_vars": data_vars,
