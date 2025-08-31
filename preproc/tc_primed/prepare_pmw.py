@@ -252,7 +252,7 @@ def main(cfg):
     for sensat in pmw_files:
         sensor = sensat.split("_")[0]
         for swath in SENSOR_VARIABLES[sensor].keys():
-            source_dest_dir = dest_path / f"tc_primed_{sensat}_{swath}"
+            source_dest_dir = dest_path / f"tc_primed_pmw_{sensat}_{swath}"
             # Create destination directory
             source_dest_dir.mkdir(parents=True, exist_ok=True)
 
