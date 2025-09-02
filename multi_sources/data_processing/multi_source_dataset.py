@@ -2,6 +2,7 @@
 
 import json
 from collections import defaultdict
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
 import numpy as np
@@ -16,6 +17,61 @@ from multi_sources.data_processing.utils import (
     compute_sources_availability,
     load_nc_with_nan,
 )
+
+
+def precompute_samples(
+    ref_df,
+    df,
+    dt_max,
+    forecast_lead_time,
+    forecast_sources,
+    select_most_recent,
+    verbose=True,
+):
+    """Precomputes the samples for a (subset of the) dataframe of
+    reference samples.
+    Written outside the MultiSourceDataset class so that it can be
+    called in parallel processes.
+
+    Args:
+        ref_df (pd.DataFrame): The reference dataframe.
+        df (pd.DataFrame): DataFrame containing all samples.
+        dt_max (int): The maximum time delta.
+        forecast_lead_time (int): The forecast lead time.
+        forecast_sources (list): The list of forecasting sources.
+        select_most_recent (bool): Whether to select the most recent observation.
+        verbose (bool): Whether to print progress messages.
+
+    Returns:
+        list: The precomputed samples, as a list of dataframes.
+    """
+    sample_dfs = []
+    iterator = ref_df.iterrows()
+    if verbose:
+        iterator = tqdm(iterator, total=len(ref_df), desc="Precomputing samples")
+    for _, row in iterator:
+        sid, t0 = row["sid"], row["time"]
+        sample_df = df[df["sid"] == sid]
+        # Only keep the rows where the time is within the time window
+        # defined by the reference time t0.
+        min_t = t0 - forecast_lead_time - dt_max
+        max_t = t0 - forecast_lead_time
+        time_mask = (sample_df["time"] <= max_t) & (sample_df["time"] > min_t)
+        # For the forecast sources, we also keep the rows where the time is
+        # exactly the forecast time.
+        if forecast_sources:
+            forecast_mask = (
+                sample_df["source_name"].isin(forecast_sources) & sample_df["time"] == t0
+            )
+            time_mask = time_mask | forecast_mask
+        sample_df = sample_df[time_mask]
+
+        # If we're selecting the sources chronologically, we can pre-compute the sorted order.
+        if select_most_recent:
+            sample_df = sample_df.sort_values("time", ascending=False)
+
+        sample_dfs.append(sample_df)
+    return sample_dfs
 
 
 class MultiSourceDataset(torch.utils.data.Dataset):
@@ -280,30 +336,37 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         # We'll obtain a list [sample_df_1, sample_df_2, ...] where each element corresponds to a
         # a row of self.reference_df (i.e. an item in self.__getitem__).
         print(f"{split}: Pre-computing the samples...")
-        self.sample_dfs = []
-        for _, row in tqdm(self.reference_df.iterrows(), total=len(self.reference_df)):
-            sid, t0 = row["sid"], row["time"]
-            sample_df = self.df[self.df["sid"] == sid]
-            # Only keep the rows where the time is within the time window
-            # defined by the reference time t0.
-            min_t = t0 - self.forecasting_lead_time - self.dt_max
-            max_t = t0 - self.forecasting_lead_time
-            time_mask = (sample_df["time"] <= max_t) & (sample_df["time"] > min_t)
-            # For the forecast sources, we also keep the rows where the time is
-            # exactly the forecast time.
-            if self.forecasting_sources:
-                forecast_mask = (
-                    sample_df["source_name"].isin(self.forecasting_sources) & sample_df["time"]
-                    == t0
-                )
-                time_mask = time_mask | forecast_mask
-            sample_df = sample_df[time_mask]
-
-            # If we're selecting the sources chronologically, we can pre-compute the sorted order.
-            if self.select_most_recent:
-                sample_df = sample_df.sort_values("time", ascending=False)
-
-            self.sample_dfs.append(sample_df)
+        if num_workers <= 1:
+            self.sample_dfs = precompute_samples(
+                self.reference_df,
+                self.df,
+                self.dt_max,
+                self.forecasting_lead_time,
+                self.forecasting_sources,
+                self.select_most_recent,
+            )
+        else:
+            with ProcessPoolExecutor(max_workers=num_workers) as executor:
+                futures = []
+                # Divide the full reference df in num_workers chunks and concatenate the resulting
+                # lists
+                chunks = np.array_split(self.reference_df, num_workers)
+                for i, chunk in enumerate(chunks):
+                    futures.append(
+                        executor.submit(
+                            precompute_samples,
+                            chunk,
+                            self.df,
+                            self.dt_max,
+                            self.forecasting_lead_time,
+                            self.forecasting_sources,
+                            self.select_most_recent,
+                            verbose=i == 0,
+                        )
+                    )
+                self.sample_dfs = []
+                for f in as_completed(futures):
+                    self.sample_dfs.extend(f.result())
 
         # ========================================================================================
         # Load the data means and stds
@@ -358,8 +421,8 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         sample_df = self.sample_dfs[idx]
         t0 = self.reference_df.iloc[idx]["time"]
 
-        # If selecting the sources randomly, we do it here so that it changes
-        # between epochs.
+        # If selecting the sources randomly, we do it here so that if __getitem__(i) is called
+        # twice, it may yield different results.
         if not self.select_most_recent:
             sample_df = sample_df.sample(frac=1, random_state=self.rng.integers(0, 1e6))
 
