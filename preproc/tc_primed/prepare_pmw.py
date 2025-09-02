@@ -167,7 +167,7 @@ def process_pmw_file(file, sensat, swath, dest_dir, regridding_res, check_older=
         intensity = overpass_storm_metadata["intensity"][0].item()
 
         sample_metadata = {
-            "source_name": "tc_primed_" + sensat + "_" + swath,
+            "source_name": "tc_primed_pmw_" + sensat + "_" + swath,
             "source_type": "pmw",
             "sid": sid,
             "time": time,
@@ -256,16 +256,11 @@ def main(cfg):
             # Create destination directory
             source_dest_dir.mkdir(parents=True, exist_ok=True)
 
-            # Initialize metadata using first file
-            with Dataset(pmw_files[sensat][0]) as raw_sample:
-                # Recursively access groups associated with the source
-                ds = raw_sample
-                ds = xr.open_dataset(NetCDF4DataStore(ds), decode_times=False)
-                if not initialize_pmw_metadata(ds, sensat, swath, ifovs_path, source_dest_dir):
-                    # Remove directory if metadata could not be initialized
-                    source_dest_dir.rmdir()
-                    print(f"Skipping {sensat}")
-                    continue
+            if not initialize_pmw_metadata(sensat, swath, ifovs_path, source_dest_dir):
+                # Remove directory if metadata could not be initialized
+                source_dest_dir.rmdir()
+                print(f"Skipping {sensat}")
+                continue
 
             # Process all files, and keep count of discarded files and save the metadata of
             # each sample.

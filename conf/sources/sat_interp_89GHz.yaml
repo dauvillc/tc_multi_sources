@@ -10,6 +10,9 @@ tc_primed:
     ATMS_NOAA20:
       S3:
         variables: ['TB_88.2QV']
+    ATMS_NOAA21:
+      S3:
+        variables: ['TB_88.2QV']
     ATMS_NPP:
       S3:
         variables: ['TB_88.2QV']
@@ -37,6 +40,12 @@ tc_primed:
     MHS_NOAA19:
       S1:
         variables: ['TB_89.0V']
+    SSMI_F08:
+      S2:
+        variables: ['TB_85.5H']
+    SSMI_F10:
+      S2:
+        variables: ['TB_85.5H']
     SSMI_F11:
       S2:
         variables: ['TB_85.5H']
@@ -58,3 +67,9 @@ tc_primed:
     SSMIS_F18:
       S4:
         variables: ['TB_91.665H']
+    SSMIS_F19:
+      S4:
+        variables: ['TB_91.665H']
+    TMI_TRMM:
+      S3:
+        variables: ['TB_85.5H']
