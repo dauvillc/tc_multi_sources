@@ -1,11 +1,10 @@
 # @package _global_
 defaults:
-  - override /paths: jz
-  - override /dataloader: jz
   - override /sources: sat_interp_89GHz
   - override /lightning_module: deterministic
   - override /lr_scheduler: cosine_warmup_100epochs
-  - override /metrics: default_fm
+  - override /metrics: none
+  - override /model: msvit_10b_d256
 
 wandb:
   name: det_89GHz
@@ -15,3 +14,13 @@ dataset:
   train:
     dt_max: 6
     min_available_sources: 2
+    source_types_max_avail:
+      pmw: 3
+
+model:
+  dropout: 0.1
+
+trainer:
+  check_val_every_n_epoch: null
+  val_check_interval: 2000
+  strategy: ddp

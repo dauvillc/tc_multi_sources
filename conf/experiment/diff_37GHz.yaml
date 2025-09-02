@@ -19,7 +19,7 @@ dataset:
     dt_max: 6
     min_available_sources: 2
     source_types_max_avail:
-      pmw: 1
+      pmw: 3
   
 trainer:
   strategy: ddp
