@@ -27,6 +27,10 @@ def main(cfg):
     print("Concatenating metadata")
     metadata = pd.concat(metadata, ignore_index=True)
 
+    # If for any reason a sample is included multiple times in the dataframe,
+    # we'll keep only the first occurrence.
+    metadata = metadata[~metadata.duplicated(subset=["sid", "time", "source_name"], keep="first")]
+
     # We'll sort the samples by storm ID, then by time and finally by source.
     # This isn't required for the pipeline to work, but it makes it easier to
     # inspect the data.
