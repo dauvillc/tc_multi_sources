@@ -10,7 +10,7 @@ lightning_module:
   patch_size: 8
   cfg_train_uncond_proba: 0.0
   cfg_scale: null
-  use_det_model_from_run: mir6s1vr
+  use_det_model_from_run: kh67mcku-1
 
 wandb:
   name: diff_37GHz_residual

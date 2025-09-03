@@ -2,9 +2,11 @@ defaults:
   - _self_
   - paths: jz
 
-# Target resolution to which the images will be regridded, in degrees.
+# Target resolution to which the PMW images will be regridded, in degrees.
 # Give a list [longitude_res, latitude_res]
 regridding_resolution: [0.15, 0.15]
+# Target resolution for radar data
+regridding_resolution_radar: [0.05, 0.05]
 # Fraction of the data to use when computing the normalization statistics
 norm_constants_fraction: 1.0
 # Minimum number of data points to use when computing the normalization statistics

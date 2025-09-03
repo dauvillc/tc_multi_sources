@@ -1,6 +1,6 @@
 dropout: 0.0
 values_dim: 256
-coords_dim: 128
+coords_dim: 256
 backbone:
   _target_: multi_sources.models.motif_double.backbone.MultisourceGeneralBackbone
   values_dim: ${lightning_module.values_dim}
@@ -13,5 +13,5 @@ backbone:
   cross_att_window_size: 4
   iwsa_window_size: 8
 
-output_resnet_blocks: 2
+output_resnet_blocks: 6
 output_resnet_channels: 16
