@@ -1,6 +1,7 @@
 import os
 from datetime import timedelta
 from pathlib import Path
+from time import localtime, strftime
 
 import hydra
 import lightning.pytorch as pl
@@ -171,9 +172,10 @@ class TrainJob(submitit.helpers.Checkpointable):
 
 def _make_executor(cfg: DictConfig) -> submitit.AutoExecutor:
     # Where submitit writes logs/stdout/err and its internal state
-    folder = Path("submitit")
+    folder = Path("submitit") / (
+        cfg["wandb"]["name"] + f"_{strftime('%Y%m%d_%H-%M-%S', localtime())}"
+    )
     folder.mkdir(parents=True, exist_ok=True)
-    folder = folder / (cfg["wandb"]["name"] + "_%j")
 
     ex = submitit.AutoExecutor(folder=str(folder), slurm_max_num_timeout=20)
     ex.update_parameters(**cfg["setup"])
