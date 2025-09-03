@@ -22,7 +22,13 @@ def main(cfg: DictConfig):
     dataset_dir = cfg["paths"]["preprocessed_dataset"]
     included_vars = read_variables_dict(cfg["sources"])
     dataset = MultiSourceDataset(
-        dataset_dir, "train", included_vars, dt_max=24, min_available_sources=2
+        dataset_dir,
+        "train",
+        included_vars,
+        dt_max=24,
+        min_available_sources=2,
+        source_types_max_avail={"pmw": 2},
+        num_workers=cfg["num_workers"],
     )
 
     print(f"Dataset length: {len(dataset)} samples")
@@ -63,6 +69,8 @@ def main(cfg: DictConfig):
                 continue
             data_means[source_name] = data_means[source_name] + np.nanmean(v)
             data_stds[source_name] = data_stds[source_name] + np.nanstd(v)
+        if i == 100:
+            break
 
     profiler.stop()
     profiler.write_html("tests/outputs/profile_multi_source_dataset.html")
