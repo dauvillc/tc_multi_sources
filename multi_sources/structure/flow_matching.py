@@ -59,7 +59,7 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
         ignore_land_pixels_in_loss=False,
         normalize_coords_across_sources=False,
         validation_dir=None,
-        compute_metrics_every_k_batches=5,
+        compute_metrics_every_k_batches=10,
         display_realizations_every_k_batches=3,
         n_realizations_per_sample=3,
         metrics={},
