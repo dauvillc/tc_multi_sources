@@ -116,6 +116,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         mask_spatial_coords=[],
         data_augmentation=None,
         seed=42,
+        **unused_kwargs,
     ):
         """
         Args:
