@@ -26,6 +26,8 @@ class QuantitativeEvaluation(AbstractMultisourceEvaluationMetric):
     - Mean Squared Error (MSE)
     - Continuous Ranked Probability Score (CRPS). For models with a single prediction,
         this is equivalent to the MAE.
+    - Skill-Spread Ratio (SSR). This is only computed if the model has multiple
+        realizations per sample.
     The per-sample metrics are saved to disk in a JSON file. Then, the aggregated metrics
     are computed and saved to disk in a separate JSON file. Figures to compare the
     models are generated and saved to disk.
@@ -62,7 +64,7 @@ class QuantitativeEvaluation(AbstractMultisourceEvaluationMetric):
         Returns:
             results (pd.DataFrame): DataFrame containing the evaluation results for the model.
                 Includes the columns 'model_id', 'sample_index', 'source_name', 'source_index',
-                'channel', 'mae', 'mse', 'crps'.
+                'channel', 'mae', 'mse', 'crps', 'ssr'.
         """
         results = []  # List of dictionaries that we'll concatenate later into a DataFrame
         for sample_df, sample_data in tqdm(
@@ -91,18 +93,21 @@ class QuantitativeEvaluation(AbstractMultisourceEvaluationMetric):
                         mae = self._compute_mae(pred_data_channel, target_data_channel)
                         mse = self._compute_mse(pred_data_channel, target_data_channel)
                         crps = self._compute_crps(pred_data_channel, target_data_channel)
-                        results.append(
-                            {
-                                "model_id": model_id,
-                                "sample_index": sample_index,
-                                "source_name": source_name,
-                                "source_index": source_index,
-                                "channel": channel,
-                                "mae": mae,
-                                "mse": mse,
-                                "crps": crps,
-                            }
-                        )
+                        sample_results_dict = {
+                            "model_id": model_id,
+                            "sample_index": sample_index,
+                            "source_name": source_name,
+                            "source_index": source_index,
+                            "channel": channel,
+                            "mae": mae,
+                            "mse": mse,
+                            "crps": crps,
+                        }
+                        # Compute the SSR only if there are multiple realizations
+                        if pred_data_channel.shape[0] > 1:
+                            ssr = self._compute_ssr(pred_data_channel, target_data_channel)
+                            sample_results_dict["ssr"] = ssr
+                        results.append(sample_results_dict)
 
         # Concatenate all results into a single DataFrame
         return pd.DataFrame(results)
@@ -169,6 +174,25 @@ class QuantitativeEvaluation(AbstractMultisourceEvaluationMetric):
         plt.savefig(overall_crps_plot_file)
         plt.close()
         print(f"Overall CRPS plot saved to: {overall_crps_plot_file}")
+
+        # SSR: boxplot, only for models that have multiple realizations
+        if "ssr" in results.columns:
+            plt.figure(figsize=(10, 6))
+            sns.boxplot(
+                x="model_id",
+                y="ssr",
+                data=results,
+                showfliers=False,
+            )
+            plt.title("Skill-Spread Ratio for all models, sources and channels")
+            plt.xlabel("Model ID")
+            plt.ylabel("Skill-Spread Ratio (SSR)")
+            plt.xticks(rotation=45)
+            plt.tight_layout()
+            overall_ssr_plot_file = self.metric_results_dir / "ssr_all_models.png"
+            plt.savefig(overall_ssr_plot_file)
+            plt.close()
+            print(f"Overall SSR plot saved to: {overall_ssr_plot_file}")
 
         # Now, we'll separate the plots by pair (source_name, channel). In each plot,
         # the x-axis will be the model_id and the y-axis will be the metric.
@@ -239,3 +263,33 @@ class QuantitativeEvaluation(AbstractMultisourceEvaluationMetric):
         term2 = np.abs(pred_data[:, None] - pred_data[None, :]).mean()
         crps = term1 - 0.5 * term2
         return crps.item()
+
+    @staticmethod
+    def _compute_ssr(pred_data, target_data):
+        """Computes the Skill-Spread Ratio (SSR) between predictions and targets.
+        The SSR is defined as the ratio of the RMSE to the ensemble spread (standard deviation
+        of the ensemble members). A lower SSR indicates a better-calibrated ensemble.
+
+        Args:
+            pred_data (np.ndarray): Predicted data, of shape (M, ...) where M is the number of
+                realizations.
+            target_data (np.ndarray): Target data, of shape (...) matching the shape of each
+                realization in pred_data.
+        Returns:
+            ssr (float): The computed Skill-Spread Ratio.
+
+        Raises:
+            ValueError: If pred_data does not have multiple realizations (M < 2).
+        """
+        pred_data, target_data = flatten_and_ignore_nans(pred_data, target_data)
+        n_realizations = pred_data.shape[0]
+        if n_realizations < 2:
+            raise ValueError("SSR requires multiple realizations in pred_data.")
+        # Compute the RMSE between the ensemble mean and the target
+        ensemble_mean = pred_data.mean(axis=0)
+        rmse = np.sqrt(((ensemble_mean - target_data) ** 2).mean())
+        # Compute the ensemble spread (standard deviation of the ensemble members)
+        ensemble_spread = pred_data.std(axis=0).mean()
+        # Compute the SSR
+        ssr = rmse / ensemble_spread if ensemble_spread > 0 else np.inf
+        return ssr.item()
