@@ -38,7 +38,7 @@ class MultisourcesWindowedCrossAttention(nn.Module):
         inner_ratio_v=0.25,
         num_heads=8,
         learned_coords_weight=True,
-        mask_self_attention=False,
+        mask_self_attention=True,
         dropout=0.0,
     ):
         """
@@ -53,7 +53,7 @@ class MultisourcesWindowedCrossAttention(nn.Module):
             learned_coords_weight (bool, optional): Whether to weigh the coordinates term in
                 the attention computation by a learned parameter.
             mask_self_attention (bool, optional): Whether to mask out attention weights
-                between elements of the same source. Defaults to False.
+                between elements of the same source.
             dropout (float, optional): Dropout rate for attention weights. Defaults to 0.0.
         """
         super().__init__()
