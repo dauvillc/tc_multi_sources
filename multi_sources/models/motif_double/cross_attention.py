@@ -38,6 +38,7 @@ class MultisourcesWindowedCrossAttention(nn.Module):
         inner_ratio_v=0.25,
         num_heads=8,
         learned_coords_weight=True,
+        mask_self_attention=False,
         dropout=0.0,
     ):
         """
@@ -51,6 +52,8 @@ class MultisourcesWindowedCrossAttention(nn.Module):
             num_heads (int, optional): Number of attention heads. Defaults to 8.
             learned_coords_weight (bool, optional): Whether to weigh the coordinates term in
                 the attention computation by a learned parameter.
+            mask_self_attention (bool, optional): Whether to mask out attention weights
+                between elements of the same source. Defaults to False.
             dropout (float, optional): Dropout rate for attention weights. Defaults to 0.0.
         """
         super().__init__()
@@ -59,6 +62,7 @@ class MultisourcesWindowedCrossAttention(nn.Module):
         self.window_size = window_size
         self.num_heads = num_heads
         self.dropout = dropout
+        self.mask_self_attention = mask_self_attention
 
         self.inner_qk_v_dim = int(values_dim * inner_ratio_qk)
         self.inner_qk_c_dim = int(coords_dim * inner_ratio_qk)
@@ -83,7 +87,7 @@ class MultisourcesWindowedCrossAttention(nn.Module):
         self.values_v_back_proj = nn.Linear(self.inner_v_v_dim, values_dim, bias=False)
 
         # Parameter that weighs the coordinates in the attention computation
-        self.coords_weight = nn.Parameter(torch.randn(1), dtype=torch.float32)
+        self.coords_weight = nn.Parameter(torch.randn(1))
         if not learned_coords_weight:
             self.coords_weight.requires_grad = False
 
@@ -172,7 +176,16 @@ class MultisourcesWindowedCrossAttention(nn.Module):
         # Compute attention weights
         attn_weights = (queries_v @ keys_v.transpose(-2, -1)) / self.inner_qk_v_dim**0.5 + (
             queries_c @ keys_c.transpose(-2, -1)
-        ) * self.coords_weight / self.inner_qk_c_dim**0.5
+        ) * self.coords_weight / self.inner_qk_c_dim**0.5  # (B, H, N, N)
+
+        if self.mask_self_attention:
+            # For each source, the attention weights contain a block centered on the diagonal that
+            # correspond to key/query pairs from the same source. In order to prioritize attention
+            # between different sources only in this layer, we'll mask out those blocks.
+            blocks = [torch.full((n, n), True) for n in n_windows]
+            mask = torch.block_diag(*blocks).to(attn_weights.device).unsqueeze(0).unsqueeze(0)
+            attn_weights = attn_weights.masked_fill(mask, float("-inf"))
+
         attn_weights = F.softmax(attn_weights, dim=-1)
         attn_weights = self.attn_dropout(attn_weights)
 
