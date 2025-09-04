@@ -25,9 +25,9 @@ def main(cfg: DictConfig):
         dataset_dir,
         "train",
         included_vars,
-        dt_max=24,
+        dt_max=6,
         min_available_sources=2,
-        source_types_max_avail={"pmw": 2},
+        source_types_max_avail={"pmw": 3},
         num_workers=cfg["num_workers"],
     )
 
