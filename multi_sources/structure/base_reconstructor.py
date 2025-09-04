@@ -85,8 +85,9 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
                 will be normalized across all sources in the batch so that the minimum
                 latitude and longitude in each example is 0 and maximum is 1.
                 If False, the coordinates will be normalized as sinusoïds.
-            mask_only_sources (str or list of str): List of sources to mask. If None, all sources
-                may be masked.
+            mask_only_sources (str or list of str): List of source types to mask. If not None,
+                instead of randomly selecting the sources to mask, the model will always
+                mask the sources of the specified types whenever they are available.
             forecasting_mode (bool): If True, will always mask all sources that are forecasted.
                 A source is forecasted if its time delta is negative.
                 Mutually exclusive with mask_only_sources.
@@ -133,13 +134,16 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
             output_resnet_blocks,
         )
 
-        self.mask_only_sources = None
-        if mask_only_sources is not None:
-            if forecasting_mode:
-                raise ValueError("mask_only_sources and forecasting_mode are mutually exclusive.")
-            if isinstance(mask_only_sources, str):
-                mask_only_sources = [mask_only_sources]
-            self.mask_only_sources = set(mask_only_sources)
+        if isinstance(mask_only_sources, str):
+            mask_only_sources = [mask_only_sources]
+        self.mask_only_sources = mask_only_sources
+        # Convert from source types to the source names
+        if self.mask_only_sources is not None:
+            self.mask_only_sources = [
+                src_name
+                for src_name, src in self.sources.items()
+                if src.type in self.mask_only_sources
+            ]
         self.forecasting_mode = forecasting_mode
 
     def init_embedding_layers(
