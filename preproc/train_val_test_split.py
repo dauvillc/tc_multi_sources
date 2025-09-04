@@ -23,13 +23,31 @@ def main(cfg):
     metadata = []
     for source_dir in tqdm(list(regridded_dir.iterdir()), desc="Loading metadata"):
         metadata_file = source_dir / "samples_metadata.csv"
-        metadata.append(pd.read_csv(metadata_file))
+        metadata.append(pd.read_csv(metadata_file, parse_dates=["time"]))
     print("Concatenating metadata")
     metadata = pd.concat(metadata, ignore_index=True)
 
-    # If for any reason a sample is included multiple times in the dataframe,
-    # we'll keep only the first occurrence.
-    metadata = metadata[~metadata.duplicated(subset=["sid", "time", "source_name"], keep="first")]
+    # In some cases the same source may have multiple images for the same storm
+    # very close in time (e.g. at less than an hour interval). Those images would
+    # be almost identical, so we'll filter the data to keep only one image every
+    # min_time_between_same_source minutes for each storm and source.
+    metadata = metadata.sort_values(["sid", "source_name", "time"])
+    delta = pd.Timedelta(minutes=cfg["min_time_between_same_source"])
+
+    def keep_group(g):
+        kept = []
+        last_kept_time = pd.Timestamp.min
+        for idx, t in zip(g.index, g["time"]):
+            if t >= last_kept_time + delta:
+                kept.append(idx)
+                last_kept_time = t
+        return g.loc[kept]
+
+    metadata = (
+        metadata.groupby(["sid", "source_name"], group_keys=False)
+        .apply(keep_group)
+        .reset_index(drop=True)
+    )
 
     # We'll sort the samples by storm ID, then by time and finally by source.
     # This isn't required for the pipeline to work, but it makes it easier to
