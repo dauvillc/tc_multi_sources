@@ -23,12 +23,12 @@ def load_experiment_cfg_from_checkpoint(checkpoints_dir, run_id, best_or_latest=
     # The checkpoints are stored as:
     # - <run_id>-<epoch>-<step>.ckpt for the timed checkpoints
     # - <run_id>-<epoch>-best.ckpt for the best checkpoint
-    if best_or_latest == "latest":
-        # Filter out the best checkpoints if we want the latest one.
-        checkpoint_files = [f for f in checkpoint_files if "best" not in f.stem]
-    # If no "latest" checkpoints are found, we load the best one.
     if best_or_latest == "best" or checkpoint_files == []:
-        checkpoint_files = [f for f in checkpoint_files if "best" in f.stem]
+        best_checkpoint_files = [f for f in checkpoint_files if "best" in f.stem]
+        if best_checkpoint_files == []:
+            print("No best checkpoint found, loading latest instead.")
+        else:
+            checkpoint_files = best_checkpoint_files
     # Load the latest checkpoint out of the filtered list.
     checkpoint_files.sort(key=lambda x: x.stat().st_mtime)
     checkpoint_path = checkpoint_files[-1]
