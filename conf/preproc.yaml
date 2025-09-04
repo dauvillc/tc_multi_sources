@@ -7,6 +7,11 @@ defaults:
 regridding_resolution: [0.15, 0.15]
 # Target resolution for radar data
 regridding_resolution_radar: [0.05, 0.05]
+# Radar pre-selection: list of pairs (number of pixels, min rain rate) such
+# that only radar images with at least that many pixels above that rain rate
+# will be kept. Including multiple pairs will act as a logical OR.
+radar_rain_rate_criteria: [[100, 10], [10, 100]]  # Values taken from Viltard et. al. 2024
+
 # Fraction of the data to use when computing the normalization statistics
 norm_constants_fraction: 1.0
 # Minimum number of data points to use when computing the normalization statistics
@@ -17,3 +22,6 @@ max_mem_per_worker: "3.8GB"
 # Seed for the train-val-test splitting
 splitting_seed: 42
 train_val_test_fraction: [0.7, 0.15, 0.15]
+# Minimum time between two images from the same source over the same storm
+# This is to avoid having very similar images in the dataset
+min_time_between_same_source: 360  # in minutes

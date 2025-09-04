@@ -99,13 +99,18 @@ def initialize_radar_metadata(sensat, swath, ifovs_path, dest_dir):
     return True
 
 
-def process_overpass_file(file, sensat, swath, dest_dir, regridding_res, check_older=None):
+def process_overpass_file(
+    file, sensat, swath, dest_dir, rain_rate_criteria, regridding_res, check_older=None
+):
     """Processes a single overpass file to extract the radar data if it is available.
     Args:
         file (str): Path to the overpass file in netCDF4 format.
         sensat (str): Sensor / Satellite pair (e.g. "PR_TRMM")
         swath (str): Swath name (e.g. "KuTMI").
         dest_dir (Path): Destination directory.
+        rain_rate_criteria (list of pairs of float): List of pairs (number of pixels, min rain rate)
+            such that only radar images with at least that many pixels above that rain rate
+            will be kept. Including multiple pairs will act as a logical OR.
         regridding_res (float): Resolution of the target grid, in degrees.
         check_older (timedelta or None): if a timedelta dt, checks if there is a pre-existing
             file younger than dt. If so, skips processing.
@@ -127,6 +132,15 @@ def process_overpass_file(file, sensat, swath, dest_dir, regridding_res, check_o
         ds = ds[data_vars + ["latitude", "longitude"]]
         # If any variable is fully missing data, skip
         if any(ds[var].isnull().all() for var in data_vars):
+            return None
+        # Check if the sample meets the rain rate criteria
+        ds_rain = ds["nearSurfPrecipTotRate"].values
+        meets_criteria = False
+        for num_pixels, min_rain_rate in rain_rate_criteria:
+            if (ds_rain > min_rain_rate).sum() >= num_pixels:
+                meets_criteria = True
+                break
+        if not meets_criteria:
             return None
 
         # Assemble the sample's metadata
@@ -214,6 +228,8 @@ def main(cfg):
     dest_path = Path(cfg["paths"]["preprocessed_dataset"]) / "prepared"
     # Resolution of the target grid, in degrees
     regridding_res = cfg["regridding_resolution_radar"]
+    # Rain rate criteria for radar pre-selection
+    rain_rate_criteria = cfg["radar_rain_rate_criteria"]
 
     check_older = cfg.get("check_older", None)
     check_older = pd.to_timedelta(check_older) if check_older is not None else None
@@ -248,7 +264,13 @@ def main(cfg):
                     overpass_files[sensat], desc=f"Processing {sensat} swath {swath}"
                 ):
                     sample_metadata = process_overpass_file(
-                        file, sensat, swath, source_dest_dir, regridding_res, check_older
+                        file,
+                        sensat,
+                        swath,
+                        source_dest_dir,
+                        rain_rate_criteria,
+                        regridding_res,
+                        check_older,
                     )
                     if sample_metadata is None:
                         discarded += 1
@@ -262,6 +284,7 @@ def main(cfg):
                         repeat(sensat),
                         repeat(swath),
                         repeat(source_dest_dir),
+                        repeat(rain_rate_criteria),
                         repeat(regridding_res),
                         repeat(check_older),
                         chunksize=chunksize,
