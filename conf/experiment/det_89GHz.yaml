@@ -2,7 +2,7 @@
 defaults:
   - override /sources: sat_interp_89GHz
   - override /lightning_module: deterministic
-  - override /lr_scheduler: cosine_warmup_100epochs
+  - override /lr_scheduler: cosine_warmup_100kiterations
   - override /metrics: none
   - override /model: msvit_10b_d256
 

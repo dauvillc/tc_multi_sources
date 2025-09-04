@@ -1,0 +1,8 @@
+# Keyword arguments of CosineAnnealingWarmupRestarts
+interval: step  # Use training batches as the unit of the scheduler's step
+warmup_steps: 1000
+first_cycle_steps: 100000
+cycle_mult: 1.0
+max_lr: 0.0003
+min_lr: 1e-8
+gamma: 1.0

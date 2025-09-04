@@ -253,11 +253,19 @@ class MultisourceAbstractModule(pl.LightningModule, ABC):
             **self.adamw_kwargs,
         )
 
+        scheduler_interval = self.lr_scheduler_kwargs.pop("interval", "epoch")
         scheduler = CosineAnnealingWarmupRestarts(
             optimizer,
             **self.lr_scheduler_kwargs,
         )
-        return [optimizer], [scheduler]
+        return {
+            "optimizer": optimizer,
+            "lr_scheduler": {
+                "scheduler": scheduler,
+                "interval": scheduler_interval,
+                "frequency": 1,
+            },
+        }
 
     def to_unconditional_batch(self, batch, which_samples=None):
         """Given a batch where some of the sources are masked, creates an unconditional
