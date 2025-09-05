@@ -35,7 +35,7 @@ class MultisourcesWindowedCrossAttention(nn.Module):
         coords_dim,
         inner_ratio_qk,
         window_size,
-        inner_ratio_v=0.25,
+        inner_ratio_v=1.0,
         num_heads=8,
         learned_coords_weight=True,
         mask_self_attention=True,
