@@ -5,6 +5,7 @@ from time import localtime, strftime
 
 import hydra
 import lightning.pytorch as pl
+import submitit
 import torch
 from hydra.utils import instantiate
 from lightning.pytorch.callbacks import LearningRateMonitor, ModelCheckpoint, ModelSummary
@@ -12,7 +13,6 @@ from lightning.pytorch.loggers import WandbLogger
 from omegaconf import DictConfig, OmegaConf
 from torch.utils.data import DataLoader
 
-import submitit
 from multi_sources.data_processing.collate_fn import multi_source_collate_fn
 from utils.cfg_utils import get_random_code
 from utils.checkpoints import load_experiment_cfg_from_checkpoint, load_weights_intersection
@@ -41,8 +41,9 @@ class TrainJob(submitit.helpers.Checkpointable):
             # Since resuming W&B offline runs is unstable, we won't use exactly the same run ID.
             # Instead, we'll use run-n where n starts at 1 (first resume) and increments by 1
             # for each subsequent resume.
+            # If we're loading a run but not resuming it, we'll also add a "-1" suffix.
             split = resume_run_id.split("-")
-            if len(split) > 1 and split[-1].isdigit():
+            if cfg["resume_mode"] == "resume" and len(split) > 1 and split[-1].isdigit():
                 # If the run ID ends with a number, increment it.
                 run_id = "-".join(split[:-1]) + "-" + str(int(split[-1]) + 1)
             else:
