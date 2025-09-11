@@ -43,7 +43,7 @@ def precompute_samples(
         verbose (bool): Whether to print progress messages.
 
     Returns:
-        list: The precomputed samples, as a list of dataframes.
+        list of tuples: List of pairs (t0, sample_df).
     """
     sample_dfs = []
     iterator = ref_df.iterrows()
@@ -70,7 +70,7 @@ def precompute_samples(
         if select_most_recent:
             sample_df = sample_df.sort_values("time", ascending=False)
 
-        sample_dfs.append(sample_df)
+        sample_dfs.append((t0, sample_df))
     return sample_dfs
 
 
@@ -338,7 +338,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         # a row of self.reference_df (i.e. an item in self.__getitem__).
         print(f"{split}: Pre-computing the samples...")
         if num_workers <= 1:
-            self.sample_dfs = precompute_samples(
+            self.samples = precompute_samples(
                 self.reference_df,
                 self.df,
                 self.dt_max,
@@ -365,9 +365,9 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                             verbose=i == 0,
                         )
                     )
-                self.sample_dfs = []
+                self.samples = []
                 for f in as_completed(futures):
-                    self.sample_dfs.extend(f.result())
+                    self.samples.extend(f.result())
 
         # ========================================================================================
         # Load the data means and stds
@@ -419,8 +419,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                 where index is an integer representing the observation index
                 (0 = most recent, 1 = second most recent, etc.)
         """
-        sample_df = self.sample_dfs[idx]
-        t0 = self.reference_df.iloc[idx]["time"]
+        t0, sample_df = self.samples[idx]
 
         # If selecting the sources randomly, we do it here so that if __getitem__(i) is called
         # twice, it may yield different results.
