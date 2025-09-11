@@ -13,6 +13,7 @@ from numpy import nan as NA
 from pyresample import SwathDefinition
 from pyresample.area_config import create_area_def
 from pyresample.bilinear import NumpyBilinearResampler
+from pyresample.image import ImageContainerNearest
 from pyresample.utils import check_and_wrap
 
 
@@ -245,6 +246,64 @@ def regrid(ds, target_resolution):
     coords = {
         "latitude": (["lat", "lon"], lats),
         "longitude": (["lat", "lon"], lons),
+    }
+    # Rebuild the dataset
+    result = xr.Dataset(result, coords=coords)
+    return result
+
+
+def regrid_to_grid(ds, grid_lat, grid_lon):
+    """Regrids the dataset ds to a given target grid defined by its latitude
+    and longitude arrays.
+
+    Args:
+        ds (xarray.Dataset): Dataset to regrid. Must include the variables 'latitude'
+            and 'longitude' and have exactly two dimensions.
+        grid_lat (numpy.ndarray): The latitude grid, of shape (H, W).
+        grid_lon (numpy.ndarray): The longitude grid, of shape (H, W).
+    """
+    # Get the dimensions from the latitude variable
+    dims = list(ds.latitude.dims)
+    if len(dims) != 2:
+        raise ValueError("Dataset must have exactly two dimensions")
+    dim_y, dim_x = dims
+
+    lon, lat = check_and_wrap(ds.longitude.values, ds.latitude.values)
+
+    swath = SwathDefinition(lons=lon, lats=lat)
+    radius_of_influence = 100000  # 100 km
+
+    # Define the target area object for pyresample
+    target_swath = SwathDefinition(lons=grid_lon, lats=grid_lat)
+
+    # Retrieve the variables to regrid
+    variables = [var for var in ds.variables if dim_y in ds[var].dims and dim_x in ds[var].dims]
+    variables = [var for var in variables if var not in ["latitude", "longitude"]]
+    ds = ds.reset_coords()[variables]
+
+    # Individually resample each variable
+    resampled_vars = {}
+    for var in variables:
+        try:
+            resampler = ImageContainerNearest(
+                ds[var].values, swath, radius_of_influence, fill_value=float("nan")
+            )
+            resampled_vars[var] = resampler.resample(
+                target_swath,
+            ).image_data
+        except Exception as e:
+            print("Longitude:", lon)
+            print("Latitude:", lat)
+            traceback.print_tb(e.__traceback__)
+            traceback.print_exc()
+            raise ResamplingError(f"Error resampling variable {var}") from e
+    # Rebuild the datase
+    result = {var: ((dim_y, dim_x), resampled_vars[var]) for var in variables}
+
+    # Add the latitude and longitude variables as coordinates
+    coords = {
+        "latitude": ([dim_y, dim_x], grid_lat),
+        "longitude": ([dim_y, dim_x], grid_lon),
     }
     # Rebuild the dataset
     result = xr.Dataset(result, coords=coords)
