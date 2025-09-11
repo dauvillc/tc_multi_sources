@@ -7,11 +7,11 @@ backbone:
   coords_dim: ${lightning_module.coords_dim}
   n_blocks: 12
   dropout: ${model.dropout}
-  att_inner_ratio: 2.0
+  att_inner_ratio: 1.0
   mlp_inner_ratio: 2.0
   num_heads: 8
   cross_att_window_size: 4
-  iwsa_window_size: 12
+  iwsa_window_size: 8
 
-output_resnet_blocks: 2
+output_resnet_blocks: 6
 output_resnet_channels: 16
