@@ -2,11 +2,8 @@
 pred_name: fm_cfg
 
 lightning_module:
-  cfg_scale: 5
+  cfg_scale: 0.5
   n_realizations_per_sample: 1
-
-trainer:
-  limit_predict_batches: 0.2
 
 dataset:
   val:

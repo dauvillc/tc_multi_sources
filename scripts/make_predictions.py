@@ -40,7 +40,7 @@ def main(cfg: DictConfig):
     dataloader = DataLoader(
         dataset,
         **exp_cfg["dataloader"],
-        shuffle=False,
+        shuffle=cfg.get("shuffle_dataloader", False),
         collate_fn=multi_source_collate_fn,
         generator=dataloader_rng,
     )

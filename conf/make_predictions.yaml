@@ -11,6 +11,8 @@ defaults:
 seed: 123
 # Seed for the DataLoader to ensure different models get the same data order
 dataloader_seed: 50
+# Whether to shuffle the dataloader (useful when used with limit_predict_batches)
+shuffle_dataloader: false
 
 run_id: ???
 pred_name: ???

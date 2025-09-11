@@ -3,7 +3,7 @@ pred_name: fm
 
 lightning_module:
   cfg_scale: null
-  n_realizations_per_sample: 1
+  n_realizations_per_sample: 5
 
 dataset:
   val:
