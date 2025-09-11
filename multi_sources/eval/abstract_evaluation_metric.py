@@ -3,6 +3,7 @@ Implements the AbstractEvaluationMetric class, which is a base class for all eva
 """
 
 import abc
+import re
 from pathlib import Path
 
 import xarray as xr
@@ -55,7 +56,9 @@ def models_info_sanity_check(info_dfs):
 class AbstractMultisourceEvaluationMetric(abc.ABC):
     """Base class for all evaluation metrics."""
 
-    def __init__(self, id_name, full_name, model_data, parent_results_dir):
+    def __init__(
+        self, id_name, full_name, model_data, parent_results_dir, source_name_replacements=None
+    ):
         """
         Args:
             id_name (str): Unique identifier for the metric. Must follow the
@@ -68,11 +71,15 @@ class AbstractMultisourceEvaluationMetric(abc.ABC):
                 - run_id: Run ID
                 - pred_name: Prediction name
             parent_results_dir (str or Path): Parent directory for all results
+            source_name_replacements (List of tuple of str, optional): List of (pattern, replacement)
+                substitutions to apply to source names for display purposes. The replacement
+                is done using the re.sub function.
         """
         self.id_name = id_name
         self.full_name = full_name
         self.model_data = model_data
         self.parent_results_dir = Path(parent_results_dir)
+        self.source_name_replacements = source_name_replacements or []
 
         # Create a directory for this evaluation metric
         self.metric_results_dir = self.parent_results_dir / id_name
@@ -182,3 +189,9 @@ class AbstractMultisourceEvaluationMetric(abc.ABC):
                 - num_workers: Number of workers for parallel processing
         """
         pass
+
+    def _display_src_name(self, src_name):
+        """Applies the source name replacements to a source name for display purposes."""
+        for pattern, replacement in self.source_name_replacements:
+            src_name = re.sub(pattern, replacement, src_name)
+        return src_name
