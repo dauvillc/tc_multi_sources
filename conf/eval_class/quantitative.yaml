@@ -1,2 +1,6 @@
 quantitative:
   _target_: multi_sources.eval.quantitative.QuantitativeEvaluation
+  source_name_replacements: [
+    ["tc_primed_pmw_", ""],
+    ["_", " "]
+  ]

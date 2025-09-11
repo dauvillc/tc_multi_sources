@@ -33,11 +33,12 @@ class QuantitativeEvaluation(AbstractMultisourceEvaluationMetric):
     models are generated and saved to disk.
     """
 
-    def __init__(self, model_data, parent_results_dir):
+    def __init__(self, model_data, parent_results_dir, **kwargs):
         """
         Args:
             model_data (dict): Dictionary mapping model_ids to model specifications.
             parent_results_dir (str or Path): Parent directory for all results.
+            **kwargs: Additional keyword arguments passed to the AbstractMultisourceEvaluationMetric.
         """
         super().__init__(
             id_name="quantitative",

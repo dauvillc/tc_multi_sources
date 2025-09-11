@@ -14,18 +14,27 @@ evaluation_classes:
     max_realizations_to_display: 6  # Maximum realizations to show
 """
 
+import matplotlib as mpl
 import matplotlib.pyplot as plt
+import numpy as np
 from tqdm import tqdm
 
 from multi_sources.data_processing.grid_functions import crop_nan_border_numpy
 from multi_sources.eval.abstract_evaluation_metric import AbstractMultisourceEvaluationMetric
+from multi_sources.eval.utils import format_tdelta
 
 
 class VisualEvaluationComparison(AbstractMultisourceEvaluationMetric):
     """Evaluation class that creates visualization figures for targets and predictions."""
 
     def __init__(
-        self, model_data, parent_results_dir, eval_fraction=1.0, max_realizations_to_display=3
+        self,
+        model_data,
+        parent_results_dir,
+        eval_fraction=1.0,
+        max_realizations_to_display=3,
+        source_name_replacements=None,
+        cmap="viridis",
     ):
         """
         Args:
@@ -33,15 +42,21 @@ class VisualEvaluationComparison(AbstractMultisourceEvaluationMetric):
             parent_results_dir (str or Path): Parent directory for all results
             eval_fraction (float): Fraction of samples to visualize (0.0 to 1.0)
             max_realizations_to_display (int): Maximum number of realizations to display
+            source_name_replacements (List of tuple of str, optional): List of (pattern, replacement)
+                substitutions to apply to source names for display purposes. The replacement
+                is done using the re.sub function.
+            cmap (str): Colormap to use for visualization.
         """
         super().__init__(
             id_name="visual",
             full_name="Visual Evaluation Comparison",
             model_data=model_data,
             parent_results_dir=parent_results_dir,
+            source_name_replacements=source_name_replacements,
         )
         self.eval_fraction = eval_fraction
         self.max_realizations_to_display = max_realizations_to_display
+        self.cmap = cmap
 
     def evaluate(self, **kwargs):
         """
@@ -50,8 +65,9 @@ class VisualEvaluationComparison(AbstractMultisourceEvaluationMetric):
         Args:
             **kwargs: Additional keyword arguments (num_workers not used for visualization)
         """
-        for sample_df, sample_data in tqdm(
-            self.samples_iterator(), desc="Evaluating samples", total=self.n_samples
+        n_samples = int(self.eval_fraction * self.n_samples)
+        for i, (sample_df, sample_data) in enumerate(
+            tqdm(self.samples_iterator(), desc="Evaluating samples", total=n_samples)
         ):
             sample_index = sample_df["sample_index"].iloc[0]
             # Choose a channel to plot for each source
@@ -72,6 +88,9 @@ class VisualEvaluationComparison(AbstractMultisourceEvaluationMetric):
                 plot_channels,
                 sample_df,
             )
+
+            if i + 1 >= n_samples:
+                break
 
     def crop_padded_borders(self, sample_data, sample_df, plot_channels):
         """Crops the padded borders in the sample data.
@@ -155,26 +174,44 @@ class VisualEvaluationComparison(AbstractMultisourceEvaluationMetric):
 
         # ------- FIRST ROW: Targets, then available sources -------
         col_cnt = 0
+        # Map {(src_name, src_index) --> mpl Normalize}
+        norms = {}
         # First, targets
         for src_name, src_index in target_sources.keys():
+            display_name = self._display_src_name(src_name)
             channel_data = target_sources[(src_name, src_index)]
+            # Extract the min and max values to create a colormap
+            vmin, vmax = np.nanmin(channel_data), np.nanmax(channel_data)
+            norm = mpl.colors.Normalize(vmin=vmin, vmax=vmax)
+            norms[(src_name, src_index)] = norm
+
             ax = axes[0, col_cnt]
-            ax.imshow(channel_data, aspect="auto", cmap="viridis")
-            ax.set_title(f"Target: {src_name}")
+            ax.imshow(channel_data, aspect="auto", cmap=self.cmap, norm=norm)
+            dt = format_tdelta(sample_df.loc[(src_name, src_index), "dt"])
+            ax.set_title(f"Target: {display_name} $\delta t=${dt}")
+            self._set_coords_as_ticks(ax, lats[(src_name, src_index)], lons[(src_name, src_index)])
             col_cnt += 1
 
         # Available sources
         for src_name, src_index in available_sources.keys():
+            display_name = self._display_src_name(src_name)
             channel_data = available_sources[(src_name, src_index)]
             ax = axes[0, col_cnt]
-            ax.imshow(channel_data, aspect="auto", cmap="viridis")
-            ax.set_title(src_name)
+            ax.imshow(channel_data, aspect="auto", cmap=self.cmap)
+            dt = format_tdelta(sample_df.loc[(src_name, src_index), "dt"])
+            ax.set_title(f"{display_name} $\delta t=${dt}")
+            self._set_coords_as_ticks(ax, lats[(src_name, src_index)], lons[(src_name, src_index)])
             col_cnt += 1
+
+        # Hide the axes that are not used
+        for j in range(col_cnt, n_cols):
+            axes[0, j].axis("off")
 
         # ------- SUBSEQUENT ROWS: Model predictions / realizations -----
         for k, model_id in enumerate(self.model_data):
             col_cnt = 0
             for src_name, src_index in target_sources.keys():
+                display_name = self._display_src_name(src_name)
                 # If the prediction contains one more dim than the target, we
                 # assume the first dim is the realization index. In this case,
                 # we'll plot one realization per column, up to the maximum number
@@ -188,15 +225,33 @@ class VisualEvaluationComparison(AbstractMultisourceEvaluationMetric):
                     ):
                         ax = axes[k + 1, col_cnt]
                         pred_realization = pred_data[realization_idx, ...]
-                        ax.imshow(pred_realization, aspect="auto", cmap="viridis")
-                        ax.set_title(f"{src_name} - {model_id} (Real {realization_idx})")
+                        ax.imshow(
+                            pred_realization,
+                            aspect="auto",
+                            cmap=self.cmap,
+                            norm=norms[(src_name, src_index)],
+                        )
+                        dt = format_tdelta(sample_df.loc[(src_name, src_index), "dt"])
+                        ax.set_title(f"{display_name} - {model_id} $\delta t=${dt}")
+                        self._set_coords_as_ticks(
+                            ax, lats[(src_name, src_index)], lons[(src_name, src_index)]
+                        )
                         col_cnt += 1
                 else:
                     # Single prediction, plot it directly
                     ax = axes[k + 1, col_cnt]
-                    ax.imshow(pred_data, aspect="auto", cmap="viridis")
-                    ax.set_title(f"{src_name} - {model_id}")
+                    ax.imshow(
+                        pred_data, aspect="auto", cmap=self.cmap, norm=norms[(src_name, src_index)]
+                    )
+                    dt = format_tdelta(sample_df.loc[(src_name, src_index), "dt"])
+                    ax.set_title(f"{display_name} - {model_id} $\delta t=${dt}")
+                    self._set_coords_as_ticks(
+                        ax, lats[(src_name, src_index)], lons[(src_name, src_index)]
+                    )
                     col_cnt += 1
+            # Hide the axes that are not used
+            for j in range(col_cnt, n_cols):
+                axes[k + 1, j].axis("off")
 
         plt.tight_layout()
         # Save the figure
@@ -207,9 +262,9 @@ class VisualEvaluationComparison(AbstractMultisourceEvaluationMetric):
     @staticmethod
     def _set_coords_as_ticks(ax, lats, lons, every_nth_pixel=30):
         """Sets the latitude and longitude coordinates as ticks on the axes."""
-        ax.set_xticks(range(0, len(lons), every_nth_pixel))
-        ax.set_xticklabels([f"{lon:.2f}" for lon in lons[::every_nth_pixel]], rotation=45)
-        ax.set_yticks(range(0, len(lats), every_nth_pixel))
-        ax.set_yticklabels([f"{lat:.2f}" for lat in lats[::every_nth_pixel]])
+        ax.set_xticks(range(0, len(lons[0]), every_nth_pixel))
+        ax.set_xticklabels([f"{lon:.2f}" for lon in lons[0, ::every_nth_pixel]], rotation=45)
+        ax.set_yticks(range(0, len(lats[:, 0]), every_nth_pixel))
+        ax.set_yticklabels([f"{lat:.2f}" for lat in lats[::every_nth_pixel, 0]])
         ax.set_xlabel("Longitude")
         ax.set_ylabel("Latitude")

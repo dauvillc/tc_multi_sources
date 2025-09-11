@@ -91,10 +91,22 @@ class EmbeddingsComparisonEvaluation(AbstractMultisourceEvaluationMetric):
                         cond_similarity = self._compute_cosine_similarity(
                             target_cond_embeddings, src_cond_embeddings
                         )
+                        target_dt = (
+                            sample_df[sample_df.index == target_src]["dt"].iloc[0].total_seconds()
+                            / 60.0
+                        )
+                        src_dt = (
+                            sample_df[sample_df.index == (source_name, source_index)]["dt"]
+                            .iloc[0]
+                            .total_seconds()
+                            / 60.0
+                        )
+                        dt = abs(target_dt - src_dt)
                         results.append(
                             {
                                 "model_id": model_id,
                                 "sample_index": sample_index,
+                                "dt": dt,
                                 "source_name": source_name,
                                 "source_index": source_index,
                                 "target_source_name": target_source_name,
@@ -162,16 +174,18 @@ class EmbeddingsComparisonEvaluation(AbstractMultisourceEvaluationMetric):
         """Evaluates the MSE against the embeddings similarities for all models.
 
         Since there are multiple embeddings similarities in each sample (one per
-        (source, target source) pair), we'll use the maximum similarity for each
+        (source, target source) pair), we'll use the minimum similarity for each
         (sample, source_name, source_index) triplet: for each target source T, we'll
-        look at either the maximum or the average similarity to T
+        look at either the minimum or the average similarity to T
         across all available sources S.
 
         Assumes that the MSE per-sample have already been computed using the
         QuantitativeEvaluation class.
         - Generates a figure showing the joint distribution of the MSE against the coordinates
         embeddings similarities.
-        - Generates the same figures but with the conditioning embeddings similarities.
+        - Generates the same figure but with the conditioning embeddings similarities.
+        - Generates a figure showing the joint distribution of the MSE against the minimum
+           time difference (dt) between the target source and the available sources.
         Args:
             embeddings_results (pd.DataFrame): DataFrame containing the embeddings similarities results.
         """
@@ -188,12 +202,12 @@ class EmbeddingsComparisonEvaluation(AbstractMultisourceEvaluationMetric):
             quantitative_results_file, orient="records", lines=True
         )
 
-        # Compute the highest and mean embeddings similarities for each sample and target source
+        # Compute the smallest and mean embeddings similarities for each sample and target source
         aggregated_similarities = (
             embeddings_results.groupby(
                 ["sample_index", "target_source_name", "target_source_index"]
-            )["coords_similarity", "cond_similarity"]
-            .agg(["max", "mean"])
+            )[["coords_similarity", "cond_similarity", "dt"]]
+            .agg(["min", "mean"])
             .reset_index()
         )
         # Rename the columns to match the error results dataframe.
@@ -201,10 +215,12 @@ class EmbeddingsComparisonEvaluation(AbstractMultisourceEvaluationMetric):
             "sample_index",
             "source_name",  # target_source_name
             "source_index",  # target_source_index
-            "coords_similarity_max",
+            "coords_similarity_min",
             "coords_similarity_mean",
-            "cond_similarity_max",
+            "cond_similarity_min",
             "cond_similarity_mean",
+            "dt_minimum",
+            "dt_mean",
         ]
         # Sanity check: the aggregated similarities should have the same number
         # of rows as the quantitative results.
@@ -225,11 +241,11 @@ class EmbeddingsComparisonEvaluation(AbstractMultisourceEvaluationMetric):
         for model_id in self.model_data:
             model_results = merged_results[merged_results["model_id"] == model_id]
             # For Coordinates Similarity: create two subplots side by side,
-            # for max and mean similarities.
+            # for min and mean similarities.
             fig, axes = plt.subplots(1, 2, figsize=(14, 6))
             sns.regplot(
                 data=model_results,
-                x="coords_similarity_max",
+                x="coords_similarity_min",
                 y="mse",
                 ax=axes[0],
                 order=2,  # Polynomial regression of order 2
@@ -237,10 +253,11 @@ class EmbeddingsComparisonEvaluation(AbstractMultisourceEvaluationMetric):
                 color=".3",
                 line_kws={"color": "red"},
             )
-            axes[0].set_title("MSE vs Max Coordinates Similarity - Model: " + model_id)
-            axes[0].set_xlabel("Max Coordinates Similarity")
+            axes[0].set_title("MSE vs Min Coordinates Similarity - Model: " + model_id)
+            axes[0].set_xlabel("Min Coordinates Similarity")
             axes[0].set_ylabel("Mean Squared Error (MSE)")
             axes[0].set_xlim(0.9, 1.0)
+            # Mean similarity plot
             sns.regplot(
                 data=model_results,
                 x="coords_similarity_mean",
@@ -261,3 +278,59 @@ class EmbeddingsComparisonEvaluation(AbstractMultisourceEvaluationMetric):
             plt.savefig(plot_file)
             plt.close()
             print(f"MSE vs Coordinates Similarity plot for {model_id} saved to: {plot_file}")
+            # For Conditioning Similarity: create the same two plots
+            fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+            sns.regplot(
+                data=model_results,
+                x="cond_similarity_min",
+                y="mse",
+                ax=axes[0],
+                order=2,  # Polynomial regression of order 2
+                marker="x",
+                color=".3",
+                line_kws={"color": "red"},
+            )
+            axes[0].set_title("MSE vs Min Conditioning Similarity - Model: " + model_id)
+            axes[0].set_xlabel("Min Conditioning Similarity")
+            axes[0].set_ylabel("Mean Squared Error (MSE)")
+            axes[0].set_xlim(0.9, 1.0)
+            sns.regplot(
+                data=model_results,
+                x="cond_similarity_mean",
+                y="mse",
+                ax=axes[1],
+                order=2,  # Polynomial regression of order 2
+                marker="x",
+                color=".3",
+                line_kws={"color": "red"},
+            )
+            axes[1].set_title("MSE vs Mean Conditioning Similarity - Model: " + model_id)
+            axes[1].set_xlabel("Mean Conditioning Similarity")
+            axes[1].set_ylabel("Mean Squared Error (MSE)")
+            axes[1].set_xlim(0.9, 1.0)
+            sns.despine()
+            plt.tight_layout()
+            plot_file = self.metric_results_dir / f"mse_vs_cond_similarity_{model_id}.png"
+            plt.savefig(plot_file)
+            plt.close()
+            print(f"MSE vs Conditioning Similarity plot for {model_id} saved to: {plot_file}")
+            # Finally, plot the MSE against the minimum dt.
+            plt.figure(figsize=(7, 6))
+            sns.regplot(
+                data=model_results,
+                x="dt_minimum",
+                y="mse",
+                order=2,  # Polynomial regression of order 2
+                marker="x",
+                color=".3",
+                line_kws={"color": "red"},
+            )
+            plt.title("MSE vs Min Time Difference - Model: " + model_id)
+            plt.xlabel("Min Time Difference [s]")
+            plt.ylabel("Mean Squared Error (MSE)")
+            sns.despine()
+            plt.tight_layout()
+            plot_file = self.metric_results_dir / f"mse_vs_dt_{model_id}.png"
+            plt.savefig(plot_file)
+            plt.close()
+            print(f"MSE vs dt plot for {model_id} saved to: {plot_file}")

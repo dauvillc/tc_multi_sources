@@ -2,3 +2,7 @@ visual:
   _target_: multi_sources.eval.visualization.VisualEvaluationComparison
   eval_fraction: 1.0
   max_realizations_to_display: 6
+  source_name_replacements: [
+    ["tc_primed_pmw_", ""],
+    ["_", " "]
+  ]
