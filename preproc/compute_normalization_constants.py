@@ -14,7 +14,7 @@ from tqdm import tqdm
 def process_samples_chunk(paths):
     """Process a chunk of samples, and computes the mean and M2
     statistics for each variable."""
-    means_dict, m2_dict = defaultdict(int), defaultdict(int)
+    means_dict, m2_dict = defaultdict(float), defaultdict(float)
     count_dict = defaultdict(int)
     for path in paths:
         with Dataset(path, "r") as ds:
@@ -70,6 +70,10 @@ def process_source(
     else:
         count_dict, means_dict, m2_dict = process_samples_chunk(data_paths)
         stds_dict = {var: np.sqrt(m2_dict[var] / count_dict[var]) for var in m2_dict}
+
+    # Convert from numpy types to native Python types for JSON serialization.
+    means_dict = {var: float(means_dict[var]) for var in means_dict}
+    stds_dict = {var: float(stds_dict[var]) for var in stds_dict}
 
     # Save the means and stds in two JSON files.
     constants_dir.mkdir(parents=True, exist_ok=True)
