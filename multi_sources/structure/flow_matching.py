@@ -11,7 +11,10 @@ from flow_matching.path import CondOTProbPath
 from hydra.utils import instantiate
 
 # Local module imports
-from multi_sources.structure.base_reconstructor import MultisourceAbstractReconstructor
+from multi_sources.structure.base_reconstructor import (
+    MultisourceAbstractModule,
+    MultisourceAbstractReconstructor,
+)
 from multi_sources.utils.solver import MultisourceEulerODESolver
 
 # Visualization imports
@@ -55,6 +58,7 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
         lr_scheduler_kwargs,
         use_det_model_from_run=None,
         n_sampling_diffusion_steps=25,
+        training_time_sampling="uniform",
         loss_max_distance_from_center=None,
         ignore_land_pixels_in_loss=False,
         normalize_coords_across_sources=False,
@@ -67,6 +71,7 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
         det_model_kwargs={},
         cfg_train_uncond_proba=0.0,
         cfg_scale=None,
+        cfg_type="chronological",
         **kwargs,
     ):
         """
@@ -84,6 +89,8 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
             use_det_model_from_run (str): Path to a checkpoint of a deterministic model
                 to predict the means from.
             n_sampling_diffusion_steps (int): Number of diffusion steps when sampling.
+            training_time_sampling (str): How to sample the diffusion timesteps during training.
+                Either "uniform" or "lognormal".
             loss_max_distance_from_center (int or None): If specified, only pixels within this
                 distance from the center of the storm (in km) will be considered
                 in the loss computation.
@@ -110,8 +117,11 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
                 constructor, if using a deterministic model.
             cfg_train_uncond_proba (float): Probability of dropping the other sources
                 when training, for classifier-free guidance.
-            cfg_scale (float): Guidance scale for classifier-free guidance.
-                If None, no guidance is applied.
+            cfg_scale (float): Guidance scale for classifier-free guidance at inference time.
+            cfg_type (str): Type of classifier-free guidance, either "chronological" or "full".
+                - "chronological": only erases the source that is closest chronologically
+                    to the masked source. If only two sources are available, doesn't erase anything.
+                - "full": erases all non-masked sources (traditional classifier-free guidance).
             **kwargs: Additional arguments to pass to the LightningModule constructor.
         """
         self.use_diffusion_t = True
@@ -137,12 +147,14 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
 
         # Flow matching ingredients
         self.n_sampling_diffusion_steps = n_sampling_diffusion_steps
+        self.training_time_sampling = training_time_sampling
         self.fm_path = CondOTProbPath()
         self.compute_metrics_every_k_batches = compute_metrics_every_k_batches
         self.display_realizations_every_k_batches = display_realizations_every_k_batches
         self.n_realizations_per_sample = n_realizations_per_sample
         self.cfg_train_uncond_proba = cfg_train_uncond_proba
         self.cfg_scale = cfg_scale
+        self.cfg_type = cfg_type
         self.fm_rng = torch.Generator()  # For the noise and time sampling
 
         # Optional: deterministic model usage
@@ -231,7 +243,14 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
             if pure_noise:
                 t = torch.zeros(batch_size, device=device)  # Means x_t = x_0
             else:
-                t = torch.rand(batch_size, generator=self.fm_rng).to(device)
+                if self.training_time_sampling == "uniform":
+                    t = torch.rand(batch_size, generator=self.fm_rng).to(device)
+                elif self.training_time_sampling == "lognormal":
+                    t = (
+                        torch.normal(mean=0.0, std=1.0, size=(batch_size,), generator=self.fm_rng)
+                        .sigmoid()
+                        .to(device)
+                    )
             # Generate random noise with the same shape as the values
             noise = torch.randn(
                 masked_data["values"].shape,
@@ -384,18 +403,28 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
                         batch_t[source_index_pair]["values"][is_solved] = x_ts[is_solved]
                         batch_t[source_index_pair]["diffusion_t"][is_solved] = t
                     # Run the model
-                    if self.cfg_scale is not None:
-                        # If using classifier-free guidance (CFG), we need to create a double batch
-                        # where the first half contains the original batch and the second half
-                        # contains an unconditional copy of the batch.
-                        vf = self.forward(self.to_double_batch(batch_t))
+                    if self.cfg_scale:
+                        # Double-batch technique for classifier-free guidance: create
+                        # an unconditional version of the batch and concatenate it to the original batch
+                        # along the batch dimension.
+                        if self.cfg_type == "chronological":
+                            uncond_batch = self.remove_closest_chronological_source(batch_t)
+                        else:
+                            uncond_batch = self.to_unconditional_batch(batch_t)
+                        vf = self.forward(self.to_double_batch(batch_t, uncond_batch))
                         # Split the conditional and unconditional batches and apply the
                         # guidance scale.
                         half_batch = next(iter(vf.values())).shape[0] // 2
                         for source_index_pair in vf:
                             cond = vf[source_index_pair][:half_batch]
                             uncond = vf[source_index_pair][half_batch:]
-                            vf[source_index_pair] = cond + self.cfg_scale * (cond - uncond)
+                            # The interpretation of the guidance scale depends on the type of CFG.
+                            c = self.cfg_scale
+                            if self.cfg_type == "chronological":
+                                new_vf = (1 - c) * cond + c * (cond - uncond)
+                            else:
+                                new_vf = cond + c * (cond - uncond)
+                            vf[source_index_pair] = new_vf
                     else:
                         vf = self.forward(batch_t)
                     # Where the sources are not being solved, we'll set the velocity field to zero,
@@ -590,6 +619,66 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
 
         return output
 
+    def erase_source_data(self, data, to_erase):
+        """Erases the source data for the samples where to_erase is True.
+        "Erasing" means setting all of its attributes to the values they would have
+        if the source was missing (avail = -1, values = 0, etc).
+        Args:
+            data (dict): The source data to potentially erase.
+            to_erase (torch.Tensor): Boolean tensor indicating which samples to erase.
+        Returns:
+            new_data (dict): The source data with the specified samples erased.
+        """
+        new_data = MultisourceAbstractModule.erase_source_data(data, to_erase)
+        # Flow matching specific fields
+        new_data["diffusion_t"] = torch.where(
+            to_erase, torch.full_like(data["diffusion_t"], -1.0), data["diffusion_t"]
+        )
+        if self.use_det_model and "pred_mean" in data:
+            new_data["pred_mean"] = torch.where(
+                to_erase.view((-1,) + (1,) * (data["pred_mean"].ndim - 1)),
+                torch.zeros_like(data["pred_mean"]),
+                data["pred_mean"],
+            )
+        return new_data
+
+    def remove_closest_chronological_source(self, batch):
+        """For every sample in a batch, erases the source that is chronologically
+        closest to the masked source. "Erasing" means setting all of its attributes
+        to the values they would have if the source was missing (avail = -1, values = 0, etc).
+        Assumes that a single source is masked in each sample.
+        Args:
+            batch (dict of (source_name, index) to dict): The input batch. Expects
+                the same structure as is output by self.preproc_input().
+        Returns:
+            modified_batch (dict of (source_name, index) to dict): The modified batch,
+                where the closest chronological source to the masked source has been erased
+                in each sample. The structure is the same as the input batch.
+        """
+        # In each sample, find the source that is closest to the masked source. The masked
+        # source s0 in sample i is the one such that batch[s0]["avail"][i] == 0.
+        # The closest source s1 to s0 is the one that minimizes
+        # |batch[s1]["dt"][i] - batch[s0]["dt"][i]|
+        closest_src = {}  # Maps (source_name, index) to a boolean tensor of shape (B,)
+        avail_matrix = torch.stack(
+            [data["avail"] for data in batch.values()], dim=1
+        )  # (B, n_sources)
+        dts = torch.stack([data["dt"] for data in batch.values()], dim=1)  # (B, n_sources)
+        masked_idx = torch.nonzero(avail_matrix == 0, as_tuple=True)
+        masked_dts = dts[masked_idx]  # (B,)
+        diff = torch.abs(dts - masked_dts.unsqueeze(1))  # (B, n_sources)
+        diff[masked_idx] = float("inf")  # Ignore the masked source itself
+        diff[avail_matrix == -1] = float("inf")  # Ignore missing sources
+        closest_indices = torch.argmin(diff, dim=1)  # (B,)
+        for j, source_index_pair in enumerate(batch.keys()):
+            closest_src[source_index_pair] = closest_indices == j
+        # Create a copy of the input batch and erase the closest sources
+        modified_batch = {}
+        for source_index_pair, data in batch.items():
+            new_data = self.erase_source_data(data, closest_src[source_index_pair])
+            modified_batch[source_index_pair] = new_data
+        return modified_batch
+
     def to_unconditional_batch(self, batch, which_samples=None):
         """Given a batch where some of the sources are masked, creates an unconditional
         copy of the batch where the unmasked sources are erased.
@@ -613,64 +702,44 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
             where_avail = data["avail"] == 1  # (B,)
             if which_samples is not None:
                 where_avail = where_avail & which_samples
-
-            # For the unconditional copy, set the diffusion timestep to -1
-            # for the unmasked sources (as in self.mask()).
-            unconditional_batch[source_index_pair]["diffusion_t"] = torch.where(
-                where_avail, -1.0, data["diffusion_t"]
+            unconditional_batch[source_index_pair] = self.erase_source_data(
+                unconditional_batch[source_index_pair], where_avail
             )
-
-            # If using deterministic model, handle predicted means
-            if self.use_det_model and "pred_mean" in data:
-                # Set the predicted means to 0 for the unmasked sources
-                unconditional_batch[source_index_pair]["pred_mean"] = torch.where(
-                    where_avail.view((-1,) + (1,) * (data["pred_mean"].ndim - 1)),
-                    torch.zeros_like(data["pred_mean"]),
-                    data["pred_mean"],
-                )
 
         return unconditional_batch
 
-    def to_double_batch(self, batch, which_samples=None):
-        """Given a batch where some of the sources are masked, creates a double batch
-        where the first half contains the original batch and the second half contains
-        an unconditional copy of the batch, where the unmasked sources are erased.
+    def to_double_batch(self, batch1, batch2):
+        """Given two batches, concatenates them along the batch dimension.
         This is used for classifier-free guidance (CFG) training.
         Args:
-            batch (dict of (source_name, index) to dict): The input batch. Expects
+            batch1 (dict of (source_name, index) to dict): First input batch. Expects
                 the same structure as is output by self.preproc_input().
-            which_samples (torch.Tensor, optional): If provided, boolean tensor of shape (B,)
-                indicating which samples in the batch should be made unconditional. The others
-                will be left unchanged. If None, all samples will be made unconditional.
+            batch2 (dict of (source_name, index) to dict): Second input batch.
         Returns:
             double_batch (dict of (source_name, index) to dict): The double batch.
         """
-        # Create the unconditional copy of the batch
-        unconditional_batch = self.to_unconditional_batch(batch, which_samples)
-
-        # Concatenate the original batch and the unconditional copy along the batch dimension
         double_batch = {}
-        for source_index_pair, data in batch.items():
-            new_data = unconditional_batch[source_index_pair]
+        for source_index_pair, data in batch1.items():
+            data2 = batch2[source_index_pair]
             double_batch[source_index_pair] = {
-                "avail": torch.cat([data["avail"], new_data["avail"]], dim=0),
-                "dt": torch.cat([data["dt"], new_data["dt"]], dim=0),
-                "coords": torch.cat([data["coords"], new_data["coords"]], dim=0),
-                "values": torch.cat([data["values"], new_data["values"]], dim=0),
-                "landmask": torch.cat([data["landmask"], new_data["landmask"]], dim=0),
-                "avail_mask": torch.cat([data["avail_mask"], new_data["avail_mask"]], dim=0),
+                "avail": torch.cat([data["avail"], data2["avail"]], dim=0),
+                "dt": torch.cat([data["dt"], data2["dt"]], dim=0),
+                "coords": torch.cat([data["coords"], data2["coords"]], dim=0),
+                "values": torch.cat([data["values"], data2["values"]], dim=0),
+                "landmask": torch.cat([data["landmask"], data2["landmask"]], dim=0),
+                "avail_mask": torch.cat([data["avail_mask"], data2["avail_mask"]], dim=0),
                 "dist_to_center": torch.cat(
-                    [data["dist_to_center"], new_data["dist_to_center"]], dim=0
+                    [data["dist_to_center"], data2["dist_to_center"]], dim=0
                 ),
-                "diffusion_t": torch.cat([data["diffusion_t"], new_data["diffusion_t"]], dim=0),
+                "diffusion_t": torch.cat([data["diffusion_t"], data2["diffusion_t"]], dim=0),
             }
             if "characs" in data:
                 double_batch[source_index_pair]["characs"] = torch.cat(
-                    [data["characs"], new_data["characs"]], dim=0
+                    [data["characs"], data2["characs"]], dim=0
                 )
             if self.use_det_model and "pred_mean" in data:
                 double_batch[source_index_pair]["pred_mean"] = torch.cat(
-                    [data["pred_mean"], new_data["pred_mean"]], dim=0
+                    [data["pred_mean"], data2["pred_mean"]], dim=0
                 )
 
         return double_batch

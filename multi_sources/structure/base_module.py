@@ -267,6 +267,55 @@ class MultisourceAbstractModule(pl.LightningModule, ABC):
             },
         }
 
+    @staticmethod
+    def erase_source_data(data, to_erase):
+        """Given the data of a source, erases the data for the samples where to_erase is True.
+        Erasing a source means setting its data to what it would be if the source had
+        been unavailable when fed to self.preproc_input().
+        Args:
+            data (dict of str to tensor): The data of a source, as output by self.preproc_input().
+            to_erase (torch.Tensor): Boolean tensor of shape (B,) indicating which samples
+                should be erased.
+        Returns:
+            new_data (dict of str to tensor): The erased data of the source, where every tensor
+                has the shape (B, ...).
+        """
+        new_data = {}
+        # For every sample where the source is available, modify the entries
+        # so that they are as if the source was missing according to self.preproc_input().
+        new_data["avail"] = -torch.abs(data["avail"])  # Sets all ones to -1
+        new_data["dt"] = torch.where(to_erase, -1.0, data["dt"])
+        new_data["coords"] = torch.where(
+            to_erase.view((-1,) + (1,) * (data["coords"].ndim - 1)),
+            -torch.ones_like(data["coords"]),
+            data["coords"],
+        )
+        new_data["values"] = torch.where(
+            to_erase.view((-1,) + (1,) * (data["values"].ndim - 1)),
+            torch.zeros_like(data["values"]),
+            data["values"],
+        )
+        if "characs" in data:
+            new_data["characs"] = torch.where(
+                to_erase.unsqueeze(1), torch.zeros_like(data["characs"]), data["characs"]
+            )
+        new_data["landmask"] = torch.where(
+            to_erase.view((-1,) + (1,) * (data["landmask"].ndim - 1)),
+            torch.zeros_like(data["landmask"]),
+            data["landmask"],
+        )
+        new_data["avail_mask"] = torch.where(
+            to_erase.view((-1,) + (1,) * (data["avail_mask"].ndim - 1)),
+            torch.full_like(data["avail_mask"], -1),
+            data["avail_mask"],
+        )
+        new_data["dist_to_center"] = torch.where(
+            to_erase.view((-1,) + (1,) * (data["dist_to_center"].ndim - 1)),
+            torch.full_like(data["dist_to_center"], float("inf")),
+            data["dist_to_center"],
+        )
+        return new_data
+
     def to_unconditional_batch(self, batch, which_samples=None):
         """Given a batch where some of the sources are masked, creates an unconditional
         copy of the batch where the unmasked sources are erased.
@@ -291,38 +340,6 @@ class MultisourceAbstractModule(pl.LightningModule, ABC):
             to_erase = data["avail"] == 1  # (B,)
             if which_samples is not None:
                 to_erase = to_erase & which_samples
-            # For every sample where the source is available, modify the entries
-            # so that they are as if the source was missing according to self.preproc_input().
-            new_data["avail"] = -torch.abs(data["avail"])  # Sets all ones to -1
-            new_data["dt"] = torch.where(to_erase, -1.0, data["dt"])
-            new_data["coords"] = torch.where(
-                to_erase.view((-1,) + (1,) * (data["coords"].ndim - 1)),
-                -torch.ones_like(data["coords"]),
-                data["coords"],
-            )
-            new_data["values"] = torch.where(
-                to_erase.view((-1,) + (1,) * (data["values"].ndim - 1)),
-                torch.zeros_like(data["values"]),
-                data["values"],
-            )
-            if "characs" in data:
-                new_data["characs"] = torch.where(
-                    to_erase.unsqueeze(1), torch.zeros_like(data["characs"]), data["characs"]
-                )
-            new_data["landmask"] = torch.where(
-                to_erase.view((-1,) + (1,) * (data["landmask"].ndim - 1)),
-                torch.zeros_like(data["landmask"]),
-                data["landmask"],
-            )
-            new_data["avail_mask"] = torch.where(
-                to_erase.view((-1,) + (1,) * (data["avail_mask"].ndim - 1)),
-                torch.full_like(data["avail_mask"], -1),
-                data["avail_mask"],
-            )
-            new_data["dist_to_center"] = torch.where(
-                to_erase.view((-1,) + (1,) * (data["dist_to_center"].ndim - 1)),
-                torch.full_like(data["dist_to_center"], float("inf")),
-                data["dist_to_center"],
-            )
+            new_data = self.erase_source_data(data, to_erase)
             new_batch[source_index_pair] = new_data
         return new_batch
