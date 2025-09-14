@@ -140,7 +140,7 @@ class TrainJob(submitit.helpers.Checkpointable):
         )
 
         lr_monitor = LearningRateMonitor()
-        model_summary = ModelSummary(max_depth=3)
+        model_summary = ModelSummary(max_depth=4)
         callbacks = [
             epoch_checkpoint_callback,
             time_checkpoint_callback,
