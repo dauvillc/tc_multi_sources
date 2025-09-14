@@ -70,36 +70,33 @@ class VisualEvaluationComparison(AbstractMultisourceEvaluationMetric):
             tqdm(self.samples_iterator(), desc="Evaluating samples", total=n_samples)
         ):
             sample_index = sample_df["sample_index"].iloc[0]
-            # Choose a channel to plot for each source
-            plot_channels = {
-                (src_name, src_index): list(
-                    sample_data["targets"][(src_name, src_index)].data_vars.keys()
-                )[0]
-                for src_name, src_index in sample_df.index
-            }
+            # Retrieve the number of channels from the first target source. We'll assume
+            # all sources have the same number of channels.
+            channels = list(next(iter(sample_data["targets"].values())).data_vars)
 
-            # Crop the padded borders
-            cropped_data = self.crop_padded_borders(sample_data, sample_df, plot_channels)
+            for channel_idx in range(len(channels)):
+                # Crop the padded borders
+                cropped_data = self.crop_padded_borders(sample_data, sample_df, channel_idx)
 
-            # Plot the data
-            self.plot_sample(
-                sample_index,
-                cropped_data,
-                plot_channels,
-                sample_df,
-            )
+                # Plot the data
+                self.plot_sample(
+                    sample_index,
+                    cropped_data,
+                    sample_df,
+                    channels[channel_idx],
+                )
 
             if i + 1 >= n_samples:
                 break
 
-    def crop_padded_borders(self, sample_data, sample_df, plot_channels):
+    def crop_padded_borders(self, sample_data, sample_df, channel_idx):
         """Crops the padded borders in the sample data.
 
         Args:
             sample_data (dict): Dictionary containing targets and predictions for each model
             sample_df (pandas.DataFrame): DataFrame with sample metadata, indexed
                         by (source_name, source_index).
-            plot_channels (dict): Dict (src_name, src_index) -> channel to plot
+            channel_idx (int): Index of the channel to process.
         Returns:
             available_sources (dict): Dict (src_name, src_index) -> available source data
             target_sources (dict): Dict (src_name, src_index) -> target source data
@@ -127,16 +124,16 @@ class VisualEvaluationComparison(AbstractMultisourceEvaluationMetric):
             # Get the coordinates data: latitude and longitude (will be used for the ticklabels)
             src_lat = target_data["lat"].values
             src_lon = target_data["lon"].values
-            # Get the channel data
-            plot_channel = plot_channels[src]
-            channel_data = target_data[plot_channel].values
+            # We'll use the target as reference for cropping
+            channel = list(target_data.data_vars)[channel_idx]
+            target_arr = target_data[channel].values
             # Gather all models' predictions for that source
             preds = [
-                sample_data["predictions"][model_id][src][plot_channel].values
+                sample_data["predictions"][model_id][src][channel].values
                 for model_id in self.model_data
             ]
             # Crop all borders all at once using the target as reference
-            out = crop_nan_border_numpy(channel_data, [channel_data, src_lat, src_lon] + preds)
+            out = crop_nan_border_numpy(target_arr, [target_arr, src_lat, src_lon] + preds)
             lats[src] = out[1]
             lons[src] = out[2]
             # Store the channel data either as target or available source
@@ -150,19 +147,20 @@ class VisualEvaluationComparison(AbstractMultisourceEvaluationMetric):
 
         return available_sources, target_sources, lats, lons, predictions
 
-    def plot_sample(self, sample_index, cropped_data, plot_channels, sample_df):
+    def plot_sample(self, sample_index, cropped_data, sample_df, channel):
         """Plots the targets and predictions for a single sample.
 
         Args:
             sample_index (int): Index of the sample
             cropped_data (tuple): Tuple containing available sources, target sources,
-                latitudes, longitudes, and predictions
-            plot_channels (dict): Dict (src_name, src_index) -> channel to plot
+                latitudes, longitudes, and predictions.
             sample_df (pandas.DataFrame): DataFrame with sample metadata
+            channel (str): Name of the channel, which will be used in the plot titles.
         """
         available_sources, target_sources, lats, lons, predictions = cropped_data
 
-        # Create a figure with subplots
+        # Create a figure with subplots: one row per model + 1 for the targets / available sources,
+        # and one column per source (up to max_realizations_to_display).
         num_sources, num_models = len(sample_df), len(self.model_data)
         n_cols = max(num_sources, self.max_realizations_to_display)
         fig, axes = plt.subplots(
@@ -241,7 +239,10 @@ class VisualEvaluationComparison(AbstractMultisourceEvaluationMetric):
                     # Single prediction, plot it directly
                     ax = axes[k + 1, col_cnt]
                     ax.imshow(
-                        pred_data, aspect="auto", cmap=self.cmap, norm=norms[(src_name, src_index)]
+                        pred_data,
+                        aspect="auto",
+                        cmap=self.cmap,
+                        norm=norms[(src_name, src_index)],
                     )
                     dt = format_tdelta(sample_df.loc[(src_name, src_index), "dt"])
                     ax.set_title(f"{display_name} - {model_id} $\delta t=${dt}")
@@ -253,10 +254,12 @@ class VisualEvaluationComparison(AbstractMultisourceEvaluationMetric):
             for j in range(col_cnt, n_cols):
                 axes[k + 1, j].axis("off")
 
+        plt.suptitle(channel, fontsize=16)
         plt.tight_layout()
         # Save the figure
-        fig_path = self.metric_results_dir / f"sample_{sample_index:04d}.png"
+        fig_path = self.metric_results_dir / f"sample_{sample_index:04d}_{channel}.png"
         fig.savefig(fig_path)
+
         plt.close(fig)
 
     @staticmethod
