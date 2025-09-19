@@ -115,6 +115,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         min_tc_intensity=None,
         mask_spatial_coords=[],
         data_augmentation=None,
+        limit_samples=None,
         seed=42,
         **unused_kwargs,
     ):
@@ -172,6 +173,9 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                 coordinates will be masked (set to zeros).
             data_augmentation (None or MultiSourceDataAugmentation): If not None, instance
                 of MultiSourceDataAugmentation to apply to the data.
+            limit_samples (int or float or None): If not None, limits the number of samples in the dataset.
+                If an integer, will keep at most limit_samples samples.
+                If a float between 0 and 1, will keep that fraction of the samples.
             seed (int): The seed to use for the random number generator.
         """
 
@@ -323,6 +327,16 @@ class MultiSourceDataset(torch.utils.data.Dataset):
             self.reference_df = self.reference_df.drop_duplicates(subset=["sid", "time_bin"])
             # Drop the 'time_bin' column as it's no longer needed
             self.reference_df = self.reference_df.drop(columns="time_bin").reset_index(drop=True)
+
+        # If required, limit the number of samples in the dataset
+        if limit_samples is not None:
+            if isinstance(limit_samples, float):
+                if not (0 < limit_samples < 1):
+                    raise ValueError("If limit_samples is a float, it must be in (0, 1).")
+                limit_samples = int(len(self.reference_df) * limit_samples)
+            indices = self.rng.permutation(len(self.reference_df))[:limit_samples]
+            self.reference_df = self.reference_df.iloc[indices].reset_index(drop=True)
+            print(f"{split}: Limiting the dataset to {len(self.reference_df)} samples.")
 
         # If no samples are left, raise an error
         if len(self.reference_df) == 0:

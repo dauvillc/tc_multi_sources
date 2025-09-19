@@ -31,6 +31,8 @@ train:
   # Whether to do forecasting
   forecasting_lead_time: null
   forecasting_sources: null
+  # Optionally limit the number of samples (for quicker experiments)
+  limit_samples: null  # Either float (fraction) or int (number of samples)
   # Data augmentation to apply
   data_augmentation: ${data_augmentation}
 
@@ -52,6 +54,7 @@ val:
   forecasting_lead_time: ${dataset.train.forecasting_lead_time}
   forecasting_sources: ${dataset.train.forecasting_sources}
   mask_spatial_coords: ${dataset.train.mask_spatial_coords}
+  limit_samples: ${dataset.train.limit_samples}
   data_augmentation: null
 
 # Test dataset
