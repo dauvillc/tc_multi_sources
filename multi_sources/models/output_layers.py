@@ -17,8 +17,8 @@ class SourcetypeProjection2d(nn.Module):
         out_channels,
         patch_size,
         use_modulation=False,
-        resnet_channels=16,
-        resnet_blocks=2,
+        resnet_channels=None,
+        resnet_blocks=None,
     ):
         """
         Args:
@@ -45,14 +45,17 @@ class SourcetypeProjection2d(nn.Module):
             bias=False,
         )
         self.pixel_shuffle = nn.PixelShuffle(patch_size)
-
-        # Final ResNet to correct the artifacts
-        self.resnet = ResNet(out_channels, resnet_channels, resnet_blocks)
         # Apply the ICNR initialization to the deconvolution, to reduce checkerboard artifacts
         weight = ICNR(
             self.conv.weight, initializer=nn.init.kaiming_normal_, upscale_factor=patch_size
         )
         self.conv.weight.data.copy_(weight)
+
+        # Final ResNet to correct the artifacts
+        if resnet_channels is None or resnet_blocks is None:
+            self.resnet = nn.Identity()
+        else:
+            self.resnet = ResNet(out_channels, resnet_channels, resnet_blocks)
 
     def forward(self, values, cond, **unused_kwargs):
         """

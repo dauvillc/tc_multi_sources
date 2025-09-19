@@ -1,14 +1,14 @@
 dropout: 0.0
-values_dim: 256
+values_dim: 512
 coords_dim: 256
 backbone:
-  _target_: multi_sources.models.motif_double.backbone.MultisourceGeneralBackbone
+  _target_: multi_sources.models.motif_double.unet_backbone.MultisourceGeneralBackboneUNet
   values_dim: ${lightning_module.values_dim}
   coords_dim: ${lightning_module.coords_dim}
-  n_blocks: 10
+  n_blocks_per_stage: [4, 4]
   dropout: ${model.dropout}
   att_inner_ratio: 1.0
-  mlp_inner_ratio: 2.0
+  mlp_inner_ratio: 1.0
   num_heads: 8
   cross_att_window_size: 4
   iwsa_window_size: 8
