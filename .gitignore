@@ -50,6 +50,7 @@ wandb/
 *.jpg
 *.jpeg
 multi_sources/models/old
+old/
 
 # Hydra outputs
 multirun/
