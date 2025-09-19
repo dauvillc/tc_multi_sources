@@ -1,0 +1,26 @@
+# @package _global_
+defaults:
+  - override /sources: pmw_37_89
+  - override /lightning_module: flow_matching
+  - override /lr_scheduler: cosine_warmup_100epochs
+  - override /metrics: default_fm
+  - override /model: msvit_10b_d256
+
+lightning_module:
+  patch_size: 8
+  use_det_model_from_run: docl3i8w
+
+wandb:
+  name: diff_pmw_hp
+  group: diff_pmw_small
+
+dataset:
+  train:
+    dt_max: 6
+    min_available_sources: 2
+    source_types_max_avail:
+      pmw: 3
+    limit_samples: 0.2 # Use 20% of the training data for a smaller experiment
+  
+trainer:
+  strategy: ddp

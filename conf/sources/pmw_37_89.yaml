@@ -1,0 +1,25 @@
+tc_primed:
+  pmw:
+    AMSR2_GCOMW1:
+        variables: ['TB_36.5H', 'TB_36.5V', 'TB_A89.0H', 'TB_A89.0V']
+    GMI_GPM:
+        variables: ['TB_36.64H', 'TB_36.64V', 'TB_89.0H', 'TB_89.0V']
+    TMI_TRMM:
+        variables: ['TB_37.0H', 'TB_37.0V', 'TB_85.5H', 'TB_85.5V']
+    SSMI_F11:
+        variables: ['TB_37.0H', 'TB_37.0V', 'TB_85.5H', 'TB_85.5V']
+    SSMI_F13:
+        variables: ['TB_37.0H', 'TB_37.0V', 'TB_85.5H', 'TB_85.5V']
+    SSMI_F14:
+        variables: ['TB_37.0H', 'TB_37.0V', 'TB_85.5H', 'TB_85.5V']
+    SSMI_F15:
+        variables: ['TB_37.0H', 'TB_37.0V', 'TB_85.5H', 'TB_85.5V']
+    SSMIS_F16:
+        variables: ['TB_37.0H', 'TB_37.0V', 'TB_91.665H', 'TB_91.665V']
+    SSMIS_F17:
+        variables: ['TB_37.0H', 'TB_37.0V', 'TB_91.665H', 'TB_91.665V']
+    SSMIS_F18:
+        variables: ['TB_37.0H', 'TB_37.0V', 'TB_91.665H', 'TB_91.665V']
+    SSMIS_F19:
+        variables: ['TB_37.0H', 'TB_37.0V', 'TB_91.665H', 'TB_91.665V']
+
