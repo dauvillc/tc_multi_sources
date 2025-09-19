@@ -59,8 +59,8 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
         metrics={},
         use_modulation_in_output_layers=False,
         include_coords_in_conditioning=False,
-        output_resnet_channels=16,
-        output_resnet_blocks=2,
+        output_resnet_channels=None,
+        output_resnet_blocks=None,
         sources_selection_seed=123,
         **kwargs,
     ):

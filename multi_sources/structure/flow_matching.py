@@ -58,7 +58,7 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
         lr_scheduler_kwargs,
         use_det_model_from_run=None,
         n_sampling_diffusion_steps=25,
-        training_time_sampling="uniform",
+        training_time_sampling="lognormal",
         loss_max_distance_from_center=None,
         ignore_land_pixels_in_loss=False,
         normalize_coords_across_sources=False,
@@ -180,7 +180,7 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
             self.det_model.eval()
             self.det_model.requires_grad_(False)
 
-    def mask(self, x, pure_noise=False):
+    def mask(self, x, pure_noise=False, avail_flags=None):
         """Masks a portion of the sources. A missing source cannot be chosen to be masked.
         Supposes that there are at least as many non-missing sources as the number of sources
         to mask. The number of sources to mask is determined by self.masking ratio.
@@ -195,6 +195,9 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
                 where index counts observations (0 = most recent).
             pure_noise (bool): If True, the sources are masked with pure noise, without
                 following the noise schedule.
+            avail_flags (dict or None): If specified, the availability flags
+                in this dict will be used instead of sampling new ones to choose
+                which sources to mask.
         Returns:
             masked_x (dict): The input sources with a portion
                 of the sources masked. An entry "diffusion_t" is added
@@ -205,8 +208,8 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
                 noised values.
         """
 
-        # First step: for each sample in the batch, select a subset of the sources to mask.
-        avail_flags = super().select_sources_to_mask(x)
+        if avail_flags is None:
+            avail_flags = super().select_sources_to_mask(x)
         # avail_flags[s][i] == 0 if the source s should be masked.
         device = next(self.parameters()).device
 
@@ -264,8 +267,7 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
                 t=t, x_0=noise, x_1=masked_data["values"].detach().clone()
             )
             path_samples[source_index_pair] = path_sample
-            noised_values = path_sample.x_t.detach().clone()
-            masked_data["values"][should_mask] = noised_values[should_mask]
+            masked_data["values"][should_mask] = path_sample.x_t[should_mask]
             # Save the diffusion timesteps at which the source was masked. For unnoised sources,
             # the diffusion step is set to 1, since the step t=1 means no noise is left.
             masked_data["diffusion_t"] = torch.where(should_mask, t, torch.ones_like(t))
@@ -370,19 +372,13 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
         """
         with torch.no_grad():
             all_sols = []  # Will store each realization of the solution
-            # We want to mask exactly the same sources for each realization,
-            # which depends on self.source_select_gen (see the parent class).
-            # To do so, we'll save reset the state of the generator after each realization
-            # except the last one (so that the state still advances for the next time we
-            # mask).
-            source_select_rng_state = self.source_select_gen.get_state()
+            avail_flags = None
             for k in range(n_realizations_per_sample):
-                # Mask the sources with pure noise. If using CFG, also generate an unconditional version
-                # of the samples in a double batch.
-                masked_batch, _ = self.mask(batch, pure_noise=True)
-                # Reset the sources selection generator to the initial state
-                if k < n_realizations_per_sample - 1:
-                    self.source_select_gen.set_state(source_select_rng_state)
+                # We pass in the previously used availability flags to ensure that the same
+                # sources are masked for each realization of the same sample. For the first
+                # realization, avail_flags is None, so new masking flags are sampled.
+                masked_batch, _ = self.mask(batch, pure_noise=True, avail_flags=avail_flags)
+                avail_flags = {src: data["avail"] for src, data in masked_batch.items()}
 
                 x_0 = {
                     source_index_pair: data["values"]
@@ -420,10 +416,7 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
                             uncond = vf[source_index_pair][half_batch:]
                             # The interpretation of the guidance scale depends on the type of CFG.
                             c = self.cfg_scale
-                            if self.cfg_type == "chronological":
-                                new_vf = (1 - c) * cond + c * (cond - uncond)
-                            else:
-                                new_vf = cond + c * (cond - uncond)
+                            new_vf = (1 + c) * cond - c * uncond
                             vf[source_index_pair] = new_vf
                     else:
                         vf = self.forward(batch_t)
@@ -450,10 +443,6 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
 
                 all_sols.append(sol)
 
-            avail_flags = {
-                source_index_pair: data["avail"]
-                for source_index_pair, data in masked_batch.items()
-            }
             all_sols = {
                 source_index_pair: torch.stack([sol[source_index_pair] for sol in all_sols])
                 for source_index_pair in batch
@@ -642,7 +631,7 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
             )
         return new_data
 
-    def remove_closest_chronological_source(self, batch):
+    def remove_closest_chronological_source(self, batch, min_sources=2):
         """For every sample in a batch, erases the source that is chronologically
         closest to the masked source. "Erasing" means setting all of its attributes
         to the values they would have if the source was missing (avail = -1, values = 0, etc).
@@ -650,6 +639,10 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
         Args:
             batch (dict of (source_name, index) to dict): The input batch. Expects
                 the same structure as is output by self.preproc_input().
+            min_sources (int): Minimum number of available sources required to apply
+                this method (not counting the masked source).
+                If the number of non-missing sources is less than this value,
+                the input batch is returned unchanged. If None, always applies the method.
         Returns:
             modified_batch (dict of (source_name, index) to dict): The modified batch,
                 where the closest chronological source to the masked source has been erased
@@ -672,6 +665,13 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
         closest_indices = torch.argmin(diff, dim=1)  # (B,)
         for j, source_index_pair in enumerate(batch.keys()):
             closest_src[source_index_pair] = closest_indices == j
+        if min_sources is not None:
+            # For each sample, count the number of available sources, and only erase
+            # the closest source if this number is >= min_sources.
+            n_avail_sources = (avail_matrix == 1).sum(dim=1)
+            to_erase = n_avail_sources >= min_sources
+            for source_index_pair in closest_src:
+                closest_src[source_index_pair] = closest_src[source_index_pair] & to_erase
         # Create a copy of the input batch and erase the closest sources
         modified_batch = {}
         for source_index_pair, data in batch.items():

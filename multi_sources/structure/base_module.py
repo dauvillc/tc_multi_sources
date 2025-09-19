@@ -283,7 +283,7 @@ class MultisourceAbstractModule(pl.LightningModule, ABC):
         new_data = {}
         # For every sample where the source is available, modify the entries
         # so that they are as if the source was missing according to self.preproc_input().
-        new_data["avail"] = -torch.abs(data["avail"])  # Sets all ones to -1
+        new_data["avail"] = torch.where(to_erase, -1, data["avail"])
         new_data["dt"] = torch.where(to_erase, -1.0, data["dt"])
         new_data["coords"] = torch.where(
             to_erase.view((-1,) + (1,) * (data["coords"].ndim - 1)),
