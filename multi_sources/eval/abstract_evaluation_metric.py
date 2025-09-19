@@ -24,10 +24,6 @@ def models_info_sanity_check(info_dfs):
             "Found models with different number of rows in their info_df. "
             "This indicates different samples or different sources. "
         )
-    # Sort by sample_index, then by source name and then by source index
-    for info_df in info_dfs:
-        info_df.sort_values(by=["sample_index", "source_name", "source_index"], inplace=True)
-        info_df.reset_index(drop=True, inplace=True)
     # Check that you the sample_index, source_name, source_index columns are the same
     for col in ["sample_index", "source_name", "source_index"]:
         if not all(info_df[col].equals(info_dfs[0][col]) for info_df in info_dfs):
@@ -57,7 +53,13 @@ class AbstractMultisourceEvaluationMetric(abc.ABC):
     """Base class for all evaluation metrics."""
 
     def __init__(
-        self, id_name, full_name, model_data, parent_results_dir, source_name_replacements=None
+        self,
+        id_name,
+        full_name,
+        model_data,
+        parent_results_dir,
+        source_name_replacements=None,
+        disable_checks=False,
     ):
         """
         Args:
@@ -74,6 +76,7 @@ class AbstractMultisourceEvaluationMetric(abc.ABC):
             source_name_replacements (List of tuple of str, optional): List of (pattern, replacement)
                 substitutions to apply to source names for display purposes. The replacement
                 is done using the re.sub function.
+            disable_checks (bool): If True, disables the sanity checks on the model data.
         """
         self.id_name = id_name
         self.full_name = full_name
@@ -85,9 +88,14 @@ class AbstractMultisourceEvaluationMetric(abc.ABC):
         self.metric_results_dir = self.parent_results_dir / id_name
         self.metric_results_dir.mkdir(parents=True, exist_ok=True)
 
-        # Perform sanity checks on the model data (also sorts the dataframes)
+        # Sort the info dataframes by sample_index, source_name, source_index
         info_dfs = [model_spec["info_df"] for model_spec in model_data.values()]
-        models_info_sanity_check(info_dfs)
+        for info_df in info_dfs:
+            info_df.sort_values(by=["sample_index", "source_name", "source_index"], inplace=True)
+            info_df.reset_index(drop=True, inplace=True)
+        # Perform sanity checks on the model data
+        if not disable_checks:
+            models_info_sanity_check(info_dfs)
 
         # Isolate a model-agnostic DataFrame with the columns that don't depend on the model:
         # sample_index, source_name, source_index, avail, dt

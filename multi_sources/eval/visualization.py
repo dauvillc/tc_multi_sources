@@ -33,8 +33,8 @@ class VisualEvaluationComparison(AbstractMultisourceEvaluationMetric):
         parent_results_dir,
         eval_fraction=1.0,
         max_realizations_to_display=3,
-        source_name_replacements=None,
         cmap="viridis",
+        **kwargs,
     ):
         """
         Args:
@@ -42,17 +42,15 @@ class VisualEvaluationComparison(AbstractMultisourceEvaluationMetric):
             parent_results_dir (str or Path): Parent directory for all results
             eval_fraction (float): Fraction of samples to visualize (0.0 to 1.0)
             max_realizations_to_display (int): Maximum number of realizations to display
-            source_name_replacements (List of tuple of str, optional): List of (pattern, replacement)
-                substitutions to apply to source names for display purposes. The replacement
-                is done using the re.sub function.
             cmap (str): Colormap to use for visualization.
+            **kwargs: Additional keyword arguments for the base class.
         """
         super().__init__(
             id_name="visual",
             full_name="Visual Evaluation Comparison",
             model_data=model_data,
             parent_results_dir=parent_results_dir,
-            source_name_replacements=source_name_replacements,
+            **kwargs,
         )
         self.eval_fraction = eval_fraction
         self.max_realizations_to_display = max_realizations_to_display
@@ -229,8 +227,7 @@ class VisualEvaluationComparison(AbstractMultisourceEvaluationMetric):
                             cmap=self.cmap,
                             norm=norms[(src_name, src_index)],
                         )
-                        dt = format_tdelta(sample_df.loc[(src_name, src_index), "dt"])
-                        ax.set_title(f"{display_name} - {model_id} $\delta t=${dt}")
+                        ax.set_title(f"{display_name} - {model_id}")
                         self._set_coords_as_ticks(
                             ax, lats[(src_name, src_index)], lons[(src_name, src_index)]
                         )
@@ -244,8 +241,7 @@ class VisualEvaluationComparison(AbstractMultisourceEvaluationMetric):
                         cmap=self.cmap,
                         norm=norms[(src_name, src_index)],
                     )
-                    dt = format_tdelta(sample_df.loc[(src_name, src_index), "dt"])
-                    ax.set_title(f"{display_name} - {model_id} $\delta t=${dt}")
+                    ax.set_title(f"{display_name} - {model_id}")
                     self._set_coords_as_ticks(
                         ax, lats[(src_name, src_index)], lons[(src_name, src_index)]
                     )

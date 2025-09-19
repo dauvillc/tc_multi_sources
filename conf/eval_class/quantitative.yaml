@@ -4,3 +4,4 @@ quantitative:
     ["tc_primed_pmw_", ""],
     ["_", " "]
   ]
+  disable_checks: ${disable_checks}

@@ -45,6 +45,7 @@ class QuantitativeEvaluation(AbstractMultisourceEvaluationMetric):
             full_name="Quantitative Evaluation",
             model_data=model_data,
             parent_results_dir=parent_results_dir,
+            **kwargs,
         )
 
     def evaluate(self, **kwargs):
@@ -256,6 +257,8 @@ class QuantitativeEvaluation(AbstractMultisourceEvaluationMetric):
         Args:
             pred_data (np.ndarray): Predicted data, of shape (M, ...) where M is the number of
                 realizations, or (...) for deterministic predictions.
+            target_data (np.ndarray): Target data, of shape (...) matching the shape of each
+                realization in pred_data.
         """
         pred_data, target_data = flatten_and_ignore_nans(pred_data, target_data)
         # Compute the first term: the mean absolute error between predictions and target

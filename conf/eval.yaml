@@ -5,6 +5,8 @@ defaults:
   - eval_class: [quantitative, visual]
   - _self_
 
+disable_checks: false  # Whether to disable sanity checks on the model info dataframes.
+
 models: ???
 num_workers: 9
 
