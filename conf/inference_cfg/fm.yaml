@@ -10,7 +10,9 @@ dataset:
     dt_max: 6
     min_ref_time_delta: 1
     min_available_sources: 2
-    select_most_recent: false
+    source_types_max_avail:
+      pmw: 50  # Dummy value to make sure all sources are included.
+    select_most_recent: true
     forecasting_sources: null
     forecasting_lead_time: null
   test:
