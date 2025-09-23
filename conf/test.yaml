@@ -1,19 +1,19 @@
 defaults:
   - paths: local
   - dataset: default
-  - sources: sat_interp_37GHz
+  - sources: pmw_37_89
   - data_augmentation: none
   - _self_
 
 
 dataset:
   train:
-    dt_max: 24
+    dt_max: 6
     min_available_sources: 2
     num_workers: 0
   val:
     num_workers: 0
   
-num_workers: 0
+num_workers: 10
 
 seed: 42
