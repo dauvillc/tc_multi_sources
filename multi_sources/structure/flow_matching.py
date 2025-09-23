@@ -74,6 +74,7 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
         cfg_scale=None,
         cfg_type="chronological",
         return_intermediate_steps=False,
+        return_true_vf=False,
         **kwargs,
     ):
         """
@@ -127,6 +128,8 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
                 - "full": erases all non-masked sources (traditional classifier-free guidance).
             return_intermediate_steps (bool): If True, the predict step will return
                 the intermediate steps of the ODE solver.
+            return_true_vf (bool): If True, the predict step will also return the true velocity
+                fields at each integration step, for analysis purposes.
             **kwargs: Additional arguments to pass to the LightningModule constructor.
         """
         self.use_diffusion_t = True
@@ -162,6 +165,7 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
         self.cfg_scale = cfg_scale
         self.cfg_type = cfg_type
         self.return_intermediate_steps = return_intermediate_steps
+        self.return_true_vf = return_true_vf
         self.fm_rng = torch.Generator()  # For the noise and time sampling
 
         # Optional: deterministic model usage
@@ -277,7 +281,7 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
             path_samples[source_index_pair] = path_sample
             masked_data["values"][should_mask] = path_sample.x_t[should_mask]
             # Save the diffusion timesteps at which the source was masked. For unnoised sources,
-            # the diffusion step is set to 1, since the step t=1 means no noise is left.
+            # the diffusion step is set to 1.
             masked_data["diffusion_t"] = torch.where(should_mask, t, torch.ones_like(t))
             # For sources that are fully unavailable, set the diffusion timestep to -1
             masked_data["diffusion_t"][masked_data["avail"] == -1] = -1
@@ -608,6 +612,8 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
                     the intermediate steps of the ODE solver.
                 - time_grid (torch.Tensor): The time grid at which the ODE solver
                     sampled the solution, of shape (T,).
+                - true_vf (dict, optional): If return_true_vf is True, the true velocity
+                    fields at each integration step, as tensors of shape (R, T-1, B, C, ...).
         """
         batch = self.preproc_input(batch)
 
@@ -627,6 +633,31 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
             "includes_intermediate_steps": self.return_intermediate_steps,
             "time_grid": sampling_dict["time_grid"],
         }
+
+        # If required, compute the true velocity fields at each integration step
+        if self.return_true_vf:
+            with torch.no_grad():
+                n_realizations = self.n_realizations_per_sample
+                n_timesteps = sampling_dict["time_grid"].shape[0]
+                true_vf = {}  # src -> tensor of shape (R, T, B, C, ...)
+                for src, sol_values in sol.items():
+                    true_vf[src] = torch.empty(
+                        (n_realizations, n_timesteps - 1)
+                        + sol_values.shape[2:],  # (R, T-1, B, C, ...)
+                    ).to(sol_values.device)
+                    # We'll retrieve the input noise from the solution, and
+                    # the target data point from the input batch.
+                    # From there, we can sample the velocity fields at each time step
+                    # since we have the time grid.
+                    target = batch[src]["values"]  # Shape (B, C, ...)
+                    batch_size = target.shape[0]
+                    for k in range(n_realizations):
+                        input_noise = sol_values[k, 0]  # Shape (B, C, ...)
+                        for i, t in enumerate(sampling_dict["time_grid"][:-1]):
+                            t_tensor = torch.full((batch_size,), t, device=input_noise.device)
+                            vf = self.fm_path.sample(input_noise, target, t_tensor).dx_t
+                            true_vf[src][k, i] = vf
+                output["true_vf"] = true_vf
 
         # If using a deterministic model, add the predicted means as a separate key in the output
         if self.use_det_model and "pred_mean" in sampling_dict:

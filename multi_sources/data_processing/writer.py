@@ -57,8 +57,12 @@ class MultiSourceWriter(BasePredictionWriter):
         self.root_dir.mkdir(parents=True, exist_ok=True)
         self.targets_dir = self.root_dir / "targets"
         self.predictions_dir = self.root_dir / "predictions"
+        self.embeddings_dir = self.root_dir / "embeddings"
+        self.true_vf_dir = self.root_dir / "true_vf"
         self.targets_dir.mkdir(parents=True, exist_ok=True)
         self.predictions_dir.mkdir(parents=True, exist_ok=True)
+        self.embeddings_dir.mkdir(parents=True, exist_ok=True)
+        self.true_vf_dir.mkdir(parents=True, exist_ok=True)
 
     def write_on_batch_end(
         self, trainer, pl_module, prediction, batch_indices, batch, batch_idx, dataloader_idx
@@ -227,10 +231,36 @@ class MultiSourceWriter(BasePredictionWriter):
                         sample_prediction_ds = predictions_ds.sel(sample=sample_idx)
                         sample_prediction_ds.to_netcdf(prediction_dir / f"{sample_idx}.nc")
 
+                # ================= TRUE VF =================
+                if "true_vf" in prediction and source_index_pair in prediction["true_vf"]:
+                    true_vf = (
+                        prediction["true_vf"][source_index_pair].detach().cpu().float().numpy()
+                    )
+                    true_vf_dir = self.true_vf_dir / source_name / str(src_index)
+                    true_vf_dir.mkdir(parents=True, exist_ok=True)
+                    # When there is a true vf, it always has the same dimensions as the flow matching
+                    # predictions, except the time grid doesn't include the last time (which is 1.0).
+                    pred_coords["integration_step"] = time_grid[:-1]
+                    true_vf_ds = xr.Dataset(
+                        {
+                            var: (
+                                pred_dims,
+                                true_vf[(slice(None),) * leading_pred_dims + (i, ...)],
+                            )  # Realization, batch, channel
+                            for i, var in enumerate(output_var_names)
+                        },
+                        coords=pred_coords,
+                    )
+                    for k, sample_idx in enumerate(sample_indexes):
+                        if avail_tensors[source_index_pair][k].item() == -1:
+                            continue
+                        sample_true_vf_ds = true_vf_ds.sel(sample=sample_idx)
+                        sample_true_vf_ds.to_netcdf(true_vf_dir / f"{sample_idx}.nc")
+
                 # ================= EMBEDDINGS =================
                 if embeddings is not None and source_index_pair in embeddings:
                     # If embeddings are available, write them to disk
-                    embedding_dir = self.root_dir / "embeddings" / source_name / str(src_index)
+                    embedding_dir = self.embeddings_dir / source_name / str(src_index)
                     embedding_dir.mkdir(parents=True, exist_ok=True)
                     # There are three entries in the embeddings dict:
                     # - "coords": The coordinates of the source, of shape (B, ..., Dc)

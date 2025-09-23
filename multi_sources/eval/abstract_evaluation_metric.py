@@ -131,7 +131,7 @@ class AbstractMultisourceEvaluationMetric(abc.ABC):
         of -1, are removed from both the DataFrame and xarray datasets.
         """
         for sample_index in self.samples_df["sample_index"].unique():
-            targets, predictions, embeddings = self.load_data(sample_index)
+            targets, predictions, embeddings, true_vf = self.load_data(sample_index)
             sample_df = self.samples_df[self.samples_df["sample_index"] == sample_index]
             sample_df = sample_df.set_index(["source_name", "source_index"])
 
@@ -139,6 +139,7 @@ class AbstractMultisourceEvaluationMetric(abc.ABC):
                 "targets": {},
                 "predictions": {model_id: {} for model_id in self.model_data},
                 "embeddings": {model_id: {} for model_id in self.model_data},
+                "true_vf": {model_id: {} for model_id in self.model_data},
             }
             for src in sample_df.index:
                 # Get the availability flag to know whether this src is available
@@ -155,6 +156,12 @@ class AbstractMultisourceEvaluationMetric(abc.ABC):
                     # Add embeddings if available
                     if model_id in embeddings and src in embeddings[model_id]:
                         sample_data["embeddings"][model_id][src] = embeddings[model_id][src]
+                    # Add true velocity fields if available
+                    if model_id in true_vf and src in true_vf[model_id]:
+                        vf_data = true_vf[model_id][src]
+                        if not include_intermediate_steps and "integration_step" in vf_data.dims:
+                            vf_data = vf_data.isel(integration_step=-1)
+                        sample_data["true_vf"][model_id][src] = vf_data
 
             # Remove the rows from the DataFrame that are not available
             sample_df = sample_df[sample_df["avail"] != -1]
@@ -171,10 +178,12 @@ class AbstractMultisourceEvaluationMetric(abc.ABC):
             predictions (dict): Dict model_id -> (src_name, src_index) -> xarray.Dataset
             embeddings (dict): Dict model_id -> (src_name, src_index) -> xarray.Dataset
                 Only if embeddings are available.
+            true_vf (dict): Dict (src_name, src_index) -> xarray.Dataset
+                Only if true velocity fields are available.
         """
-        targets, predictions, embeddings = {}, {}, {}
+        targets, predictions, embeddings, true_vf = {}, {}, {}, {}
         for i, (model_id, model_spec) in enumerate(self.model_data.items()):
-            predictions[model_id], embeddings[model_id] = {}, {}
+            predictions[model_id], embeddings[model_id], true_vf[model_id] = {}, {}, {}
             info_df = model_spec["info_df"]
             info_df = info_df[info_df["sample_index"] == sample_index]
             root_dir = model_spec["root_dir"]
@@ -194,8 +203,12 @@ class AbstractMultisourceEvaluationMetric(abc.ABC):
                 emb_path = root_dir / "embeddings" / src / str(index) / f"{sample_index}.nc"
                 if emb_path.exists():
                     embeddings[model_id][(src, index)] = xr.open_dataset(emb_path)
+                # Load true velocity fields if available
+                vf_path = root_dir / "true_vf" / src / str(index) / f"{sample_index}.nc"
+                if vf_path.exists():
+                    true_vf[model_id][(src, index)] = xr.open_dataset(vf_path)
 
-        return targets, predictions, embeddings
+        return targets, predictions, embeddings, true_vf
 
     @abc.abstractmethod
     def evaluate(self, **kwargs):

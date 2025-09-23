@@ -59,6 +59,7 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
         metrics={},
         use_modulation_in_output_layers=False,
         include_diffusion_t_in_values=False,
+        conditioning_mlp_layers=0,
         output_resnet_channels=None,
         output_resnet_blocks=None,
         sources_selection_seed=123,
@@ -99,6 +100,8 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
             use_modulation_in_output_layers (bool): If True, applies modulation to the output layers.
             include_diffusion_t_in_values (bool): If True, includes the diffusion timestep
                 in the values embedding (in addition to the conditioning).
+            conditioning_mlp_layers (int): Number of linear layers to apply in the conditioning
+                embedding after the concatenation of the different conditioning variables.
             output_resnet_channels (int): Number of channels in the output ResNet.
             output_resnet_blocks (int): Number of blocks in the output ResNet.
             sources_selection_seed (int, optional): Seed for the random number generator used to select
@@ -132,6 +135,7 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
             output_resnet_channels,
             output_resnet_blocks,
             include_diffusion_t_in_values=include_diffusion_t_in_values,
+            conditioning_mlp_layers=conditioning_mlp_layers,
         )
 
         if isinstance(mask_only_sources, str):
@@ -152,6 +156,7 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
         output_resnet_channels,
         output_resnet_blocks,
         include_diffusion_t_in_values=False,
+        conditioning_mlp_layers=0,
     ):
         """Initializes the weights of the embedding layers."""
         if not hasattr(self, "use_diffusion_t"):
@@ -185,6 +190,7 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
                         use_diffusion_t=self.use_diffusion_t,
                         pred_mean_channels=pred_mean_channels,
                         include_diffusion_t_in_values=include_diffusion_t_in_values,
+                        conditioning_mlp_layers=conditioning_mlp_layers,
                     )
                     self.sourcetype_output_projs[source.type] = SourcetypeProjection2d(
                         self.values_dim,

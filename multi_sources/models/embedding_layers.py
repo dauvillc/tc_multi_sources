@@ -7,9 +7,15 @@ import torch.nn as nn
 class LinearEmbedding(nn.Module):
     """Embeds a vector using a linear layer."""
 
-    def __init__(self, input_dim, output_dim, norm=False):
+    def __init__(self, input_dim, output_dim, n_layers=1, norm=False):
         super(LinearEmbedding, self).__init__()
         self.embedding = nn.Linear(input_dim, output_dim)
+        if n_layers > 1:
+            layers = []
+            for _ in range(n_layers - 1):
+                layers.append(nn.Linear(output_dim, output_dim))
+                layers.append(nn.GELU())
+            self.embedding = nn.Sequential(self.embedding, *layers)
         self.act = nn.GELU()
         self.use_norm = norm
         if norm:
@@ -28,12 +34,13 @@ class ConvPatchEmbedding2d(nn.Module):
     a 2D convolutional layer.
     """
 
-    def __init__(self, channels, patch_size, emb_dim, norm=True):
+    def __init__(self, channels, patch_size, emb_dim, mlp_layers=0, norm=True):
         """
         Args:
             channels (int): The number of channels in the image.
             patch_size (int): The size of the patches.
             emb_dim (int): The dimension of the embedding space.
+            mlp_layers (int): The number of linear layers to apply after the convolution.
             norm (bool): Whether to apply layer normalization after the embedding.
         """
         super().__init__()
@@ -43,6 +50,12 @@ class ConvPatchEmbedding2d(nn.Module):
             nn.Conv2d(channels, emb_dim, kernel_size=self.patch_size, stride=self.patch_size),
             nn.GELU(),
         )
+        if mlp_layers > 0:
+            mlp = []
+            for _ in range(mlp_layers):
+                mlp.append(nn.Linear(emb_dim, emb_dim))
+                mlp.append(nn.GELU())
+            self.mlp = nn.Sequential(*mlp)
         if norm:
             self.norm = nn.LayerNorm(emb_dim)
 
@@ -62,6 +75,9 @@ class ConvPatchEmbedding2d(nn.Module):
         image = pad(image)
         embedded_image = self.embedding(image)  # (B, emb_dim, h, w)
         embedded_image = embedded_image.permute(0, 2, 3, 1)  # (B, h, w, emb_dim)
+
+        if hasattr(self, "mlp"):
+            embedded_image = self.mlp(embedded_image)
 
         if hasattr(self, "norm"):
             embedded_image = self.norm(embedded_image)
@@ -92,6 +108,7 @@ class SourcetypeEmbedding2d(nn.Module):
         use_diffusion_t=True,
         pred_mean_channels=0,
         include_diffusion_t_in_values=False,
+        conditioning_mlp_layers=0,
     ):
         """
         Args:
@@ -106,6 +123,8 @@ class SourcetypeEmbedding2d(nn.Module):
                 the predicted mean is not used.
             include_diffusion_t_in_values (bool): Whether to include the diffusion
                 timestep in the values embedding (in addition to the conditioning).
+            conditioning_mlp_layers (int): Number of linear layers to apply
+                after the conditioning concatenation.
         """
         super().__init__()
 
@@ -132,12 +151,18 @@ class SourcetypeEmbedding2d(nn.Module):
         # - spatial conditioning
         ch_spatial_cond = 1  # landmask
         self.spatial_cond_embedding = ConvPatchEmbedding2d(
-            ch_spatial_cond, patch_size, values_dim, norm=False
+            ch_spatial_cond,
+            patch_size,
+            values_dim,
+            norm=False,
+            mlp_layers=conditioning_mlp_layers,
         )
         # - 0D / 1D embeddings
         # there's always at least 1 channel: the availability flag
         ch_cond = 1 + n_charac_vars + int(self.use_diffusion_t)
-        self.cond_embedding = LinearEmbedding(ch_cond, values_dim, norm=False)
+        self.cond_embedding = LinearEmbedding(
+            ch_cond, values_dim, n_layers=conditioning_mlp_layers, norm=False
+        )
         # final layer normalization for the conditioning
         self.cond_norm = nn.LayerNorm(values_dim)
 
