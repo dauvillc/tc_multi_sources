@@ -1,12 +1,12 @@
 # Path to where the unpreprocessed datasets are stored
 raw_datasets: ${oc.env:WORK}/data/multi_sources/raw/
 # Path to where the preprocessed dataset will be saved
-preprocessed_dataset: ${oc.env:NEWSCRATCH}/data/multi_sources/preprocessed/
+preprocessed_dataset: ${oc.env:SCRATCH}/data/multi_sources/preprocessed_pmw_concat/
 # Checkpoints directory
-checkpoints: ${oc.env:NEWSCRATCH}/checkpoints/
+checkpoints: ${oc.env:SCRATCH}/checkpoints/
 
-wandb_logs: ${oc.env:NEWSCRATCH}
-validation: ${oc.env:NEWSCRATCH}/data/multi_sources/validation
-predictions: ${oc.env:NEWSCRATCH}/data/multi_sources/predictions
-results: ${oc.env:NEWSCRATCH}/data/multi_sources/results
+wandb_logs: ${oc.env:SCRATCH}
+validation: ${oc.env:SCRATCH}/data/multi_sources/validation
+predictions: ${oc.env:SCRATCH}/data/multi_sources/predictions
+results: ${oc.env:SCRATCH}/data/multi_sources/results
 

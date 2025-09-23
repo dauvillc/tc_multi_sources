@@ -1,7 +1,7 @@
 # Path to where the unpreprocessed datasets are stored
 raw_datasets: "/home/cdauvill/scratch/data/multi_sources/raw/"
 # Path to where the preprocessed dataset will be saved
-preprocessed_dataset: "/home/cdauvill/scratch/data/multi_sources/preprocessed/"
+preprocessed_dataset: "/home/cdauvill/scratch/data/multi_sources/preprocessed_pmw_concat/"
 # Checkpoints directory
 checkpoints: "/home/cdauvill/scratch/checkpoints/"
 # Weights and Biases logs
