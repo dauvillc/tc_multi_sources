@@ -58,6 +58,7 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
         lr_scheduler_kwargs,
         use_det_model_from_run=None,
         n_sampling_diffusion_steps=25,
+        noise_scale=1.0,
         training_time_sampling="lognormal",
         loss_max_distance_from_center=None,
         ignore_land_pixels_in_loss=False,
@@ -72,6 +73,7 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
         cfg_train_uncond_proba=0.0,
         cfg_scale=None,
         cfg_type="chronological",
+        return_intermediate_steps=False,
         **kwargs,
     ):
         """
@@ -89,6 +91,7 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
             use_det_model_from_run (str): Path to a checkpoint of a deterministic model
                 to predict the means from.
             n_sampling_diffusion_steps (int): Number of diffusion steps when sampling.
+            noise_scale (float): Scale of the noise used when noising the data.
             training_time_sampling (str): How to sample the diffusion timesteps during training.
                 Either "uniform" or "lognormal".
             loss_max_distance_from_center (int or None): If specified, only pixels within this
@@ -122,6 +125,8 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
                 - "chronological": only erases the source that is closest chronologically
                     to the masked source. If only two sources are available, doesn't erase anything.
                 - "full": erases all non-masked sources (traditional classifier-free guidance).
+            return_intermediate_steps (bool): If True, the predict step will return
+                the intermediate steps of the ODE solver.
             **kwargs: Additional arguments to pass to the LightningModule constructor.
         """
         self.use_diffusion_t = True
@@ -147,6 +152,7 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
 
         # Flow matching ingredients
         self.n_sampling_diffusion_steps = n_sampling_diffusion_steps
+        self.noise_scale = noise_scale
         self.training_time_sampling = training_time_sampling
         self.fm_path = CondOTProbPath()
         self.compute_metrics_every_k_batches = compute_metrics_every_k_batches
@@ -155,6 +161,7 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
         self.cfg_train_uncond_proba = cfg_train_uncond_proba
         self.cfg_scale = cfg_scale
         self.cfg_type = cfg_type
+        self.return_intermediate_steps = return_intermediate_steps
         self.fm_rng = torch.Generator()  # For the noise and time sampling
 
         # Optional: deterministic model usage
@@ -260,6 +267,7 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
                 generator=self.fm_rng,
                 dtype=masked_data["values"].dtype,
             ).to(device)
+            noise = self.noise_scale * noise
             # The sources should be noised if they are masked.
             should_mask = avail_flags[source_index_pair] == 0
             # Compute the noised values associated with the diffusion timesteps
@@ -352,13 +360,15 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
         loss = sum(losses.values()) / len(losses)
         return loss
 
-    def sample(self, batch, n_realizations_per_sample):
+    def sample(self, batch, n_realizations_per_sample, return_intermediate_steps=False):
         """Samples the model using multiple steps of the ODE solver. All sources
         that have an availability flag set to 0 or -1 are solved.
         Args:
             batch (dict): The input batch, preprocessed, with (source_name, index) tuples as keys.
-            n_realizations_per_sample (int): Number Np of realizations to sample for each
+            n_realizations_per_sample (int): Number R of realizations to sample for each
                 element in the batch.
+            return_intermediate_steps (bool): If True, returns the intermediate solutions at
+                each time step of the ODE solver.
         Returns:
             dict: A dictionary containing the following keys:
                 - avail_flags (dict): The availability flags for each source,
@@ -366,7 +376,8 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
                 - time_grid (torch.Tensor): The time grid at which the ODE solver sampled the solution,
                     of shape (T,).
                 - sol (dict): The solution of the ODE solver for each source,
-                    as tensors of shape (Np, B, C, ...).
+                    as tensors of shape (R, B, C, ...) or (R, T, B, C, ...) if
+                    return_intermediate is True, where R is the number of realizations sampled.
                 - pred_mean (dict): If using a deterministic model, the predicted means
                     for each source, as tensors of shape (B, C, ...).
         """
@@ -417,6 +428,7 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
                             # The interpretation of the guidance scale depends on the type of CFG.
                             c = self.cfg_scale
                             new_vf = (1 + c) * cond - c * uncond
+                            new_vf = uncond
                             vf[source_index_pair] = new_vf
                     else:
                         vf = self.forward(batch_t)
@@ -430,7 +442,9 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
                 # Solve the ODE
                 time_grid = torch.linspace(0, 1, self.n_sampling_diffusion_steps)
                 solver = MultisourceEulerODESolver(vf_func)
-                sol = solver.solve(x_0, time_grid)  # Dict of tensors of shape (B, C, ...)
+                sol = solver.solve(
+                    x_0, time_grid, return_intermediate_steps=return_intermediate_steps
+                )
 
                 # If using a deterministic model, the solution of the ODE is the residual
                 # between the predicted mean and the actual sample. We need to add back the
@@ -446,7 +460,7 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
             all_sols = {
                 source_index_pair: torch.stack([sol[source_index_pair] for sol in all_sols])
                 for source_index_pair in batch
-            }
+            }  # Shape (R, B, C, ...) or (R, T, B, C, ...)
 
             returned_dict = {
                 "avail_flags": avail_flags,
@@ -584,23 +598,35 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
             outputs (dict): A dictionary containing:
                 - sol (dict): The predicted values for each source,
                   as tensors of shape (R, B, C, ...),
-                  where R is the number of realizations sampled.
+                  where R is the number of realizations sampled,
+                  or (R, T, B, C, ...) if return_intermediate_steps is True.
                 - avail_flags (dict): The availability flags for each source,
                   after masking, as tensors of shape (B,).
                 - pred_mean (dict, optional): If using a deterministic model,
                   the predicted means for each source, as tensors of shape (B, C, ...).
+                - includes_intermediate_steps (bool): Whether the solution includes
+                    the intermediate steps of the ODE solver.
+                - time_grid (torch.Tensor): The time grid at which the ODE solver
+                    sampled the solution, of shape (T,).
         """
         batch = self.preproc_input(batch)
 
         # Sample with the ODE solver
         sampling_dict = self.sample(
-            batch, n_realizations_per_sample=self.n_realizations_per_sample
+            batch,
+            n_realizations_per_sample=self.n_realizations_per_sample,
+            return_intermediate_steps=self.return_intermediate_steps,
         )
 
         sol, avail_flags = sampling_dict["sol"], sampling_dict["avail_flags"]
 
         # Create output dictionary with solutions and availability flags
-        output = {"sol": sol, "avail_flags": avail_flags}
+        output = {
+            "sol": sol,
+            "avail_flags": avail_flags,
+            "includes_intermediate_steps": self.return_intermediate_steps,
+            "time_grid": sampling_dict["time_grid"],
+        }
 
         # If using a deterministic model, add the predicted means as a separate key in the output
         if self.use_det_model and "pred_mean" in sampling_dict:
@@ -631,7 +657,7 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
             )
         return new_data
 
-    def remove_closest_chronological_source(self, batch, min_sources=2):
+    def remove_closest_chronological_source(self, batch, min_sources=1):
         """For every sample in a batch, erases the source that is chronologically
         closest to the masked source. "Erasing" means setting all of its attributes
         to the values they would have if the source was missing (avail = -1, values = 0, etc).

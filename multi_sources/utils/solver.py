@@ -21,7 +21,7 @@ class MultisourceEulerODESolver:
         """
         self.vf_func = vf_func
 
-    def solve(self, x_0, time_grid, return_intermediate=False):
+    def solve(self, x_0, time_grid, return_intermediate_steps=False):
         """Solves the ODE for the given initial conditions.
         Args:
             x_0 (dict): Initial conditions, dict {source: x_s} where x_s is a tensor
@@ -30,10 +30,10 @@ class MultisourceEulerODESolver:
             time_grid (tensor): Time grid of shape (T,) within [0, 1]; times at which
                 the flow will be evaluated. Also defines the step size for the Euler
                 method.
-            return_intermediate (bool): If True, returns the intermediate solutions at
+            return_intermediate_steps (bool): If True, returns the intermediate solutions at
                 each time step.
         Returns:
-            dict: dict {source: x_s} where x_s is a tensor of shape (B, C, ...)
+            sol: dict {source: x_s} where x_s is a tensor of shape (B, C, ...)
                 giving the values of the flow for the source s at the times in time_grid.
                 If return_intermediate is True, the values are stored in a tensor of shape
                 (T, B, C, ...).
@@ -55,6 +55,6 @@ class MultisourceEulerODESolver:
                 x[source] = x[source] + dt * u[source]
                 sol[source][k + 1] = x[source]
 
-        if not return_intermediate:
+        if not return_intermediate_steps:
             sol = {source: sol[source][-1] for source in sol}
         return sol

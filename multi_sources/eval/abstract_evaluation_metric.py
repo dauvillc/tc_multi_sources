@@ -106,8 +106,13 @@ class AbstractMultisourceEvaluationMetric(abc.ABC):
         )
         self.n_samples = self.samples_df["sample_index"].nunique()
 
-    def samples_iterator(self):
+    def samples_iterator(self, include_intermediate_steps=False):
         """Iterator over the samples in the evaluation.
+        Args:
+            include_intermediate_steps (bool): If True, includes the intermediate steps
+                of the ODE solver for models that return them.
+                In True, the predictions will have an additional leading dimension
+                "integration_step" corresponding to the time steps of the ODE solver.
         Yields:
             pandas.DataFrame: A DataFrame with the columns:
                 - sample_index: Index of the sample (same for all rows)
@@ -142,7 +147,12 @@ class AbstractMultisourceEvaluationMetric(abc.ABC):
                     continue
                 sample_data["targets"][src] = targets[src]
                 for model_id in self.model_data:
-                    sample_data["predictions"][model_id][src] = predictions[model_id][src]
+                    model_preds = predictions[model_id][src]
+                    # If the predictions include intermediate steps, keep only the last one
+                    if not include_intermediate_steps and "integration_step" in model_preds.dims:
+                        model_preds = model_preds.isel(integration_step=-1)
+                    sample_data["predictions"][model_id][src] = model_preds
+                    # Add embeddings if available
                     if model_id in embeddings and src in embeddings[model_id]:
                         sample_data["embeddings"][model_id][src] = embeddings[model_id][src]
 

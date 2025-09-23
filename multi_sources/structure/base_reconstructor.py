@@ -58,7 +58,7 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
         validation_dir=None,
         metrics={},
         use_modulation_in_output_layers=False,
-        include_coords_in_conditioning=False,
+        include_diffusion_t_in_values=False,
         output_resnet_channels=None,
         output_resnet_blocks=None,
         sources_selection_seed=123,
@@ -97,8 +97,8 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
                 A metric should have the signature metric(y_pred, y_true, masks, **kwargs)
                 and return a dict {source: tensor of shape (batch_size,)}.
             use_modulation_in_output_layers (bool): If True, applies modulation to the output layers.
-            include_coords_in_conditioning (bool): If True, includes the coordinates
-                in the conditioning tensor used in the output layers.
+            include_diffusion_t_in_values (bool): If True, includes the diffusion timestep
+                in the values embedding (in addition to the conditioning).
             output_resnet_channels (int): Number of channels in the output ResNet.
             output_resnet_blocks (int): Number of blocks in the output ResNet.
             sources_selection_seed (int, optional): Seed for the random number generator used to select
@@ -129,9 +129,9 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
         # Initialize the embedding layers
         self.init_embedding_layers(
             use_modulation_in_output_layers,
-            include_coords_in_conditioning,
             output_resnet_channels,
             output_resnet_blocks,
+            include_diffusion_t_in_values=include_diffusion_t_in_values,
         )
 
         if isinstance(mask_only_sources, str):
@@ -149,9 +149,9 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
     def init_embedding_layers(
         self,
         use_modulation_in_output_layers,
-        include_coords_in_conditioning,
         output_resnet_channels,
         output_resnet_blocks,
+        include_diffusion_t_in_values=False,
     ):
         """Initializes the weights of the embedding layers."""
         if not hasattr(self, "use_diffusion_t"):
@@ -184,7 +184,7 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
                         source.n_charac_variables(),
                         use_diffusion_t=self.use_diffusion_t,
                         pred_mean_channels=pred_mean_channels,
-                        include_coords_in_conditioning=include_coords_in_conditioning,
+                        include_diffusion_t_in_values=include_diffusion_t_in_values,
                     )
                     self.sourcetype_output_projs[source.type] = SourcetypeProjection2d(
                         self.values_dim,

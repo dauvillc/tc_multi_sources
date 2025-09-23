@@ -73,6 +73,14 @@ class MultiSourceWriter(BasePredictionWriter):
             # Extract predicted means if they exist
             pred_means = prediction.get("pred_mean", None)
             embeddings = None
+            # Check if intermediate steps are included
+            includes_intermediate_steps = prediction["includes_intermediate_steps"]
+            # Number of dimensions before the channel dimension in the predictions
+            # always at least 1 for batch dim
+            leading_pred_dims = (
+                1 + int(has_multiple_realizations) + int(includes_intermediate_steps)
+            )
+            time_grid = prediction["time_grid"].cpu().float().numpy()
         elif "predictions" in prediction:
             # Deterministic model output format
             pred = prediction["predictions"]
@@ -80,6 +88,7 @@ class MultiSourceWriter(BasePredictionWriter):
             # Deterministic models typically don't have multiple realizations
             has_multiple_realizations = False
             pred_means = None
+            includes_intermediate_steps = False
             embeddings = prediction.get("embeddings", None)
         else:
             # Fallback for other formats
@@ -109,7 +118,7 @@ class MultiSourceWriter(BasePredictionWriter):
                             pred[source_index_pair],
                             source_name,  # Use only source_name for normalization
                             denormalize=True,
-                            leading_dims=1 + int(has_multiple_realizations),
+                            leading_dims=leading_pred_dims,
                             device=device,
                         )
                     # Denormalize predicted means if they exist
@@ -118,7 +127,7 @@ class MultiSourceWriter(BasePredictionWriter):
                             pred_means[source_index_pair],
                             source_name,
                             denormalize=True,
-                            leading_dims=1,  # Pred means have batch dimension but no realization dimension
+                            leading_dims=1,  # batch dim only
                             device=device,
                         )
 
@@ -171,30 +180,27 @@ class MultiSourceWriter(BasePredictionWriter):
                     output_var_names = [v for v in source_obj.output_vars]
 
                     # Create xarray Dataset for predictions. Same principle as for targets.
-                    # However, the predictions may have an additional dimension
+                    # However, the predictions may have additional leading dimensions
+                    # for the multiple realizations and/or intermediate steps.
                     # for multiple realizations.
+                    pred_dims = list(dims)
+                    pred_coords = coords.copy()
+                    if includes_intermediate_steps:
+                        pred_dims = ["integration_step"] + pred_dims
+                        pred_coords["integration_step"] = time_grid
                     if has_multiple_realizations:
-                        dims_with_realization = ["realization"] + dims
-                        coords_with_realization = coords.copy()
-                        coords_with_realization["realization"] = np.arange(predictions.shape[0])
-                        predictions_ds = xr.Dataset(
-                            {
-                                var: (
-                                    dims_with_realization,
-                                    predictions[:, :, i],
-                                )  # Realization, batch, channel
-                                for i, var in enumerate(output_var_names)
-                            },
-                            coords=coords_with_realization,
-                        )
-                    else:
-                        predictions_ds = xr.Dataset(
-                            {
-                                var: (dims, predictions[:, i])  # Batch, channel
-                                for i, var in enumerate(output_var_names)
-                            },
-                            coords=coords,
-                        )
+                        pred_dims = ["realization"] + pred_dims
+                        pred_coords["realization"] = np.arange(predictions.shape[0])
+                    predictions_ds = xr.Dataset(
+                        {
+                            var: (
+                                pred_dims,
+                                predictions[(slice(None),) * leading_pred_dims + (i, ...)],
+                            )  # Realization, batch, channel
+                            for i, var in enumerate(output_var_names)
+                        },
+                        coords=pred_coords,
+                    )
 
                     # Write predicted means if available
                     if pred_means is not None and source_index_pair in pred_means:
@@ -289,6 +295,7 @@ class MultiSourceWriter(BasePredictionWriter):
                         "channels": [targets.shape[1]] * batch_size,
                         "spatial_shape": [targets.shape[2:]] * batch_size,
                         "has_multiple_realizations": [has_multiple_realizations] * batch_size,
+                        "includes_intermediate_steps": [includes_intermediate_steps] * batch_size,
                         "has_pred_means": [has_pred_means] * batch_size,  # New column
                     },
                 )
