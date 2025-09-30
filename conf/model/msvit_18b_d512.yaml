@@ -8,6 +8,7 @@ backbone:
   n_blocks: 16
   dropout: ${model.dropout}
   att_inner_ratio: 1.0
+  cross_att_inner_ratio_v: 1.0
   mlp_inner_ratio: 2.0
   num_heads: 8
   cross_att_window_size: 4
