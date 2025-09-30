@@ -15,7 +15,7 @@ from torch.utils.data import DataLoader
 
 from multi_sources.data_processing.collate_fn import multi_source_collate_fn
 from utils.cfg_utils import get_random_code
-from utils.checkpoints import load_experiment_cfg_from_checkpoint, load_weights_intersection
+from utils.checkpoints import load_experiment_cfg_from_checkpoint
 
 
 class TrainJob(submitit.helpers.Checkpointable):
@@ -36,19 +36,23 @@ class TrainJob(submitit.helpers.Checkpointable):
                     "It must be either 'resume' or 'fine_tune'."
                 )
 
-            print("Resuming run: ", resume_run_id)
-            # Create the run's ID and retrieve its checkpoint path.
-            # Since resuming W&B offline runs is unstable, we won't use exactly the same run ID.
-            # Instead, we'll use run-n where n starts at 1 (first resume) and increments by 1
-            # for each subsequent resume.
-            # If we're loading a run but not resuming it, we'll also add a "-1" suffix.
-            split = resume_run_id.split("-")
-            if cfg["resume_mode"] == "resume" and len(split) > 1 and split[-1].isdigit():
-                # If the run ID ends with a number, increment it.
-                run_id = "-".join(split[:-1]) + "-" + str(int(split[-1]) + 1)
+            if cfg["resume_mode"] == "fine_tune":
+                print("Fine-tuning run: ", resume_run_id)
+                run_id = get_random_code()
             else:
-                # If the run ID does not end with a number, append "-1".
-                run_id = resume_run_id + "-1"
+                print("Resuming run: ", resume_run_id)
+                # Create the run's ID and retrieve its checkpoint path.
+                # Since resuming W&B offline runs is unstable, we won't use exactly the same run ID.
+                # Instead, we'll use run-n where n starts at 1 (first resume) and increments by 1
+                # for each subsequent resume.
+                # If we're loading a run but not resuming it, we'll also add a "-1" suffix.
+                split = resume_run_id.split("-")
+                if len(split) > 1 and split[-1].isdigit():
+                    # If the run ID ends with a number, increment it.
+                    run_id = "-".join(split[:-1]) + "-" + str(int(split[-1]) + 1)
+                else:
+                    # If the run ID does not end with a number, append "-1".
+                    run_id = resume_run_id + "-1"
             _, checkpoint_path = load_experiment_cfg_from_checkpoint(
                 cfg["paths"]["checkpoints"], resume_run_id, best_or_latest="latest"
             )
@@ -104,10 +108,7 @@ class TrainJob(submitit.helpers.Checkpointable):
             # the checkpoint.
             if "reset_output_layers" in cfg and cfg["reset_output_layers"]:
                 former_dict = {k: v for k, v in former_dict.items() if "output_proj" not in k}
-            new_dict = pl_module.state_dict()
-            # Only keep the intersection of the keys in the former and current dictionaries.
-            former_dict = load_weights_intersection(former_dict, new_dict)
-            pl_module.load_state_dict(former_dict)
+            pl_module.load_state_dict(former_dict, strict=cfg.get("load_state_strict", False))
 
         # Callbacks
         # Create the logs directory if it does not exist
