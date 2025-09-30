@@ -59,6 +59,7 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
         metrics={},
         use_modulation_in_output_layers=False,
         include_diffusion_t_in_values=False,
+        include_coords_in_conditioning=False,
         conditioning_mlp_layers=0,
         output_resnet_channels=None,
         output_resnet_blocks=None,
@@ -100,6 +101,8 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
             use_modulation_in_output_layers (bool): If True, applies modulation to the output layers.
             include_diffusion_t_in_values (bool): If True, includes the diffusion timestep
                 in the values embedding (in addition to the conditioning).
+            include_coords_in_conditioning (bool): Whether to include the coordinates
+                in the conditioning embedding.
             conditioning_mlp_layers (int): Number of linear layers to apply in the conditioning
                 embedding after the concatenation of the different conditioning variables.
             output_resnet_channels (int): Number of channels in the output ResNet.
@@ -135,6 +138,7 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
             output_resnet_channels,
             output_resnet_blocks,
             include_diffusion_t_in_values=include_diffusion_t_in_values,
+            include_coords_in_conditioning=include_coords_in_conditioning,
             conditioning_mlp_layers=conditioning_mlp_layers,
         )
 
@@ -156,6 +160,7 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
         output_resnet_channels,
         output_resnet_blocks,
         include_diffusion_t_in_values=False,
+        include_coords_in_conditioning=False,
         conditioning_mlp_layers=0,
     ):
         """Initializes the weights of the embedding layers."""
@@ -190,6 +195,7 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
                         use_diffusion_t=self.use_diffusion_t,
                         pred_mean_channels=pred_mean_channels,
                         include_diffusion_t_in_values=include_diffusion_t_in_values,
+                        include_coords_in_conditioning=include_coords_in_conditioning,
                         conditioning_mlp_layers=conditioning_mlp_layers,
                     )
                     self.sourcetype_output_projs[source.type] = SourcetypeProjection2d(
@@ -249,8 +255,8 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
             # v: embedded values, c: coords, cond: conditioning tensor
 
             output[source_index_pair] = {
-                "embedded_values": v,
-                "embedded_coords": c,
+                "values": v,
+                "coords": c,
                 "conditioning": cond,
                 "avail": data["avail"].clone(),
             }

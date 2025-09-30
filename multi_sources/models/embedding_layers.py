@@ -108,6 +108,7 @@ class SourcetypeEmbedding2d(nn.Module):
         use_diffusion_t=True,
         pred_mean_channels=0,
         include_diffusion_t_in_values=False,
+        include_coords_in_conditioning=False,
         conditioning_mlp_layers=0,
     ):
         """
@@ -123,6 +124,8 @@ class SourcetypeEmbedding2d(nn.Module):
                 the predicted mean is not used.
             include_diffusion_t_in_values (bool): Whether to include the diffusion
                 timestep in the values embedding (in addition to the conditioning).
+            include_coords_in_conditioning (bool): Whether to include the coordinates
+                in the conditioning embedding.
             conditioning_mlp_layers (int): Number of linear layers to apply
                 after the conditioning concatenation.
         """
@@ -135,6 +138,7 @@ class SourcetypeEmbedding2d(nn.Module):
         self.include_diffusion_t_in_values = include_diffusion_t_in_values
         if self.include_diffusion_t_in_values and not self.use_diffusion_t:
             raise ValueError("include_diffusion_t_in_values is True but use_diffusion_t is False.")
+        self.include_coords_in_conditioning = include_coords_in_conditioning
 
         # landmask + availability mask + predicted mean + diffusion timestep
         ch = channels + 2 + pred_mean_channels + int(include_diffusion_t_in_values)
@@ -149,7 +153,7 @@ class SourcetypeEmbedding2d(nn.Module):
 
         # Conditioning embedding layers
         # - spatial conditioning
-        ch_spatial_cond = 1  # landmask
+        ch_spatial_cond = 1 + int(self.include_coords_in_conditioning) * 3  # landmask + [coords]
         self.spatial_cond_embedding = ConvPatchEmbedding2d(
             ch_spatial_cond,
             patch_size,
@@ -160,6 +164,7 @@ class SourcetypeEmbedding2d(nn.Module):
         # - 0D / 1D embeddings
         # there's always at least 1 channel: the availability flag
         ch_cond = 1 + n_charac_vars + int(self.use_diffusion_t)
+        ch_cond += int(self.include_coords_in_conditioning)  # time coord if included
         self.cond_embedding = LinearEmbedding(
             ch_cond, values_dim, n_layers=conditioning_mlp_layers, norm=False
         )
@@ -216,6 +221,8 @@ class SourcetypeEmbedding2d(nn.Module):
         # Spatial conditionings (embedded together via patch embedding)
         # - Land-sea mask
         spatial_cond = [landmask]
+        if self.include_coords_in_conditioning:
+            spatial_cond.append(coords)
         # - optionally, the spatial coordinates
         spatial_cond = torch.cat(spatial_cond, dim=1)  # (B, C_spatial_cond, H, W)
         spatial_cond = self.spatial_cond_embedding(spatial_cond)
@@ -232,6 +239,10 @@ class SourcetypeEmbedding2d(nn.Module):
         if self.use_diffusion_t:
             diffusion_t = data["diffusion_t"].view(b, 1)
             conds.append(diffusion_t)
+        # - optionally, the time coordinate
+        if self.include_coords_in_conditioning:
+            time_coord = data["coords"][:, 2, 0, 0].view(b, 1)
+            conds.append(time_coord)
         # Concatenate the conditioning tensors
         conds = torch.cat(conds, dim=1)  # (B, ch_cond)
         conds = self.cond_embedding(conds)  # (B, values_dim)

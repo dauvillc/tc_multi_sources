@@ -51,6 +51,7 @@ class MultisourceDeterministicReconstructor(MultisourceAbstractReconstructor):
         mask_only_sources=None,
         forecasting_mode=False,
         validation_dir=None,
+        include_coords_in_conditioning=True,
         use_modulation_in_output_layers=False,
         return_embeddings_in_predict=False,
         metrics={},
@@ -84,6 +85,8 @@ class MultisourceDeterministicReconstructor(MultisourceAbstractReconstructor):
                 Mutually exclusive with mask_only_sources.
             validation_dir (optional, str or Path): Directory where to save the validation plots.
                 If None, no plots will be saved.
+            include_coords_in_conditioning (bool): If True, the coordinates of the unmasked
+                sources will be included in the conditioning of the backbone.
             metrics (dict of str: callable): Metrics to compute during training and validation.
                 A metric should have the signature metric(y_pred, y_true, masks, **kwargs)
                 and return a dict {source: tensor of shape (batch_size,)}.
@@ -111,6 +114,7 @@ class MultisourceDeterministicReconstructor(MultisourceAbstractReconstructor):
             validation_dir=validation_dir,
             metrics=metrics,
             use_modulation_in_output_layers=use_modulation_in_output_layers,
+            include_coords_in_conditioning=include_coords_in_conditioning,
             **kwargs,
         )
         self.return_embeddings_in_predict = return_embeddings_in_predict
@@ -129,11 +133,11 @@ class MultisourceDeterministicReconstructor(MultisourceAbstractReconstructor):
         # We know need to replace the masked values with a [MASK] token (specific to the
         # deterministic case).
         for source_index_pair, data in y.items():
-            v = data["embedded_values"]
+            v = data["values"]
             where_masked = x[source_index_pair]["avail"] == 0
             where_masked = where_masked.view((where_masked.shape[0],) + (1,) * (v.dim() - 1))
             token = self.mask_token.view((1,) * (v.dim() - 1) + (-1,))
-            data["embedded_values"] = torch.where(where_masked, token, v)
+            data["values"] = torch.where(where_masked, token, v)
 
         return y
 

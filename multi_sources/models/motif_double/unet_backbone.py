@@ -151,26 +151,12 @@ class MultisourceGeneralBackboneUNet(nn.Module):
         """
         Args:
             x (dict): Dictionary of inputs, such that
-                x[(source_name, index)] contains the keys "embedded_coords",
-                "embedded_values" and "embedded_conditioning".
+                x[(source_name, index)] contains the keys "coords",
+                "values" and "conditioning".
         Returns:
             dict: Dictionary of outputs, such that
                 outputs[(source_name, index)] contains the predicted values of the tokens.
         """
-        for src, source_data in x.items():
-            # Replace the keys "embedded_values" and "embedded_coords" with "values" and "coords"
-            # if needed.
-            if "embedded_values" in source_data:
-                x[src] = {
-                    k: v
-                    for k, v in source_data.items()
-                    if k not in ["embedded_values", "embedded_coords"]
-                }
-                x[src]["values"] = source_data["embedded_values"]
-                x[src]["coords"] = source_data["embedded_coords"]
-
-            # F
-
         # Downsampling half
         skips = []
         for stage_blocks, merging in self.downsampling_blocks:
@@ -275,7 +261,7 @@ class AdapativeConditionalNormalization(nn.Module):
         """Args:
             data (dict): Dictionary of inputs, such that
                 data[(source_name, index)] contains the keys
-                "embedded_values", "embedded_coords", and "conditioning", where
+                "values", "coords", and "conditioning", where
                 (source_name, index) is a tuple containing the source name
                 and observation index (0 = most recent).
             args, kwargs: Additional arguments for the wrapped module.

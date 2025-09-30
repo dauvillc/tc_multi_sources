@@ -96,14 +96,14 @@ class MultisourcePerceiverEncoder(nn.Module):
         """
         Args:
             x (dict of str to tensor): Dictionary of inputs for each source, such
-                that x[src] contains at least the entries "embedded_values" and
-                "embedded_coords".
+                that x[src] contains at least the entries "values" and
+                "coords".
 
         Returns:
             Lv (tensor): Updated latent array for the values.
             Lc (tensor): Updated latent array for the coordinates.
         """
-        B = next(iter(x.values()))["embedded_coords"].shape[0]  # Batch size
+        B = next(iter(x.values()))["coords"].shape[0]  # Batch size
         Dv, Dc = self.values_dim, self.coords_dim
 
         # Project the latents to queries.
@@ -111,8 +111,8 @@ class MultisourcePerceiverEncoder(nn.Module):
         qc = self.coords_q(self.latent_coords)
 
         # Concatenate the values and coords sequences of all sources.
-        V = torch.cat([x[src]["embedded_values"].view(B, -1, Dv) for src in x], dim=1)
-        C = torch.cat([x[src]["embedded_coords"].view(B, -1, Dc) for src in x], dim=1)
+        V = torch.cat([x[src]["values"].view(B, -1, Dv) for src in x], dim=1)
+        C = torch.cat([x[src]["coords"].view(B, -1, Dc) for src in x], dim=1)
 
         # Project the values and coordinates to keys and values.
         kv = self.values_k(V)
@@ -222,7 +222,7 @@ class MultisourcePerceiverDecoder(nn.Module):
         """
         Args:
             x (dict of str to tensor): Dictionary of inputs for each source, such
-                that x[src] contains at least the entry "embedded_coords".
+                that x[src] contains at least the entry "coords".
                 The values are expected to have shape (B, ..., Dv) where ... are the
                 spatial dimensions, e.g. (B, h, w, Dv) for 2D sources.
             Lv (tensor): Latent array for the values.
@@ -244,8 +244,8 @@ class MultisourcePerceiverDecoder(nn.Module):
         outputs = {}
         for src in x:
             # The original embeddings are already normalized.
-            C = x[src]["embedded_coords"]
-            V = x[src]["embedded_values"]
+            C = x[src]["coords"]
+            V = x[src]["values"]
             spatial_shape = C.shape[1:-1]  # e.g. (h, w) for 2D sources
 
             # Flatten the spatial dimensions of the coordinates and project them to queries.

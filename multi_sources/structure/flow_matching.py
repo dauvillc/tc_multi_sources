@@ -5,6 +5,7 @@ the masked tokens."""
 from pathlib import Path
 
 import torch
+import torch.nn as nn
 
 # Flow matching imports
 from flow_matching.path import CondOTProbPath
@@ -60,6 +61,7 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
         n_sampling_diffusion_steps=25,
         noise_scale=1.0,
         training_time_sampling="lognormal",
+        use_mask_token=False,
         loss_max_distance_from_center=None,
         ignore_land_pixels_in_loss=False,
         normalize_coords_across_sources=False,
@@ -75,6 +77,7 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
         cfg_type="chronological",
         return_intermediate_steps=False,
         return_true_vf=False,
+        return_embeddings=False,
         **kwargs,
     ):
         """
@@ -95,6 +98,8 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
             noise_scale (float): Scale of the noise used when noising the data.
             training_time_sampling (str): How to sample the diffusion timesteps during training.
                 Either "uniform" or "lognormal".
+            use_mask_token (bool): If True, uses a learned [MASK] token that is summed to
+                the embeddings of the masked sources.
             loss_max_distance_from_center (int or None): If specified, only pixels within this
                 distance from the center of the storm (in km) will be considered
                 in the loss computation.
@@ -130,6 +135,8 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
                 the intermediate steps of the ODE solver.
             return_true_vf (bool): If True, the predict step will also return the true velocity
                 fields at each integration step, for analysis purposes.
+            return_embeddings (bool): If True, the predict step will also return the embeddings
+                of each source, before being passed to the backbone.
             **kwargs: Additional arguments to pass to the LightningModule constructor.
         """
         self.use_diffusion_t = True
@@ -166,7 +173,11 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
         self.cfg_type = cfg_type
         self.return_intermediate_steps = return_intermediate_steps
         self.return_true_vf = return_true_vf
+        self.return_embeddings = return_embeddings
         self.fm_rng = torch.Generator()  # For the noise and time sampling
+
+        if use_mask_token:
+            self.mask_token = nn.Parameter(torch.randn(1, self.values_dim))
 
         # Optional: deterministic model usage
         if self.use_det_model:
@@ -190,6 +201,22 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
             self.det_model.load_state_dict(state_dict, strict=True)
             self.det_model.eval()
             self.det_model.requires_grad_(False)
+
+    def embed(self, x):
+        """Optionally adds a [MASK] token to the embeddings of the masked sources."""
+        # Embeds the values and coordinates using the embedding layers
+        y = super().embed(x)
+        if hasattr(self, "mask_token"):
+            # We know need to replace the masked values with a [MASK] token (specific to the
+            # deterministic case).
+            for source_index_pair, data in y.items():
+                v = data["values"]
+                where_masked = x[source_index_pair]["avail"] == 0
+                where_masked = where_masked.view((where_masked.shape[0],) + (1,) * (v.dim() - 1))
+                token = self.mask_token.view((1,) * (v.dim() - 1) + (-1,))
+                data["values"] = torch.where(where_masked, token + v, v)
+
+        return y
 
     def mask(self, x, pure_noise=False, avail_flags=None):
         """Masks a portion of the sources. A missing source cannot be chosen to be masked.
@@ -265,6 +292,8 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
                         .sigmoid()
                         .to(device)
                     )
+                elif self.training_time_sampling == "beta":
+                    t = torch.distributions.Beta(2.0, 0.5).sample((batch_size,)).to(device)
             # Generate random noise with the same shape as the values
             noise = torch.randn(
                 masked_data["values"].shape,
@@ -289,14 +318,18 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
 
         return masked_x, path_samples
 
-    def forward(self, x):
+    def forward(self, x, return_embeddings=False):
         """Computes the forward pass of the model.
         Args:
             x (dict): The input sources, masked, with (source_name, index) tuples as keys.
+            return_embeddings (bool): If True, also returns the embeddings of each source,
+                before being passed to the backbone.
         Returns:
             y (dict): The predicted values for each source. If using CFG, the output
                 tensors will be double batches, where the first and second halves
                 correspond to the original batch and the unconditional copy, respectively.
+            embeddings (dict, optional): If return_embeddings is True,
+                the embeddings of each source.
         """
         # Save the shape of the tokens before they're embedded, so that we can
         # later remove the padding.
@@ -324,6 +357,8 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
             pred[source_index_pair] = pred[source_index_pair][
                 ..., : spatial_shape[0], : spatial_shape[1]
             ]
+        if return_embeddings:
+            return pred, x
         return pred
 
     def compute_loss(self, pred, batch, masked_batch, path_samples):
@@ -364,7 +399,13 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
         loss = sum(losses.values()) / len(losses)
         return loss
 
-    def sample(self, batch, n_realizations_per_sample, return_intermediate_steps=False):
+    def sample(
+        self,
+        batch,
+        n_realizations_per_sample,
+        return_intermediate_steps=False,
+        return_embeddings=False,
+    ):
         """Samples the model using multiple steps of the ODE solver. All sources
         that have an availability flag set to 0 or -1 are solved.
         Args:
@@ -373,6 +414,8 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
                 element in the batch.
             return_intermediate_steps (bool): If True, returns the intermediate solutions at
                 each time step of the ODE solver.
+            return_embeddings (bool): If True, also returns the embeddings of each source,
+                before being passed to the backbone.
         Returns:
             dict: A dictionary containing the following keys:
                 - avail_flags (dict): The availability flags for each source,
@@ -381,14 +424,28 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
                     of shape (T,).
                 - sol (dict): The solution of the ODE solver for each source,
                     as tensors of shape (R, B, C, ...) or (R, T, B, C, ...) if
-                    return_intermediate is True, where R is the number of realizations sampled.
+                    return_intermediate_steps is True, where R is the number of realizations sampled.
                 - pred_mean (dict): If using a deterministic model, the predicted means
                     for each source, as tensors of shape (B, C, ...).
+                - embeddings (dict): If return_embeddings is True, the embeddings of each source,
+                    as a dict of (src, index) tuples to dicts, where each dict contains
+                    "values", "coords", and "conditioning" tensors. The tensors
+                    have shape (R, B, N, D) or (R, T, B, N, D) if return_intermediate_steps is True.
+
         """
         with torch.no_grad():
+            if return_embeddings:
+                embeddings = {}  # Src --> dict of embeddings to list over R to list over T
+                for src in batch:
+                    embeddings[src] = {
+                        "values": [[] for _ in range(n_realizations_per_sample)],
+                        "coords": [[] for _ in range(n_realizations_per_sample)],
+                        "conditioning": [[] for _ in range(n_realizations_per_sample)],
+                    }
+
             all_sols = []  # Will store each realization of the solution
             avail_flags = None
-            for k in range(n_realizations_per_sample):
+            for real_idx in range(n_realizations_per_sample):
                 # We pass in the previously used availability flags to ensure that the same
                 # sources are masked for each realization of the same sample. For the first
                 # realization, avail_flags is None, so new masking flags are sampled.
@@ -422,7 +479,10 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
                             uncond_batch = self.remove_closest_chronological_source(batch_t)
                         else:
                             uncond_batch = self.to_unconditional_batch(batch_t)
-                        vf = self.forward(self.to_double_batch(batch_t, uncond_batch))
+                        vf = self.forward(
+                            self.to_double_batch(batch_t, uncond_batch),
+                            return_embeddings=return_embeddings,
+                        )
                         # Split the conditional and unconditional batches and apply the
                         # guidance scale.
                         half_batch = next(iter(vf.values())).shape[0] // 2
@@ -432,10 +492,17 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
                             # The interpretation of the guidance scale depends on the type of CFG.
                             c = self.cfg_scale
                             new_vf = (1 + c) * cond - c * uncond
-                            new_vf = uncond
                             vf[source_index_pair] = new_vf
                     else:
-                        vf = self.forward(batch_t)
+                        vf = self.forward(batch_t, return_embeddings=return_embeddings)
+
+                    if return_embeddings:
+                        vf, emb = vf
+                        for src, data in emb.items():
+                            embeddings[src]["values"][real_idx].append(data["values"])
+                            embeddings[src]["coords"][real_idx].append(data["coords"])
+                            embeddings[src]["conditioning"][real_idx].append(data["conditioning"])
+
                     # Where the sources are not being solved, we'll set the velocity field to zero,
                     # so that those examples don't change in the solution.
                     for source_index_pair in vf:
@@ -466,6 +533,27 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
                 for source_index_pair in batch
             }  # Shape (R, B, C, ...) or (R, T, B, C, ...)
 
+            if return_embeddings:
+                for src in embeddings:
+                    for k in embeddings[src]:
+                        # Stack over time and realizations
+                        if return_intermediate_steps:
+                            # Shape (R, T, B, D, ...)
+                            embeddings[src][k] = torch.stack(
+                                [
+                                    torch.stack(embeddings[src][k][r])
+                                    for r in range(n_realizations_per_sample)
+                                ]
+                            )
+                        else:
+                            # Shape (R, B, D, ...)  --> take the last time step
+                            embeddings[src][k] = torch.stack(
+                                [
+                                    embeddings[src][k][r][-1]
+                                    for r in range(n_realizations_per_sample)
+                                ]
+                            )
+
             returned_dict = {
                 "avail_flags": avail_flags,
                 "time_grid": time_grid,
@@ -477,6 +565,8 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
                     source_index_pair: masked_batch[source_index_pair]["pred_mean"]
                     for source_index_pair in masked_batch
                 }
+            if return_embeddings:
+                returned_dict["embeddings"] = embeddings
             return returned_dict
 
     def make_deterministic_predictions(self, masked_x):
@@ -614,6 +704,8 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
                     sampled the solution, of shape (T,).
                 - true_vf (dict, optional): If return_true_vf is True, the true velocity
                     fields at each integration step, as tensors of shape (R, T-1, B, C, ...).
+                - embeddings (dict, optional): If return_embeddings is True, the embeddings
+                    of each source, as a dict of (src, index) tuples to dicts.
         """
         batch = self.preproc_input(batch)
 
@@ -622,6 +714,7 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
             batch,
             n_realizations_per_sample=self.n_realizations_per_sample,
             return_intermediate_steps=self.return_intermediate_steps,
+            return_embeddings=self.return_embeddings,
         )
 
         sol, avail_flags = sampling_dict["sol"], sampling_dict["avail_flags"]
@@ -663,6 +756,9 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
         if self.use_det_model and "pred_mean" in sampling_dict:
             output["pred_mean"] = sampling_dict["pred_mean"]
 
+        if self.return_embeddings and "embeddings" in sampling_dict:
+            output["embeddings"] = sampling_dict["embeddings"]
+
         return output
 
     def erase_source_data(self, data, to_erase):
@@ -688,7 +784,7 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
             )
         return new_data
 
-    def remove_closest_chronological_source(self, batch, min_sources=1):
+    def remove_closest_chronological_source(self, batch, min_sources=2):
         """For every sample in a batch, erases the source that is chronologically
         closest to the masked source. "Erasing" means setting all of its attributes
         to the values they would have if the source was missing (avail = -1, values = 0, etc).

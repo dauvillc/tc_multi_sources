@@ -107,26 +107,13 @@ class MultisourceGeneralBackbone(nn.Module):
         """
         Args:
             x (dict): Dictionary of inputs, such that
-                x[(source_name, index)] contains the keys "embedded_coords" and
-                "embedded_values".
+                x[(source_name, index)] contains the keys "coords" and "values".
                 where (source_name, index) is a tuple containing the source name
                 and the index of the observation (0 = most recent).
         Returns:
             dict: Dictionary of outputs, such that
                 outputs[(source_name, index)] contains the predicted values of the tokens.
         """
-        # Replace the keys "embedded_values" and "embedded_coords" with "values" and "coords"
-        # if needed.
-        for source_index_pair, source_data in x.items():
-            if "embedded_values" in source_data:
-                x[source_index_pair] = {
-                    k: v
-                    for k, v in source_data.items()
-                    if k not in ["embedded_values", "embedded_coords"]
-                }
-                x[source_index_pair]["values"] = source_data["embedded_values"]
-                x[source_index_pair]["coords"] = source_data["embedded_coords"]
-
         for block in self.blocks:
             # Update the values and coords via the successive layers
             for layer in block:
@@ -193,7 +180,7 @@ class AdapativeConditionalNormalization(nn.Module):
         """Args:
             data (dict): Dictionary of inputs, such that
                 data[(source_name, index)] contains the keys
-                "embedded_values", "embedded_coords", and "conditioning", where
+                "values", "coords", and "conditioning", where
                 (source_name, index) is a tuple containing the source name
                 and observation index (0 = most recent).
             args, kwargs: Additional arguments for the wrapped module.

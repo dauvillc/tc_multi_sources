@@ -14,9 +14,10 @@ from multi_sources.models.perceiver.transformer import ValuesCoordinatesTransfor
 class MultisourcePerceiver(nn.Module):
     """Implements a Perceiver model (Jaegle et al., 2022) adapted to process
     multiple tasks. The perceiver performs the following steps:
-    - Create two learned latent arrays Lv and Lc of shapes (N, Dv) and (M, Dc),
-        for the values and coordinates, respectively.
-    - Perform cross-attention the input values and coordinates with the latent arrays.
+    - Create three learned latent arrays Lv, Lc and Ld of shapes (N, Dv), (N, Dc) and (N, Dv)
+        for the values, coordinates and conditioning respectively.
+    - Perform cross-attention between the input data and the latent arrays, to fill the
+        latter with latent representations of the input values, coords and conditioning.
     - Feed the updated latent arrays through a transformer.
     - Use the reconstructed sources' coordinates as queries in a final attention
         layer to reconstruct the sources' values.
@@ -83,11 +84,11 @@ class MultisourcePerceiver(nn.Module):
         """
         Args:
             x (dict of str to dict of str to tensor): Dictionary of inputs, such that
-                x[src] contains at least the entries "embedded_values" and "embedded_coords".
+                x[src] contains at least the entries "values" and "coords".
 
         Returns:
             dict of str to tensor: Dict Y such that Y[src] is the output for source src,
-                of same shape as x[src]["embedded_values"].
+                of same shape as x[src]["values"].
         """
         # Encode the data within the latent values and coordinate arrays.
         Lv, Lc = self.encoder(x)
