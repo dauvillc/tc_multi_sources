@@ -104,6 +104,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         split,
         included_variables_dict,
         dt_max=24,
+        dt_max_norm=None,
         min_available_sources=0,
         source_types_min_avail={},
         source_types_max_avail={},
@@ -143,6 +144,8 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                 data but will be flagged as input-only in the Source object.
             dt_max (int): The maximum time delta between the elements returned for each source,
                 in hours.
+            dt_max_norm (int): If not None, the value to use for normalizing the time delta.
+                If None, will use dt_max.
             min_available_sources (int): The minimum number of sources that must be available
                 for a sample to be included in the dataset. Does NOT include the forecast source
                 if it is enabled.
@@ -184,6 +187,10 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         self.processed_dir = self.dataset_dir / "prepared"
         self.split = split
         self.dt_max = pd.Timedelta(dt_max, unit="h")
+        if dt_max_norm is not None:
+            self.dt_max_norm = pd.Timedelta(dt_max_norm, unit="h")
+        else:
+            self.dt_max_norm = self.dt_max
         self.source_types_max_avail = source_types_max_avail
         self.min_ref_time_delta = min_ref_time_delta
         self.select_most_recent = select_most_recent
@@ -457,7 +464,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
             time = row["time"]
             dt = t0 - self.forecasting_lead_time - time
             DT = torch.tensor(
-                dt.total_seconds() / self.dt_max.total_seconds(),
+                dt.total_seconds() / self.dt_max_norm.total_seconds(),
                 dtype=torch.float32,
             )
 
