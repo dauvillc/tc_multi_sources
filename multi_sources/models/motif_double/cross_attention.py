@@ -39,6 +39,7 @@ class MultisourcesWindowedCrossAttention(nn.Module):
         num_heads=8,
         learned_coords_weight=True,
         mask_self_attention=True,
+        update_coords=False,
         dropout=0.0,
     ):
         """
@@ -54,6 +55,8 @@ class MultisourcesWindowedCrossAttention(nn.Module):
                 the attention computation by a learned parameter.
             mask_self_attention (bool, optional): Whether to mask out attention weights
                 between elements of the same source.
+            update_coords (bool, optional): Whether to update the coordinates
+                based on attention. Defaults to False.
             dropout (float, optional): Dropout rate for attention weights. Defaults to 0.0.
         """
         super().__init__()
@@ -63,6 +66,7 @@ class MultisourcesWindowedCrossAttention(nn.Module):
         self.num_heads = num_heads
         self.dropout = dropout
         self.mask_self_attention = mask_self_attention
+        self.update_coords = update_coords
 
         self.inner_qk_v_dim = int(values_dim * inner_ratio_qk)
         self.inner_qk_c_dim = int(coords_dim * inner_ratio_qk)
@@ -94,6 +98,15 @@ class MultisourcesWindowedCrossAttention(nn.Module):
         # Attention dropout
         self.attn_dropout = nn.Dropout(dropout)
 
+        # If updating coordinates, we'll need to create the same ingredients as
+        # for the values.
+        if self.update_coords:
+            self.inner_v_c_dim = int(coords_dim * inner_ratio_v)
+            if self.inner_v_c_dim % num_heads != 0:
+                self.inner_v_c_dim += num_heads - (self.inner_v_c_dim % num_heads)
+            self.coords_v_proj = nn.Linear(coords_dim, self.inner_v_c_dim, bias=False)
+            self.coords_v_back_proj = nn.Linear(self.inner_v_c_dim, coords_dim, bias=False)
+
     def forward(self, inputs):
         """
         Args:
@@ -107,10 +120,11 @@ class MultisourcesWindowedCrossAttention(nn.Module):
 
         Returns:
             dict: Dictionary of outputs, such that
-                outputs[(source_name, index)] contains the keys "values" with the updated values.
+                outputs[(source_name, index)] contains the keys "values" with the updated values,
+                and "coords" with the updated coordinates if update_coords is True.
         """
         keys_v, queries_v, keys_c, queries_c = {}, {}, {}, {}
-        values_v = {}
+        values_v, coords_v = {}, {}  # Values to be re-weighted
         windowed_shapes, n_windows = {}, []
         for source, source_data in inputs.items():
             C, V = source_data["coords"], source_data["values"]
@@ -164,12 +178,17 @@ class MultisourcesWindowedCrossAttention(nn.Module):
                 "b Wh Ww n (e H) -> b H (Wh Ww) (n e)",
                 H=self.num_heads,
             )
+            if self.update_coords:
+                Cv = self.coords_v_proj(C)
+                coords_v[source] = rearrange(
+                    Cv,
+                    "b Wh Ww n (e H) -> b H (Wh Ww) (n e)",
+                    H=self.num_heads,
+                )
 
         # Concatenate all sequences across sources
         queries_v = torch.cat(list(queries_v.values()), dim=-2)  # (B, H, N, Dv)
         keys_v = torch.cat(list(keys_v.values()), dim=-2)  # (B, H, N, Dv)
-        # (B, H, N, Dv' * n // H) where n is the number of elements in a window
-        values_v = torch.cat(list(values_v.values()), dim=-2)
         queries_c = torch.cat(list(queries_c.values()), dim=-2)  # (B, H, N, Dc)
         keys_c = torch.cat(list(keys_c.values()), dim=-2)  # (B, H, N, Dc)
 
@@ -189,6 +208,9 @@ class MultisourcesWindowedCrossAttention(nn.Module):
         attn_weights = F.softmax(attn_weights, dim=-1)
         attn_weights = self.attn_dropout(attn_weights)
 
+        # Concatenate the values across sources
+        # (B, H, N, Dv' * n // H) where n is the number of elements in a window
+        values_v = torch.cat(list(values_v.values()), dim=-2)
         # Compute the re-weighted values
         reweighted_values = attn_weights @ values_v  # (B, H, N, Dv' * n // H)
         # Project back to the original values dimension
@@ -201,6 +223,19 @@ class MultisourcesWindowedCrossAttention(nn.Module):
         reweighted_values = self.values_v_back_proj(reweighted_values)  # (B, N, n, Dv)
         # Split back into the sources
         reweighted_values = torch.split(reweighted_values, n_windows, dim=1)
+
+        if self.update_coords:
+            values_c = torch.cat(list(coords_v.values()), dim=-2)
+            reweighted_coords = attn_weights @ values_c  # (B, H, N, Dc' * n // H)
+            reweighted_coords = rearrange(
+                reweighted_coords,
+                "b H N (n e) -> b N n (e H)",
+                n=self.window_size**2,
+                e=self.inner_v_c_dim // self.num_heads,
+            )  # (B, N, n, Dc')
+            reweighted_coords = self.coords_v_back_proj(reweighted_coords)  # (B, N, n, Dc)
+            reweighted_coords = torch.split(reweighted_coords, n_windows, dim=1)
+
         # Re-insert the updated values back into the windows
         outputs = {}
         for i, (source, (Wh, Ww)) in enumerate(windowed_shapes.items()):
@@ -220,4 +255,18 @@ class MultisourcesWindowedCrossAttention(nn.Module):
             outputs[source] = {
                 "values": V,
             }
+
+            if self.update_coords:
+                if len(windowed_shapes[source]) == 2:
+                    C = rearrange(
+                        reweighted_coords[i],
+                        "b (Wh Ww) (w1 w2) d -> b (Wh w1) (Ww w2) d",
+                        Wh=Wh,
+                        Ww=Ww,
+                        w1=self.window_size,
+                        w2=self.window_size,
+                    )
+                    h, w = inputs[source]["coords"].shape[1:3]
+                    C = C[:, :h, :w, :]
+                outputs[source]["coords"] = C
         return outputs

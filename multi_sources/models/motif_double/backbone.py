@@ -64,6 +64,7 @@ class MultisourceGeneralBackbone(nn.Module):
                             inner_ratio_qk=att_inner_ratio,
                             window_size=cross_att_window_size,
                             inner_ratio_v=cross_att_inner_ratio_v,
+                            update_coords=update_coords,
                         ),
                         values_dim,
                         coords_dim,
