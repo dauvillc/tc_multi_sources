@@ -36,6 +36,41 @@ class MLP(nn.Module):
         return x
 
 
+class VCMLP(nn.Module):
+    """Wraps two separate MLPs for the latent values and coordinates."""
+
+    def __init__(
+        self,
+        values_dim,
+        coords_dim,
+        n_hidden_layers,
+        inner_ratio,
+        dropout=0.0,
+        act_layer=nn.GELU,
+        **kwargs
+    ):
+        super().__init__()
+        self.values_mlp = MLP(
+            values_dim,
+            n_hidden_layers,
+            inner_ratio,
+            dropout=dropout,
+            act_layer=act_layer,
+        )
+        self.coords_mlp = MLP(
+            coords_dim,
+            n_hidden_layers,
+            inner_ratio,
+            dropout=dropout,
+            act_layer=act_layer,
+        )
+
+    def forward(self, Lv, Lc, Ld):
+        Lv = self.values_mlp(Lv)
+        Lc = self.coords_mlp(Lc)
+        return Lv, Lc, Ld
+
+
 # Copyright (c) Meta Platforms, Inc. and affiliates.
 # All rights reserved.
 #

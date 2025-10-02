@@ -1,4 +1,5 @@
 import numpy as np
+import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange
@@ -35,6 +36,7 @@ class ValuesCoordinatesSelfAttention(nn.Module):
         self.inner_dim = int(inner_ratio * values_dim)
         self.head_dim = self.inner_dim // num_heads
         self.num_heads = num_heads
+        self.att_lambda = nn.Parameter(torch.randn(1), requires_grad=True)
 
         self.v_norm = nn.LayerNorm(values_dim)
         self.c_norm = nn.LayerNorm(coords_dim)
@@ -57,15 +59,18 @@ class ValuesCoordinatesSelfAttention(nn.Module):
             nn.Linear(self.inner_dim, coords_dim), nn.Dropout(dropout)
         )
 
-    def forward(self, V, C):
+    def forward(self, V, C, D):
         """
         Args:
             V (tensor): Values tensor of shape (batch_size, num_values, values_dim).
             C (tensor): Coordinates tensor of shape (batch_size, num_values, coords_dim).
+            D (tensor): Conditioning tensor of shape (batch_size, num_values, values_dim).
+                Not actually used, but kept for compatibility with other layers.
 
         Returns:
             tensor: Updated values tensor of shape (batch_size, num_values, values_dim).
             tensor: Updated coordinates tensor of shape (batch_size, num_values, coords_dim).
+            tensor: Unchanged conditioning tensor of shape (batch_size, num_values, values_dim).
         """
         # Normalize the values and coordinates.
         V = self.v_norm(V)
@@ -86,7 +91,7 @@ class ValuesCoordinatesSelfAttention(nn.Module):
         )
 
         # Compute the common attention map.
-        attn_map = qc @ kc.transpose(-2, -1) + qv @ kv.transpose(-2, -1)
+        attn_map = qc @ kc.transpose(-2, -1) + self.att_lambda * (qv @ kv.transpose(-2, -1))
         attn_map /= np.sqrt(self.head_dim)
         attn_map = F.softmax(attn_map, dim=-1)
         attn_map = self.dropout(attn_map)
@@ -99,4 +104,4 @@ class ValuesCoordinatesSelfAttention(nn.Module):
         out_c = rearrange(out_c, "b h n d -> b n (h d)")
         out_c = self.output_proj_c(out_c)
 
-        return out_v, out_c
+        return out_v, out_c, D

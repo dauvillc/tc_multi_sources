@@ -1,12 +1,12 @@
 dropout: 0.0
-values_dim: 256
+values_dim: 512
 coords_dim: 256
 backbone:
   _target_: multi_sources.models.perceiver.core.MultisourcePerceiver
   values_dim: ${model.values_dim}
   coords_dim: ${model.coords_dim}
   latent_seq_len: 256
-  num_blocks: 8
+  num_blocks: 12
   att_inner_ratio: 1
   num_heads: 8
   mlp_inner_ratio: 2
