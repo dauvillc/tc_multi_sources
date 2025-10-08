@@ -133,10 +133,11 @@ class TrainJob(submitit.helpers.Checkpointable):
             save_top_k=1,
         )
         # Model checkpoint every 30 minutes
+        ckpt_time_interval = cfg.get("checkpoint_time_interval", 30)  # in minutes
         time_checkpoint_callback = ModelCheckpoint(
             dirpath=Path(cfg["paths"]["checkpoints"]) / run_id,
             filename=f"{run_id}-" + "{epoch}-{step}",
-            train_time_interval=timedelta(minutes=30),
+            train_time_interval=timedelta(minutes=ckpt_time_interval),
             save_top_k=-1,  # Save all checkpoints
         )
 
