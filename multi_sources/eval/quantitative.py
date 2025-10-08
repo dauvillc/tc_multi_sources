@@ -105,10 +105,17 @@ class QuantitativeEvaluation(AbstractMultisourceEvaluationMetric):
                             "mse": mse,
                             "crps": crps,
                         }
-                        # Compute the SSR only if there are multiple realizations
-                        if pred_data_channel.shape[0] > 1:
-                            ssr = self._compute_ssr(pred_data_channel, target_data_channel)
-                            sample_results_dict["ssr"] = ssr
+                        n_real = pred_data_channel.shape[0]
+                        if n_real > 1:
+                            # If there are multiple realizations, we can compute the SSR.
+                            # We'll here just compute the MSE and the ensemble member variance,
+                            # and aggregate them later to get the SSR.
+                            ensemble_var, ensemble_mean_mse = self._compute_err_and_member_var(
+                                pred_data_channel, target_data_channel
+                            )
+                            sample_results_dict["ssr"] = np.sqrt(((n_real + 1) / n_real)) * (
+                                ensemble_var / ensemble_mean_mse
+                            )
                         results.append(sample_results_dict)
 
         # Concatenate all results into a single DataFrame
@@ -269,10 +276,9 @@ class QuantitativeEvaluation(AbstractMultisourceEvaluationMetric):
         return crps.item()
 
     @staticmethod
-    def _compute_ssr(pred_data, target_data):
-        """Computes the Skill-Spread Ratio (SSR) between predictions and targets.
-        The SSR is defined as the ratio of the RMSE to the ensemble spread (standard deviation
-        of the ensemble members). A lower SSR indicates a better-calibrated ensemble.
+    def _compute_err_and_member_var(pred_data, target_data):
+        """Computes the unbiased MSE between the ensemble mean and the target,
+        as well as the ensemble member variance.
 
         Args:
             pred_data (np.ndarray): Predicted data, of shape (M, ...) where M is the number of
@@ -280,20 +286,15 @@ class QuantitativeEvaluation(AbstractMultisourceEvaluationMetric):
             target_data (np.ndarray): Target data, of shape (...) matching the shape of each
                 realization in pred_data.
         Returns:
-            ssr (float): The computed Skill-Spread Ratio.
-
-        Raises:
-            ValueError: If pred_data does not have multiple realizations (M < 2).
+            var (float): Ensemble member variance.
+            mean_mse (float): Debiased MSE between the ensemble mean and the target.
         """
         pred_data, target_data = flatten_and_ignore_nans(pred_data, target_data)
-        n_realizations = pred_data.shape[0]
-        if n_realizations < 2:
-            raise ValueError("SSR requires multiple realizations in pred_data.")
-        # Compute the RMSE between the ensemble mean and the target
+        K = pred_data.shape[0]  # Number of ensemble members
+        # Compute the ensemble mean
         ensemble_mean = pred_data.mean(axis=0)
-        rmse = np.sqrt(((ensemble_mean - target_data) ** 2).mean())
-        # Compute the ensemble spread (standard deviation of the ensemble members)
-        ensemble_spread = pred_data.std(axis=0).mean()
-        # Compute the SSR
-        ssr = rmse / ensemble_spread if ensemble_spread > 0 else np.inf
-        return ssr.item()
+        # Compute the finite-sample variance of the ensemble members
+        var = ((pred_data - ensemble_mean[None, :]) ** 2).mean() * (K / (K - 1))
+        # Compute the unbiased mean squared error (MSE)
+        mean_mse = ((ensemble_mean - target_data) ** 2).mean()
+        return var, mean_mse

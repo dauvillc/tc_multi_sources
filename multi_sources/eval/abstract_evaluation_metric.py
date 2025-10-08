@@ -59,6 +59,7 @@ class AbstractMultisourceEvaluationMetric(abc.ABC):
         model_data,
         parent_results_dir,
         source_name_replacements=None,
+        channel_replacements=None,
         disable_checks=False,
     ):
         """
@@ -76,6 +77,9 @@ class AbstractMultisourceEvaluationMetric(abc.ABC):
             source_name_replacements (List of tuple of str, optional): List of (pattern, replacement)
                 substitutions to apply to source names for display purposes. The replacement
                 is done using the re.sub function.
+            channel_replacements (List of tuple of str, optional): List of (pattern, replacement)
+                substitutions to apply to channel names for display purposes. The replacement
+                is done using the re.sub function.
             disable_checks (bool): If True, disables the sanity checks on the model data.
         """
         self.id_name = id_name
@@ -83,6 +87,7 @@ class AbstractMultisourceEvaluationMetric(abc.ABC):
         self.model_data = model_data
         self.parent_results_dir = Path(parent_results_dir)
         self.source_name_replacements = source_name_replacements or []
+        self.channel_replacements = channel_replacements or []
 
         # Create a directory for this evaluation metric
         self.metric_results_dir = self.parent_results_dir / id_name
@@ -178,7 +183,7 @@ class AbstractMultisourceEvaluationMetric(abc.ABC):
             predictions (dict): Dict model_id -> (src_name, src_index) -> xarray.Dataset
             embeddings (dict): Dict model_id -> (src_name, src_index) -> xarray.Dataset
                 Only if embeddings are available.
-            true_vf (dict): Dict (src_name, src_index) -> xarray.Dataset
+            true_vf (dict): Dict model_id -> (src_name, src_index) -> xarray.Dataset
                 Only if true velocity fields are available.
         """
         targets, predictions, embeddings, true_vf = {}, {}, {}, {}
@@ -195,18 +200,30 @@ class AbstractMultisourceEvaluationMetric(abc.ABC):
                 # Load targets for the first model only (since they are the same for all)
                 if i == 0:
                     target_path = root_dir / "targets" / src / str(index) / f"{sample_index}.nc"
-                    targets[(src, index)] = xr.open_dataset(target_path)
+                    targets_ds = xr.open_dataset(target_path)
+                    targets[(src, index)] = apply_channel_name_replacements(
+                        targets_ds, self.channel_replacements
+                    )
                 # Load predictions for all models
                 pred_path = root_dir / "predictions" / src / str(index) / f"{sample_index}.nc"
-                predictions[model_id][(src, index)] = xr.open_dataset(pred_path)
+                predictions_ds = xr.open_dataset(pred_path)
+                predictions[model_id][(src, index)] = apply_channel_name_replacements(
+                    predictions_ds, self.channel_replacements
+                )
                 # Load embeddings if available
                 emb_path = root_dir / "embeddings" / src / str(index) / f"{sample_index}.nc"
                 if emb_path.exists():
-                    embeddings[model_id][(src, index)] = xr.open_dataset(emb_path)
+                    embeddings_ds = xr.open_dataset(emb_path)
+                    embeddings[model_id][(src, index)] = apply_channel_name_replacements(
+                        embeddings_ds, self.channel_replacements
+                    )
                 # Load true velocity fields if available
                 vf_path = root_dir / "true_vf" / src / str(index) / f"{sample_index}.nc"
                 if vf_path.exists():
-                    true_vf[model_id][(src, index)] = xr.open_dataset(vf_path)
+                    true_vf_ds = xr.open_dataset(vf_path)
+                    true_vf[model_id][(src, index)] = apply_channel_name_replacements(
+                        true_vf_ds, self.channel_replacements
+                    )
 
         return targets, predictions, embeddings, true_vf
 
@@ -226,3 +243,21 @@ class AbstractMultisourceEvaluationMetric(abc.ABC):
         for pattern, replacement in self.source_name_replacements:
             src_name = re.sub(pattern, replacement, src_name)
         return src_name
+
+
+def apply_channel_name_replacements(ds, channel_replacements):
+    """Applies the channel name replacements to the variables of an xarray dataset."""
+    if not channel_replacements:
+        return ds
+    # For each channel, apply the replacements to its name and rename it
+    # in the dataset
+    rename_dict = {}
+    for var in ds.data_vars:
+        new_var = var
+        for pattern, replacement in channel_replacements:
+            new_var = re.sub(pattern, replacement, new_var)
+        if new_var != var:
+            rename_dict[var] = new_var
+    if rename_dict:
+        ds = ds.rename_vars(rename_dict)
+    return ds
