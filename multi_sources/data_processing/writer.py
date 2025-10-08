@@ -29,13 +29,14 @@ class MultiSourceWriter(BasePredictionWriter):
 
     The predictions are written to disk in the following format:
     root_dir/targets/source_name/index/<sample_index>.nc
-    root_dir/predictions/source_name/index/<sample_index>.nc
-    root_dir/embeddings/source_name/index/<sample_index>.nc
-    Additionally, the file root_dir/info.csv is written with the following columns:
-    source_name, avail, dt, channels, spatial_shape, has_multiple_realizations.
+    root_dirpredictions/source_name/index/<sample_index>.nc
+    root_dirtrue_vf/source_name/index/<sample_index>.nc
+    root_dirembeddings/source_name/index/<sample_index>.nc
+    Additionally, for each rank a file root_dir/info_<rank>.csv is written
+    and contains a DataFrame with the metadata.
     """
 
-    def __init__(self, root_dir, dt_max, dataset=None):
+    def __init__(self, root_dir, dt_max, dataset=None, mode="w"):
         """
         Args:
             root_dir (str or Path): The root directory where the predictions will be written.
@@ -44,25 +45,30 @@ class MultiSourceWriter(BasePredictionWriter):
                 normalize(values, source_name, denorm=False) that can be used to denormalize the
                 values before writing them to disk. If None, the values will
                 not be denormalized.
+            mode (str): Writing mode, either 'w' to erase pre-existing data and start fresh,
+                or 'a' to append to existing data.
         """
         super().__init__(write_interval="batch")
         self.root_dir = Path(root_dir)
         self.dt_max = dt_max
         self.dataset = dataset
+        if mode == "w":
+            if self.root_dir.exists():
+                shutil.rmtree(self.root_dir)
+        self.root_dir.mkdir(parents=True, exist_ok=True)
 
     def setup(self, trainer, pl_module, stage):
-        # Recreate the root directory if it already exists
-        if self.root_dir.exists():
-            shutil.rmtree(self.root_dir)
-        self.root_dir.mkdir(parents=True, exist_ok=True)
+        self.rank = str(trainer.global_rank)
         self.targets_dir = self.root_dir / "targets"
         self.predictions_dir = self.root_dir / "predictions"
         self.embeddings_dir = self.root_dir / "embeddings"
         self.true_vf_dir = self.root_dir / "true_vf"
+        self.info_dir = self.root_dir / "info"
         self.targets_dir.mkdir(parents=True, exist_ok=True)
         self.predictions_dir.mkdir(parents=True, exist_ok=True)
         self.embeddings_dir.mkdir(parents=True, exist_ok=True)
         self.true_vf_dir.mkdir(parents=True, exist_ok=True)
+        self.info_dir.mkdir(parents=True, exist_ok=True)
 
     def write_on_batch_end(
         self, trainer, pl_module, prediction, batch_indices, batch, batch_idx, dataloader_idx
@@ -101,9 +107,11 @@ class MultiSourceWriter(BasePredictionWriter):
             )
         # We'll create a "sample_index" coordinate that is unique across all batches
         sample_indexes = batch_indices
+        # We'll add the rank as a prefix to ensure uniqueness across ranks
+        sample_indexes = [f"{self.rank}_{idx}" for idx in sample_indexes]
 
         # We'll write to the info file in append mode
-        info_file = self.root_dir / "info.csv"
+        info_file = self.root_dir / f"info_{self.rank}.csv"
         for source_index_pair, data in batch.items():
             source_name, src_index = source_index_pair  # Unpack the tuple
             with torch.no_grad():
@@ -303,7 +311,7 @@ class MultiSourceWriter(BasePredictionWriter):
                         sample_embedding_ds = embedding_ds.sel(sample=sample_idx)
                         sample_embedding_ds.to_netcdf(embedding_dir / f"{sample_idx}.nc")
 
-                # ================= INFO FILE =================
+                # ================= INFO FILES =================
                 batch_size = latlon.shape[0]
                 # Convert the time deltas from fractions of dt_max to absolute durations
                 # in hours.

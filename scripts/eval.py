@@ -9,15 +9,15 @@ You can also specify a custom name for the evaluation using the 'eval_name' para
 If not provided, a timestamp will be used.
 
 The predictions from those runs must have been previously saved using
-scripts/make_predictions_mae.py.
+scripts/make_predictions.py.
 
 The predictions are saved in the following format:
 targets:
-- root_dir / targets / source_name / <batch_index.npy>
+- root_dir / <rank> / targets / source_name / <batch_index.npy>
 predictions:
-- root_dir / outputs / source_name / <batch_index.npy>
+- root_dir / <rank> / outputs / source_name / <batch_index.npy>
 info dataframe:
-- root_dir / info.csv
+- root_dir / <rank> / info.csv
 
 Each batch is an array of shape (batch_size, channels, height, width).
 Note that a given batch may not be included in all sources, and a batch
@@ -102,14 +102,24 @@ def main(cfg: DictConfig):
                     Please run scripts/make_predictions_mae.py first."
             )
 
-        info_filepath = root_dir / "info.csv"
-        # Load the info dataframe written by the writer.
-        info_df = pd.read_csv(info_filepath)
-        info_df["dt"] = pd.to_timedelta(info_df["dt"]).dt.round("min")
-        # Convert the "spatial_shape" from string to tuple
-        info_df["spatial_shape"] = info_df["spatial_shape"].apply(
-            lambda x: tuple(map(int, x.strip("()").split(", "))) if x != "()" else ()
-        )
+        # Load the info dataframe for each rank
+        rank_csvs = sorted(root_dir.glob("info_*.csv"))
+        if not rank_csvs:
+            raise ValueError(f"No info CSV files found in {root_dir}.")
+        info_dfs = []
+        for rank, rank_csv in enumerate(rank_csvs):
+            # Load the info dataframe written by the writer.
+            rank_df = pd.read_csv(rank_csv)
+            rank_df["dt"] = pd.to_timedelta(rank_df["dt"]).dt.round("min")
+            # Convert the "spatial_shape" from string to tuple
+            rank_df["spatial_shape"] = rank_df["spatial_shape"].apply(
+                lambda x: tuple(map(int, x.strip("()").split(", "))) if x != "()" else ()
+            )
+            rank_df["rank"] = rank  # Add the rank column
+            info_dfs.append(rank_df)
+
+        # Concatenate all rank dataframes into a single dataframe
+        info_df = pd.concat(info_dfs, ignore_index=True).reset_index(drop=True)
 
         # Add model identification to the dataframe
         info_df["run_id"] = run_id
