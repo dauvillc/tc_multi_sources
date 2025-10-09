@@ -1,7 +1,7 @@
 """Implements the MultiSourceWriter class"""
 
 import gc
-import shutil
+import os
 from pathlib import Path
 
 import numpy as np
@@ -9,6 +9,18 @@ import pandas as pd
 import torch
 import xarray as xr
 from lightning.pytorch.callbacks import BasePredictionWriter
+
+
+def atomic_to_netcdf(ds: xr.Dataset, path: Path):
+    """Atomic write to netcdf file. Absolutely written
+    by a LLM."""
+    tmp = path.with_suffix(path.suffix + f".{os.getpid()}.tmp")
+    ds.to_netcdf(tmp)
+    try:
+        os.replace(tmp, path)  # atomic move on POSIX
+    except FileExistsError:
+        # Someone else already wrote the real file
+        tmp.unlink(missing_ok=True)
 
 
 class MultiSourceWriter(BasePredictionWriter):
@@ -45,17 +57,16 @@ class MultiSourceWriter(BasePredictionWriter):
                 normalize(values, source_name, denorm=False) that can be used to denormalize the
                 values before writing them to disk. If None, the values will
                 not be denormalized.
-            mode (str): Writing mode, either 'w' to erase pre-existing data and start fresh,
+            mode (str): Writing mode, either 'w' to erase any pre-existing info data,
                 or 'a' to append to existing data.
         """
         super().__init__(write_interval="batch")
         self.root_dir = Path(root_dir)
         self.dt_max = dt_max
         self.dataset = dataset
-        if mode == "w":
-            if self.root_dir.exists():
-                shutil.rmtree(self.root_dir)
-        self.root_dir.mkdir(parents=True, exist_ok=True)
+        self.mode = mode
+        if not root_dir.exists():
+            self.root_dir.mkdir(parents=True, exist_ok=True)
 
     def setup(self, trainer, pl_module, stage):
         self.rank = str(trainer.global_rank)
@@ -63,12 +74,13 @@ class MultiSourceWriter(BasePredictionWriter):
         self.predictions_dir = self.root_dir / "predictions"
         self.embeddings_dir = self.root_dir / "embeddings"
         self.true_vf_dir = self.root_dir / "true_vf"
-        self.info_dir = self.root_dir / "info"
         self.targets_dir.mkdir(parents=True, exist_ok=True)
         self.predictions_dir.mkdir(parents=True, exist_ok=True)
         self.embeddings_dir.mkdir(parents=True, exist_ok=True)
         self.true_vf_dir.mkdir(parents=True, exist_ok=True)
-        self.info_dir.mkdir(parents=True, exist_ok=True)
+        self.info_file = self.root_dir / f"info_{self.rank}.csv"
+        if self.mode == "w" and self.info_file.exists():
+            self.info_file.unlink()
 
     def write_on_batch_end(
         self, trainer, pl_module, prediction, batch_indices, batch, batch_idx, dataloader_idx
@@ -105,13 +117,9 @@ class MultiSourceWriter(BasePredictionWriter):
             raise ValueError(
                 "Unexpected prediction format. Expected dictionary with 'sol'/'predictions' and 'avail_flags' keys."
             )
-        # We'll create a "sample_index" coordinate that is unique across all batches
         sample_indexes = batch_indices
-        # We'll add the rank as a prefix to ensure uniqueness across ranks
-        sample_indexes = [f"{self.rank}_{idx}" for idx in sample_indexes]
 
         # We'll write to the info file in append mode
-        info_file = self.root_dir / f"info_{self.rank}.csv"
         for source_index_pair, data in batch.items():
             source_name, src_index = source_index_pair  # Unpack the tuple
             with torch.no_grad():
@@ -179,7 +187,7 @@ class MultiSourceWriter(BasePredictionWriter):
                     if avail_tensors[source_index_pair][k].item() == -1:
                         continue
                     sample_target_ds = targets_ds.sel(sample=sample_idx)
-                    sample_target_ds.to_netcdf(target_dir / f"{sample_idx}.nc")
+                    atomic_to_netcdf(sample_target_ds, target_dir / f"{sample_idx}.nc")
 
                 # ================= PREDICTIONS =================
                 if source_index_pair in pred:
@@ -237,7 +245,7 @@ class MultiSourceWriter(BasePredictionWriter):
                         if avail_tensors[source_index_pair][k].item() == -1:
                             continue
                         sample_prediction_ds = predictions_ds.sel(sample=sample_idx)
-                        sample_prediction_ds.to_netcdf(prediction_dir / f"{sample_idx}.nc")
+                        atomic_to_netcdf(sample_prediction_ds, prediction_dir / f"{sample_idx}.nc")
 
                 # ================= TRUE VF =================
                 if "true_vf" in prediction and source_index_pair in prediction["true_vf"]:
@@ -248,7 +256,8 @@ class MultiSourceWriter(BasePredictionWriter):
                     true_vf_dir.mkdir(parents=True, exist_ok=True)
                     # When there is a true vf, it always has the same dimensions as the flow matching
                     # predictions, except the time grid doesn't include the last time (which is 1.0).
-                    pred_coords["integration_step"] = time_grid[:-1]
+                    tvf_coords = dict(pred_coords)
+                    tvf_coords["integration_step"] = time_grid[:-1]
                     true_vf_ds = xr.Dataset(
                         {
                             var: (
@@ -257,13 +266,13 @@ class MultiSourceWriter(BasePredictionWriter):
                             )  # Realization, batch, channel
                             for i, var in enumerate(output_var_names)
                         },
-                        coords=pred_coords,
+                        coords=tvf_coords,
                     )
                     for k, sample_idx in enumerate(sample_indexes):
                         if avail_tensors[source_index_pair][k].item() == -1:
                             continue
                         sample_true_vf_ds = true_vf_ds.sel(sample=sample_idx)
-                        sample_true_vf_ds.to_netcdf(true_vf_dir / f"{sample_idx}.nc")
+                        atomic_to_netcdf(sample_true_vf_ds, true_vf_dir / f"{sample_idx}.nc")
 
                 # ================= EMBEDDINGS =================
                 if embeddings is not None and source_index_pair in embeddings:
@@ -309,7 +318,7 @@ class MultiSourceWriter(BasePredictionWriter):
                         if avail_tensors[source_index_pair][k].item() == -1:
                             continue
                         sample_embedding_ds = embedding_ds.sel(sample=sample_idx)
-                        sample_embedding_ds.to_netcdf(embedding_dir / f"{sample_idx}.nc")
+                        atomic_to_netcdf(sample_embedding_ds, embedding_dir / f"{sample_idx}.nc")
 
                 # ================= INFO FILES =================
                 batch_size = latlon.shape[0]
@@ -339,8 +348,8 @@ class MultiSourceWriter(BasePredictionWriter):
                 )
                 # Remove the rows where the source is not available
                 info_df = info_df[info_df["avail"] != -1]
-                include_header = not info_file.exists()
-            info_df.to_csv(info_file, mode="a", header=include_header, index=False)
+                include_header = not self.info_file.exists()
+            info_df.to_csv(self.info_file, mode="a", header=include_header, index=False)
 
             # The lightning Trainer object keeps the predictions in memory for
             # write_on_epoch_end. Since we'll never call that method, we can clear the predictions
