@@ -64,6 +64,15 @@ class VisualEvaluationComparison(AbstractMultisourceEvaluationMetric):
             **kwargs: Additional keyword arguments (num_workers not used for visualization)
         """
         n_samples = int(self.eval_fraction * self.n_samples)
+        # Decide on a random subset of samples to evaluate
+        if self.eval_fraction < 1.0:
+            rng = np.random.default_rng(seed=42)
+            selected_indices = set(rng.choice(self.n_samples, size=n_samples, replace=False))
+            self.samples_iterator = lambda: (
+                (df, data)
+                for i, (df, data) in enumerate(self.samples_iterator())
+                if i in selected_indices
+            )
         for i, (sample_df, sample_data) in enumerate(
             tqdm(self.samples_iterator(), desc="Evaluating samples", total=n_samples)
         ):
@@ -83,9 +92,6 @@ class VisualEvaluationComparison(AbstractMultisourceEvaluationMetric):
                     sample_df,
                     channels[channel_idx],
                 )
-
-            if i + 1 >= n_samples:
-                break
 
     def crop_padded_borders(self, sample_data, sample_df, channel_idx):
         """Crops the padded borders in the sample data.
@@ -253,7 +259,7 @@ class VisualEvaluationComparison(AbstractMultisourceEvaluationMetric):
         plt.suptitle(channel, fontsize=16)
         plt.tight_layout()
         # Save the figure
-        fig_path = self.metric_results_dir / f"sample_{sample_index:04d}_{channel}.png"
+        fig_path = self.metric_results_dir / f"sample_{sample_index}_{channel}.png"
         fig.savefig(fig_path)
 
         plt.close(fig)
