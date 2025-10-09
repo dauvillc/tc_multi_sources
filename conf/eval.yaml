@@ -3,10 +3,12 @@
 defaults:
   - paths: jz
   - eval_class: [quantitative, visual]
+  - setup: ???
   - _self_
 
 disable_checks: false  # Whether to disable sanity checks on the model info dataframes.
 
+eval_name: ???
 models: ???
 num_workers: 9
 
