@@ -2,7 +2,7 @@
 
 import json
 from collections import defaultdict
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 import numpy as np
@@ -369,26 +369,21 @@ class MultiSourceDataset(torch.utils.data.Dataset):
             )
         else:
             with ProcessPoolExecutor(max_workers=num_workers) as executor:
-                futures = []
-                # Divide the full reference df in num_workers chunks and concatenate the resulting
-                # lists
+                # Divide the full reference df in num_workers chunks
                 chunks = np.array_split(self.reference_df, num_workers)
-                for i, chunk in enumerate(chunks):
-                    futures.append(
-                        executor.submit(
-                            precompute_samples,
-                            chunk,
-                            self.df,
-                            self.dt_max,
-                            self.forecasting_lead_time,
-                            self.forecasting_sources,
-                            self.select_most_recent,
-                            verbose=i == 0,
-                        )
-                    )
-                self.samples = []
-                for f in as_completed(futures):
-                    self.samples.extend(f.result())
+                results = executor.map(
+                    precompute_samples,
+                    chunks,
+                    [self.df] * len(chunks),
+                    [self.dt_max] * len(chunks),
+                    [self.forecasting_lead_time] * len(chunks),
+                    [self.forecasting_sources] * len(chunks),
+                    [self.select_most_recent] * len(chunks),
+                    [True] + [False] * (len(chunks) - 1),  # only the first chunk is verbose
+                )
+                self.samples = [item for sublist in results for item in sublist]
+        # Sort the samples by reference time
+        self.samples = sorted(self.samples, key=lambda x: x[0])
 
         # ========================================================================================
         # Load the data means and stds
@@ -441,6 +436,8 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                 (0 = most recent, 1 = second most recent, etc.)
         """
         t0, sample_df = self.samples[idx]
+        if idx < 32:
+            print(f"{idx}:", sample_df)
 
         # If selecting the sources randomly, we do it here so that if __getitem__(i) is called
         # twice, it may yield different results.
