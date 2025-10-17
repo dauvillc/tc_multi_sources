@@ -3,5 +3,5 @@ accelerator: gpu
 devices: 1
 precision: bf16
 gradient_clip_val: 1.0
-limit_train_batches: 0.05
-limit_val_batches: 0.05
+limit_train_batches: 0.1
+limit_val_batches: 0.1
