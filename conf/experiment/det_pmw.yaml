@@ -1,0 +1,24 @@
+# @package _global_
+defaults:
+  - override /sources: pmw_37_89
+  - override /lightning_module: deterministic
+  - override /lr_scheduler: cosine_warmup_100epochs
+  - override /metrics: default_fm
+  - override /model: msvit_10b_d256
+
+wandb:
+  name: det_pmw
+  group: det_pmw
+
+dataset:
+  train:
+    dt_max: 6
+    min_available_sources: 2
+    source_types_max_avail:
+      pmw: 3
+
+model:
+  dropout: 0.1
+
+trainer:
+  strategy: ddp

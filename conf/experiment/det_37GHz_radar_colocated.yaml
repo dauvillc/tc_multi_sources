@@ -1,0 +1,28 @@
+# @package _global_
+defaults:
+  - override /sources: 37GHz_radar_colocated
+  - override /lightning_module: deterministic
+  - override /lr_scheduler: cosine_warmup_100epochs
+  - override /metrics: default_fm
+  - override /model: msvit_8b_d256
+
+wandb:
+  name: det_37GHz_radar_colocated
+  group: det_37GHz_radar_colocated
+
+dataset:
+  train:
+    dt_max: 1
+    min_available_sources: 2
+    source_types_max_avail:
+      pmw: 1
+      radar: 1
+  
+lightning_module:
+  mask_only_sources: "radar"
+
+model:
+  dropout: 0
+
+trainer:
+  strategy: ddp_find_unused_parameters_true

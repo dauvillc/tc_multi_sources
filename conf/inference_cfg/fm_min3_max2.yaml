@@ -1,0 +1,25 @@
+# @package _global_
+pred_name: fm_min3_max2
+
+lightning_module:
+  cfg_scale: null
+  n_realizations_per_sample: 3
+
+dataset:
+  val:
+    dt_max: 6
+    min_ref_time_delta: 6
+    min_available_sources: 3
+    source_types_max_avail:
+      pmw: 2
+    select_most_recent: true
+    forecasting_sources: null
+    forecasting_lead_time: null
+  test:
+    dt_max: ${dataset.val.dt_max}
+    min_ref_time_delta: ${dataset.val.min_ref_time_delta}
+    min_available_sources: ${dataset.val.min_available_sources}
+    select_most_recent: ${dataset.val.select_most_recent}
+    forecasting_sources: ${dataset.val.forecasting_sources}
+    forecasting_lead_time: ${dataset.val.forecasting_lead_time}
+

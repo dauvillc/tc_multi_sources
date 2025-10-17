@@ -1,0 +1,19 @@
+# @package _global_
+defaults:
+  - override /paths: jz
+
+setup:
+  timeout_min: 240
+  cpus_per_task: 40
+  slurm_ntasks_per_node: 1
+  name: ${eval_name}
+  slurm_account: "xyw@cpu"
+  slurm_signal_delay_s: 120
+  slurm_additional_parameters:
+    hint: nomultithread
+  local_setup:
+    - module purge
+    - source ${oc.env:HOME}/.bash_profile
+    - module load pytorch-gpu/py3/2.6.0
+  
+num_workers: 39

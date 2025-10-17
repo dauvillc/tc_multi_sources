@@ -1,0 +1,25 @@
+# @package _global_
+defaults:
+  - override /sources: pmw_37_89
+  - override /lightning_module: fm_denoiser
+  - override /lr_scheduler: cosine_warmup_150epochs
+  - override /metrics: default_fm
+  - override /model: msvit_18b_d512
+
+lightning_module:
+  patch_size: 8
+  use_det_model_from_run: null
+
+wandb:
+  name: denoiser_pmw_direct
+  group: denoiser_pmw_direct
+
+dataset:
+  train:
+    dt_max: 6
+    min_available_sources: 2
+    source_types_max_avail:
+      pmw: 3
+  
+trainer:
+  strategy: ddp
