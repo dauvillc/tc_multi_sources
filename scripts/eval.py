@@ -153,7 +153,10 @@ class EvalJob(submitit.helpers.Checkpointable):
 
             # Instantiate the evaluator with all models
             evaluator = instantiate(
-                eval_class, model_data=model_data, parent_results_dir=parent_results_dir
+                eval_class,
+                model_data=model_data,
+                parent_results_dir=parent_results_dir,
+                num_workers=num_workers,
             )
 
             # Run the evaluation
