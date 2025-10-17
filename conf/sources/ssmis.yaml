@@ -1,0 +1,11 @@
+tc_primed:
+  pmw:
+    SSMIS_F16:
+        variables: ['TB_37.0H', 'TB_37.0V', 'TB_91.665H', 'TB_91.665V']
+    SSMIS_F17:
+        variables: ['TB_37.0H', 'TB_37.0V', 'TB_91.665H', 'TB_91.665V']
+    SSMIS_F18:
+        variables: ['TB_37.0H', 'TB_37.0V', 'TB_91.665H', 'TB_91.665V']
+    SSMIS_F19:
+        variables: ['TB_37.0H', 'TB_37.0V', 'TB_91.665H', 'TB_91.665V']
+
