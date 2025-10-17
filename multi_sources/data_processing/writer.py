@@ -112,6 +112,7 @@ class MultiSourceWriter(BasePredictionWriter):
             pred_means = None
             includes_intermediate_steps = False
             embeddings = prediction.get("embeddings", None)
+            leading_pred_dims = 1  # batch dim only
         else:
             # Fallback for other formats
             raise ValueError(
