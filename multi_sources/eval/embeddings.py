@@ -52,9 +52,17 @@ class EmbeddingsComparisonEvaluation(AbstractMultisourceEvaluationMetric):
         """Evaluates the similarities between embeddings for all models.
         Returns:
             results (pd.DataFrame): DataFrame containing the evaluation results for the model.
-                Includes the columns 'model_id', 'sample_index', 'source_name', 'source_index',
-                'target_source_name', 'target_source_index', 'channel',
-                'coords_similarity', 'cond_similarity'.
+                Includes the columns:
+                - model_id: Identifier of the model.
+                - sample_index: Index of the sample.
+                - dt: Time difference between the target source and the source [minutes].
+                - source_name: Name of the source.
+                - source_index: Index of the source.
+                - target_source_name: Name of the target source.
+                - target_source_index: Index of the target source.
+                - integration_step: Integration step index. Always 0 for deterministic models.
+                - coords_similarity: Cosine similarity between the coordinates embeddings.
+                - cond_similarity: Cosine similarity between the conditioning embeddings.
         """
         results = []  # List of dictionaries that we'll concatenate later into a DataFrame.
         for sample_df, sample_data in tqdm(

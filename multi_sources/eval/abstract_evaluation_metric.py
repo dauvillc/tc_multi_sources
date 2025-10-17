@@ -61,6 +61,7 @@ class AbstractMultisourceEvaluationMetric(abc.ABC):
         source_name_replacements=None,
         channel_replacements=None,
         disable_checks=False,
+        num_workers=1,
     ):
         """
         Args:
@@ -81,6 +82,7 @@ class AbstractMultisourceEvaluationMetric(abc.ABC):
                 substitutions to apply to channel names for display purposes. The replacement
                 is done using the re.sub function.
             disable_checks (bool): If True, disables the sanity checks on the model data.
+            num_workers (int): Here for compatibility for the eval classes that don't use it.
         """
         self.id_name = id_name
         self.full_name = full_name

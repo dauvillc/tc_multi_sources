@@ -14,6 +14,8 @@ evaluation_classes:
     max_realizations_to_display: 6  # Maximum realizations to show
 """
 
+from concurrent.futures import ProcessPoolExecutor, as_completed
+
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
@@ -34,6 +36,7 @@ class VisualEvaluationComparison(AbstractMultisourceEvaluationMetric):
         eval_fraction=1.0,
         max_realizations_to_display=3,
         cmap="viridis",
+        num_workers=10,
         **kwargs,
     ):
         """
@@ -43,6 +46,7 @@ class VisualEvaluationComparison(AbstractMultisourceEvaluationMetric):
             eval_fraction (float): Fraction of samples to visualize (0.0 to 1.0)
             max_realizations_to_display (int): Maximum number of realizations to display
             cmap (str): Colormap to use for visualization.
+            num_workers (int): Number of workers for parallel processing.
             **kwargs: Additional keyword arguments for the base class.
         """
         super().__init__(
@@ -55,43 +59,77 @@ class VisualEvaluationComparison(AbstractMultisourceEvaluationMetric):
         self.eval_fraction = eval_fraction
         self.max_realizations_to_display = max_realizations_to_display
         self.cmap = cmap
+        self.num_workers = num_workers
 
     def evaluate(self, **kwargs):
         """
         Creates visualization figures for all samples across all models.
 
         Args:
-            **kwargs: Additional keyword arguments (num_workers not used for visualization)
+            **kwargs: Additional keyword arguments
         """
         n_samples = int(self.eval_fraction * self.n_samples)
         # Decide on a random subset of samples to evaluate
         if self.eval_fraction < 1.0:
             rng = np.random.default_rng(seed=42)
             selected_indices = set(rng.choice(self.n_samples, size=n_samples, replace=False))
-            self.samples_iterator = lambda: (
-                (df, data)
-                for i, (df, data) in enumerate(self.samples_iterator())
-                if i in selected_indices
-            )
-        for i, (sample_df, sample_data) in enumerate(
-            tqdm(self.samples_iterator(), desc="Evaluating samples", total=n_samples)
-        ):
-            sample_index = sample_df["sample_index"].iloc[0]
-            # Retrieve the number of channels from the first target source. We'll assume
-            # all sources have the same number of channels.
-            channels = list(next(iter(sample_data["targets"].values())).data_vars)
 
-            for channel_idx in range(len(channels)):
-                # Crop the padded borders
-                cropped_data = self.crop_padded_borders(sample_data, sample_df, channel_idx)
-
-                # Plot the data
-                self.plot_sample(
-                    sample_index,
-                    cropped_data,
-                    sample_df,
-                    channels[channel_idx],
+            def samples_iterator():
+                return (
+                    (df, data)
+                    for i, (df, data) in enumerate(self.samples_iterator())
+                    if i in selected_indices
                 )
+
+        else:
+            samples_iterator = self.samples_iterator
+
+        # Collect all samples into a list for parallel processing
+        samples = list(samples_iterator())
+
+        if self.num_workers > 1:
+            # Parallel processing
+            with ProcessPoolExecutor(max_workers=self.num_workers) as executor:
+                # Submit all tasks
+                futures = [
+                    executor.submit(self._process_sample, sample_df, sample_data)
+                    for sample_df, sample_data in samples
+                ]
+                # Process results with progress bar
+                for future in tqdm(
+                    as_completed(futures), desc="Evaluating samples", total=len(futures)
+                ):
+                    future.result()  # This will raise any exceptions that occurred
+        else:
+            # Sequential processing
+            for sample_df, sample_data in tqdm(
+                samples, desc="Evaluating samples", total=n_samples
+            ):
+                self._process_sample(sample_df, sample_data)
+
+    def _process_sample(self, sample_df, sample_data):
+        """Process a single sample (helper method for parallel execution).
+
+        Args:
+            sample_df (pandas.DataFrame): DataFrame with sample metadata
+            sample_data (dict): Dictionary containing targets and predictions
+        """
+        sample_index = sample_df["sample_index"].iloc[0]
+        # Retrieve the number of channels from the first target source. We'll assume
+        # all sources have the same number of channels.
+        channels = list(next(iter(sample_data["targets"].values())).data_vars)
+
+        for channel_idx in range(len(channels)):
+            # Crop the padded borders
+            cropped_data = self.crop_padded_borders(sample_data, sample_df, channel_idx)
+
+            # Plot the data
+            self.plot_sample(
+                sample_index,
+                cropped_data,
+                sample_df,
+                channels[channel_idx],
+            )
 
     def crop_padded_borders(self, sample_data, sample_df, channel_idx):
         """Crops the padded borders in the sample data.
