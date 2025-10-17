@@ -11,6 +11,7 @@ metrics: ${metrics}
 use_det_model_from_run: null
 cfg_scale: null
 cfg_train_uncond_proba: 0.0
+training_time_sampling: lognormal
 
 backbone: ${model.backbone}
 output_resnet_channels: ${model.output_resnet_channels}
