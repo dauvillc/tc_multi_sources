@@ -7,6 +7,7 @@ from abc import ABC, abstractmethod
 import lightning.pytorch as pl
 import torch
 
+from multi_sources.data_processing.grid_functions import distance_to_overlap
 from multi_sources.models.utils import (
     embed_coords_to_sincos,
     normalize_coords_across_sources,
@@ -47,6 +48,7 @@ class MultisourceAbstractModule(pl.LightningModule, ABC):
         lr_scheduler_kwargs,
         loss_max_distance_from_center=None,
         ignore_land_pixels_in_loss=False,
+        max_overlap_distance=None,
         normalize_coords_across_sources=False,
         validation_dir=None,
         metrics={},
@@ -63,6 +65,8 @@ class MultisourceAbstractModule(pl.LightningModule, ABC):
                 in the loss computation.
             ignore_land_pixels_in_loss (bool): If True, the pixels that are on land
                 will be ignored in the loss computation.
+            max_overlap_distance (float): Maximum distance (in km) to consider that two sources
+                overlap. Used to compute the overlap mask for the loss.
             normalize_coords_across_sources (bool): If True, the coordinates of each source
                 will be normalized across all sources in the batch so that the minimum
                 latitude and longitude in each example is 0 and maximum is 1.
@@ -83,6 +87,7 @@ class MultisourceAbstractModule(pl.LightningModule, ABC):
 
         self.loss_max_distance_from_center = loss_max_distance_from_center
         self.ignore_land_pixels_in_loss = ignore_land_pixels_in_loss
+        self.max_overlap_distance = max_overlap_distance
         self.adamw_kwargs = adamw_kwargs
         self.metrics = metrics
         self.normalize_coords_across_sources = normalize_coords_across_sources
@@ -139,6 +144,7 @@ class MultisourceAbstractModule(pl.LightningModule, ABC):
                 "avail_mask": am,
                 "landmask": lm,
                 "dist_to_center": d,
+                "raw_coords": data["coords"],
             }
 
             input_[source_index_pair] = {
@@ -197,6 +203,7 @@ class MultisourceAbstractModule(pl.LightningModule, ABC):
             masks (dict of (source_name, index) to tensor): The masks, of shape (B, ...),
                 valued 1 where the token is available and 0 otherwise.
         """
+
         masks = {}
         for source_index_pair, source_data in batch.items():
             # We'll compute a mask M on the tokens of the source of shape (B, C, ...)
@@ -213,6 +220,16 @@ class MultisourceAbstractModule(pl.LightningModule, ABC):
             # Optionally ignore the pixels that are on land
             if self.ignore_land_pixels_in_loss:
                 loss_mask[source_data["landmask"] > 0] = False
+            # Overlap masking: exclude from the loss the pixels of the target source
+            # where there is no overlap with any other source.
+            if self.max_overlap_distance is not None:
+                other_coords = [
+                    s["raw_coords"] for k, s in batch.items() if k != source_index_pair
+                ]
+                dist_to_overlap = distance_to_overlap(source_data["raw_coords"], *other_coords)
+                overlap_mask = dist_to_overlap <= self.max_overlap_distance
+                loss_mask = loss_mask & overlap_mask
+
             masks[source_index_pair] = loss_mask
 
         return masks
