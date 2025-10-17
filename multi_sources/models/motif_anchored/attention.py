@@ -1,0 +1,168 @@
+"""Defines attention mechanisms for the multisource masked autoencoder."""
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from einops import rearrange
+
+from multi_sources.models.motif_double.small_layers import RMSNorm
+
+
+class AttentionMap(nn.Module):
+    """Computes the attention map from the embedded keys and queries.
+    Using this intermediary Module allows to retrieve the attention maps
+    with register_forward_hook."""
+
+    def __init__(self, dim_head, relative_pos=False, rel_pos_dim_head=None):
+        super().__init__()
+        self.scale = dim_head**-0.5
+
+        self.relative_pos = relative_pos
+        if self.relative_pos:
+            self.rel_pos_scale = rel_pos_dim_head**-0.5
+
+    def forward(self, keys, queries, pos_key=None, pos_query=None, mask=None, coords_weight=None):
+        """
+        Args:
+            keys: Tensor of shape (batch_size, num_keys, embed_dim), or
+                (batch_size, heads, num_keys, dim_head). The same is true for
+                all other arguments.
+            queries: Tensor of shape (batch_size, num_queries, embed_dim)
+            pos_key: Tensor of shape (batch_size, num_keys, rel_pos_dim)
+            pos_query: Tensor of shape (batch_size, num_queries, rel_pos_dim)
+            mask: Tensor of shape (batch_size, num_keys) or (batch_size, heads, num_keys),
+                or None. Keys for which the mask is False will not be attended to.
+            coords_weight: Optional tensor to weight the attention map based on coordinates.
+        Returns:
+            Tensor of shape (batch_size, num_queries, num_keys)
+        """
+        dots = torch.matmul(queries, keys.transpose(-2, -1)) * self.scale
+
+        # Optional relative positional encodings
+        if self.relative_pos:
+            rel_pos_dots = torch.matmul(pos_query, pos_key.transpose(-2, -1)) * self.rel_pos_scale
+            dots = dots + coords_weight * rel_pos_dots
+        # Mask the columns of the attention map that correspond to the masked tokens.
+        if mask is not None:
+            # Expand the mask in the middle to reach the same number of dimensions as dots.
+            if dots.dim() == 3:
+                mask = mask.unsqueeze(1)
+            elif dots.dim() == 4:
+                mask = mask.unsqueeze(1).unsqueeze(1)
+            dots = dots.masked_fill(~mask, float("-inf"))
+
+        return F.softmax(dots, dim=-1)
+
+
+class VCAttentionInternal(nn.Module):
+    """Self-attention block that uses both the values and coordinates
+    to compute the attention weights, as Softmax(QpKp^T + QcKc^T)."""
+
+    def __init__(
+        self,
+        values_dim,
+        coords_dim,
+        inner_dim,
+        update_coords,
+        num_heads=8,
+        dropout=0.0,
+        att_lambda="learned",
+    ):
+        """Args:
+        values_dim (int): Dimension of the values.
+        coords_dim (int): Dimension of the coordinates.
+        inner_dim (int): Dimension of the inner representation.
+        update_coords (bool): Whether to update the coordinates alongside the values.
+            If True, the same attention map is used to update the coordinates.
+        num_heads (int): Number of attention heads.
+        dropout (float): Dropout rate.
+        att_lambda (str or float): Weighting factor for the coordinate attention.
+            If "learned", it will be a learnable parameter. If a float, it will be a fixed value.
+        """
+        super().__init__()
+        self.num_heads = num_heads
+        self.update_coords = update_coords
+
+        # Value processing
+        self.values_to_qkv = nn.Linear(values_dim, inner_dim * 3, bias=False)
+        self.values_qnorm = RMSNorm(inner_dim)
+        self.values_knorm = RMSNorm(inner_dim)
+        self.values_output_proj = nn.Sequential(
+            nn.Linear(inner_dim, values_dim), nn.Dropout(dropout)
+        )
+
+        # Coordinate processing. If not updating the coordinates, only QK instead of QKV.
+        self.coords_to_qkv = nn.Linear(
+            coords_dim, inner_dim * 3 if update_coords else inner_dim * 2, bias=False
+        )
+        self.coords_qnorm = RMSNorm(inner_dim)
+        self.coords_knorm = RMSNorm(inner_dim)
+        if update_coords:
+            self.coords_output_proj = nn.Sequential(
+                nn.Linear(inner_dim, coords_dim), nn.Dropout(dropout)
+            )
+
+        # Attention mechanism
+        dim_head = inner_dim // num_heads
+        self.attention_map = AttentionMap(dim_head, relative_pos=True, rel_pos_dim_head=dim_head)
+        if att_lambda == "learned":
+            self.att_lambda = nn.Parameter(torch.randn(1), requires_grad=True)
+        elif isinstance(att_lambda, (int, float)):
+            self.att_lambda = nn.Parameter(
+                torch.tensor(att_lambda, dtype=torch.float), requires_grad=False
+            )
+
+        # Dropout on the attention map
+        self.att_dropout = nn.Dropout(dropout)
+
+    def forward(self, values, coords, attention_mask=None):
+        """
+        Args:
+            values (tensor): Tensor of shape (batch_size, seq_len, values_dim).
+            coords (tensor): Tensor of shape (batch_size, seq_len, coords_dim).
+            attention_mask (tensor): Tensor of shape (batch_size, seq_len), or None.
+        Returns:
+            outputs: dictionary containing:
+                - "values": Tensor of shape (batch_size, seq_len, values_dim), the updated values.
+                - "coords": Tensor of shape (batch_size, seq_len, coords_dim),
+                    the updated coordinates. Only present if update_coords is True.
+        """
+        # Project the values and coordinates to the query, key and value spaces.
+        qv, kv, vv = self.values_to_qkv(values).chunk(3, dim=-1)
+        qv, kv = self.values_qnorm(qv), self.values_knorm(kv)  # RMSNorm
+
+        # Project coordinates to query, key, value spaces
+        cproj = self.coords_to_qkv(coords)
+        if self.update_coords:
+            qc, kc, vc = cproj.chunk(3, dim=-1)
+        else:
+            qc, kc = cproj.chunk(2, dim=-1)
+        qc, kc = self.coords_qnorm(qc), self.coords_knorm(kc)  # RMSNorm
+
+        # Reshape to split into multiple heads
+        qv, kv, vv = map(
+            lambda x: rearrange(x, "b n (h d) -> b h n d", h=self.num_heads), (qv, kv, vv)
+        )
+        qc, kc = map(lambda x: rearrange(x, "b n (h d) -> b h n d", h=self.num_heads), (qc, kc))
+        if self.update_coords:
+            vc = rearrange(vc, "b n (h d) -> b h n d", h=self.num_heads)
+
+        # Compute the attention map using the two sets of keys and queries
+        attn = self.attention_map(
+            kv, qv, kc, qc, mask=attention_mask, coords_weight=self.att_lambda
+        )
+        attn = self.att_dropout(attn)
+
+        # Apply attention to both value and coordinate values
+        values_out = torch.matmul(attn, vv)
+        values_out = rearrange(values_out, "b h n d -> b n (h d)")
+        values_out = self.values_output_proj(values_out)
+        outputs = {"values": values_out}
+
+        if self.update_coords:
+            coords_out = torch.matmul(attn, vc)
+            coords_out = rearrange(coords_out, "b h n d -> b n (h d)")
+            coords_out = self.coords_output_proj(coords_out)
+            outputs["coords"] = coords_out
+
+        return outputs
