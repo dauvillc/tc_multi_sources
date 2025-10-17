@@ -436,8 +436,6 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                 (0 = most recent, 1 = second most recent, etc.)
         """
         t0, sample_df = self.samples[idx]
-        if idx < 32:
-            print(f"{idx}:", sample_df)
 
         # If selecting the sources randomly, we do it here so that if __getitem__(i) is called
         # twice, it may yield different results.
