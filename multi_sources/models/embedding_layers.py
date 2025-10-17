@@ -29,6 +29,55 @@ class LinearEmbedding(nn.Module):
         return x
 
 
+class CornerAndCenterEmbedding2d(nn.Module):
+    """Isolates the corner and center pixels of a 2D input tensor, and embeds them
+    using a linear layer.
+    """
+
+    def __init__(self, channels, emb_dim, norm=True):
+        """
+        Args:
+            channels (int): Number of channels in the input tensor.
+            emb_dim (int): Dimension of the embedding space.
+            norm (bool): Whether to apply layer normalization after the embedding.
+        """
+        super().__init__()
+        self.channels = channels
+        self.emb_dim = emb_dim
+        self.embedding = nn.Linear(5 * channels, emb_dim)
+        self.act = nn.GELU()
+        if norm:
+            self.ln = nn.LayerNorm(emb_dim)
+
+    def forward(self, x):
+        """
+        Args:
+            x (torch.Tensor): A tensor of shape (B, C, H, W).
+        Returns:
+            embedded: torch.Tensor of shape (B, emb_dim).
+        """
+        B, C, H, W = x.shape
+        if C != self.channels:
+            raise ValueError(f"Expected input with {self.channels} channels, got {C}.")
+        if H < 3 or W < 3:
+            raise ValueError("Input height and width must be at least 3.")
+        corners_and_center = torch.cat(
+            [
+                x[:, :, 0, 0],  # top-left
+                x[:, :, 0, -1],  # top-right
+                x[:, :, -1, 0],  # bottom-left
+                x[:, :, -1, -1],  # bottom-right
+                x[:, :, H // 2, W // 2],  # center
+            ],
+            dim=1,
+        )  # (B, 5*C)
+        embedded = self.embedding(corners_and_center)  # (B, emb_dim)
+        embedded = self.act(embedded)
+        if hasattr(self, "ln"):
+            embedded = self.ln(embedded)
+        return embedded
+
+
 class ConvPatchEmbedding2d(nn.Module):
     """A module that embeds an image into a sequence of patches using
     a 2D convolutional layer.
@@ -110,6 +159,7 @@ class SourcetypeEmbedding2d(nn.Module):
         include_diffusion_t_in_values=False,
         include_coords_in_conditioning=False,
         conditioning_mlp_layers=0,
+        coords_corner_and_center_embedding=False,
     ):
         """
         Args:
@@ -128,6 +178,9 @@ class SourcetypeEmbedding2d(nn.Module):
                 in the conditioning embedding.
             conditioning_mlp_layers (int): Number of linear layers to apply
                 after the conditioning concatenation.
+            coords_corner_and_center_embedding (bool): Whether to use a corner-and-center
+                embedding for the coordinates instead of a patch embedding. Serves as a
+                baseline for ablation studies.
         """
         super().__init__()
 
@@ -145,9 +198,12 @@ class SourcetypeEmbedding2d(nn.Module):
         self.values_embedding = ConvPatchEmbedding2d(ch, patch_size, values_dim, norm=True)
 
         # Coords embedding layers
-        self.coords_patch_size = patch_size
         self.coords_emb_dim = coords_dim
-        self.coords_embedding = ConvPatchEmbedding2d(3, patch_size, coords_dim, norm=False)
+        if coords_corner_and_center_embedding:
+            self.coords_embedding = CornerAndCenterEmbedding2d(3, coords_dim, norm=False)
+        else:
+            self.coords_patch_size = patch_size
+            self.coords_embedding = ConvPatchEmbedding2d(3, patch_size, coords_dim, norm=False)
         self.time_embedding = nn.Linear(1, coords_dim)
         self.coords_norm = nn.LayerNorm(coords_dim)
 
@@ -212,7 +268,12 @@ class SourcetypeEmbedding2d(nn.Module):
         coords = data["coords"]
         dt = data["dt"].view(coords.size(0), 1, 1, 1)
         embedded_coords = self.coords_embedding(coords)
-        embedded_coords += self.time_embedding(dt)
+        if isinstance(self.coords_embedding, CornerAndCenterEmbedding2d):
+            # expand to match the spatial dimensions of the values embedding
+            h, w = embedded_values.shape[1:3]
+            embedded_coords = embedded_coords.view(embedded_coords.size(0), 1, 1, -1)
+            embedded_coords = embedded_coords.expand(-1, h, w, -1)
+        embedded_coords = embedded_coords + self.time_embedding(dt)
         embedded_coords = self.coords_norm(embedded_coords)
 
         # Conditioning tensor
