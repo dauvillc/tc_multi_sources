@@ -97,7 +97,7 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
             n_sampling_diffusion_steps (int): Number of diffusion steps when sampling.
             noise_scale (float): Scale of the noise used when noising the data.
             training_time_sampling (str): How to sample the diffusion timesteps during training.
-                Either "uniform" or "lognormal".
+                Either "uniform", "lognormal", or "beta".
             use_mask_token (bool): If True, uses a learned [MASK] token that is summed to
                 the embeddings of the masked sources.
             loss_max_distance_from_center (int or None): If specified, only pixels within this
