@@ -12,6 +12,7 @@ from itertools import repeat
 from pathlib import Path
 
 import hydra
+import numpy as np
 import pandas as pd
 import xarray as xr
 import yaml
@@ -65,11 +66,12 @@ def preprocess_pmw(ds):
     return ds
 
 
-def initialize_pmw_metadata(sensat, ifovs_path, dest_dir):
+def initialize_pmw_metadata(sensat, ifovs, dest_dir):
     """Retrieves the list of all data and
     characteristic variables of a source; and writes the source metadata file.
     Args:
         sensat (str): Sensor / Satellite pair (e.g. "AMSR2_GCOMW1").
+        ifovs (dict): Dictionary containing the IFOV values for each sensor/satellite and swath.
         dest_dir (Path): Destination directory.
     Returns:
         bool: True if the metadata was successfully written, False otherwise.
@@ -97,10 +99,6 @@ def initialize_pmw_metadata(sensat, ifovs_path, dest_dir):
     # 1) Frequency: we'll extract it from the variable names.
     frequencies = {var: parse_frequency(var) for var in data_vars}
     source_metadata["charac_vars"] = {"frequency": frequencies}
-    # 2) IFOV: we'll get the IFOV values from the IFOV file (which needs to be
-    # manually filled based on the documentation).
-    with open(ifovs_path, "r") as f:
-        ifovs = yaml.safe_load(f)
     ifov_values = {}
     ifov_var_names = [
         "IFOV_nadir_along_track",
@@ -127,7 +125,7 @@ def initialize_pmw_metadata(sensat, ifovs_path, dest_dir):
     return True
 
 
-def process_pmw_file(file, sensat, dest_dir, check_older=None):
+def process_pmw_file(file, sensat, dest_dir, check_older=None, to_regular_grid=False, ifovs=None):
     """Processes a single PMW file.
     Args:
         file (str): Path to the PMW file in netCDF4 format.
@@ -136,6 +134,11 @@ def process_pmw_file(file, sensat, dest_dir, check_older=None):
         regridding_res (float): Resolution of the target grid, in degrees.
         check_older (timedelta or None): if a timedelta dt, checks if there is a pre-existing
             file younger than dt. If so, skips processing.
+        to_regular_grid (bool): if True, regrids the data to a regular lat-lon grid.
+            The 89GHz swath is first regridded using the resolution given in the IFOVs file,
+            then the 37GHz swath is regridded to the same grid.
+        ifovs (dict or None): Must be provided if to_regular_grid is True. Dict containing the
+            IFOV values for each sensor/satellite and swath.
     Returns:
         dict or None: Sample metadata, or None if the sample is discarded.
     """
@@ -187,16 +190,65 @@ def process_pmw_file(file, sensat, dest_dir, check_older=None):
         # === 89GHZ PROCESSING ===
         # Extract data variables
         sensor = sensat.split("_")[0]
+        # Only keep the relevant variables
+        ds89 = ds89[data_vars_89 + ["latitude", "longitude"]]
         # If any variable is fully missing data, skip
         if any(ds89[var].isnull().all() for var in data_vars_89):
             return None
         # Standardize longitude values to [-180, 180]
         ds89["longitude"] = (ds89["longitude"] + 180) % 360 - 180
 
+        # OPTIONAL REGRIDDING TO REGULAR GRID
+        if to_regular_grid:
+            if ifovs is None:
+                raise ValueError("ifovs must be provided if to_regular_grid is True.")
+            # Get the IFOV values for the 89GHz swath (as nadir along and across track)
+            ifovs_89 = ifovs[sensat][swath_89]
+            # ifovs_89 is either a list [nadir_along, nadir_across, edge_along, edge_across]
+            # or a dict {var_name: [nadir_along, nadir_across, edge_along, edge_across]}.
+            if isinstance(ifovs_89, dict):
+                # We'll just take the IFOVs of the first variable
+                first_var = data_vars_89[0]
+                ifovs_89 = ifovs_89[first_var]
+            ifov_nadir_along, ifov_nadir_across = ifovs_89[0], ifovs_89[1]
+            # Estimate regridding resolution as the max IFOV
+            regridding_res_km = max(ifov_nadir_across, ifov_nadir_along)
+
+            # Convert km to degrees for latitude (constant)
+            regridding_res_lat = regridding_res_km / 111.32
+
+            # Create latitude grid first
+            lat89 = ds89["latitude"].values
+            min_lat, max_lat = lat89.min(), lat89.max()
+            new_lats = np.arange(min_lat, max_lat, regridding_res_lat)
+
+            # For longitude, compute resolution at each latitude
+            lon89 = ds89["longitude"].values
+            min_lon, max_lon = lon89.min(), lon89.max()
+
+            # Use latitude-dependent longitude spacing
+            # Calculate resolution at the center of the latitude range for a uniform grid
+            center_lat = (min_lat + max_lat) / 2
+            regridding_res_lon = regridding_res_km / (111.32 * np.cos(np.radians(center_lat)))
+            new_lons = np.arange(min_lon, max_lon, regridding_res_lon)
+            new_lons = (new_lons + 180) % 360 - 180  # Standardize to [-180, 180]
+            grid_lons, grid_lats = np.meshgrid(new_lons, new_lats)
+            # Regrid the 89GHz data to the regular grid
+            try:
+                ds89 = regrid_to_grid(ds89, grid_lats, grid_lons)
+                # Check if any variable is fully null after regridding
+                for variable in ds89.variables:
+                    if ds89[variable].isnull().all():
+                        warnings.warn(f"Variable {variable} is null for sample {file}.")
+            except ResamplingError as e:
+                raise RuntimeError(f"Resampling error for sample {file}: {e}")
+
         # === 37GHZ PROCESSING ===
         ds37 = raw_sample["passive_microwave"][swath_37]
         ds37 = xr.open_dataset(NetCDF4DataStore(ds37), decode_times=False)
         ds37 = preprocess_pmw(ds37)
+        # Only keep the relevant variables
+        ds37 = ds37[data_vars_37 + ["latitude", "longitude"]]
         # If any variable is fully missing data, skip
         if any(ds37[var].isnull().all() for var in data_vars_37):
             return None
@@ -216,10 +268,19 @@ def process_pmw_file(file, sensat, dest_dir, check_older=None):
         ds = xr.merge([ds89, ds37], compat="override")
 
         # Compute the land-sea mask
-        land_mask = globe.is_land(
-            ds["latitude"].values,
-            ds["longitude"].values,
-        )
+        try:
+            land_mask = globe.is_land(
+                ds["latitude"].values,
+                ds["longitude"].values,
+            )
+        except ValueError as e:
+            # Add info to the error message about the sample
+            error_msg = f"Error computing land mask for sample {file}: {e}"
+            error_msg += (
+                f"\nMin lat: {ds['latitude'].values.min()}, Max lat: {ds['latitude'].values.max()}"
+            )
+            error_msg += f"\nMin lon: {ds['longitude'].values.min()}, Max lon: {ds['longitude'].values.max()}"
+            raise ValueError(error_msg)
         # Compute the distance between each grid point and the center of the storm.
         dist_to_center = grid_distance_to_point(
             ds["latitude"].values,
@@ -253,6 +314,12 @@ def main(cfg):
     check_older = cfg.get("check_older", None)
     check_older = pd.to_timedelta(check_older) if check_older is not None else None
 
+    use_regular_grid = cfg.get("use_regular_grid_pmw", False)
+
+    # Read the IFOV values file
+    with open(ifovs_path, "r") as f:
+        ifovs = yaml.safe_load(f)
+
     # Retrieve all TC-PRIMED overpass files as a dict {sen_sat: <file_list>}
     pmw_files = list_tc_primed_overpass_files_by_sensat(tc_primed_path)
 
@@ -262,7 +329,7 @@ def main(cfg):
         # Create destination directory
         source_dest_dir.mkdir(parents=True, exist_ok=True)
 
-        if not initialize_pmw_metadata(sensat, ifovs_path, source_dest_dir):
+        if not initialize_pmw_metadata(sensat, ifovs, source_dest_dir):
             # Remove directory if metadata could not be initialized
             source_dest_dir.rmdir()
             print(f"Skipping {sensat}")
@@ -276,7 +343,14 @@ def main(cfg):
 
         if num_workers <= 1:
             for file in tqdm(pmw_files[sensat], desc=f"Processing {sensat}"):
-                sample_metadata = process_pmw_file(file, sensat, source_dest_dir, check_older)
+                sample_metadata = process_pmw_file(
+                    file,
+                    sensat,
+                    source_dest_dir,
+                    check_older,
+                    to_regular_grid=use_regular_grid,
+                    ifovs=ifovs,
+                )
                 if sample_metadata is None:
                     discarded += 1
                 else:
@@ -289,6 +363,8 @@ def main(cfg):
                     repeat(sensat),
                     repeat(source_dest_dir),
                     repeat(check_older),
+                    repeat(use_regular_grid),
+                    repeat(ifovs),
                     chunksize=chunksize,
                 )
                 for sample_metadata in tqdm(
