@@ -1,0 +1,30 @@
+# @package _global_
+defaults:
+  - override /paths: jz
+
+setup:
+  timeout_min: 120
+  cpus_per_task: 10
+  slurm_qos: "qos_gpu-dev"
+  slurm_nodes: 8
+  slurm_ntasks_per_node: ${trainer.devices}
+  slurm_gres: "gpu:4"
+  slurm_constraint: "v100-32g"
+  name: ${wandb.name}
+  slurm_account: "xyw@v100"
+  slurm_signal_delay_s: 120
+  slurm_additional_parameters:
+    hint: nomultithread
+  local_setup:
+    - module purge
+    - source ${oc.env:HOME}/.bash_profile
+    - module load pytorch-gpu/py3/2.6.0
+
+trainer:
+  devices: 4
+  num_nodes: 8
+
+dataloader:
+  num_workers: 9
+
+checkpoint_time_interval: 10  # in minutes
