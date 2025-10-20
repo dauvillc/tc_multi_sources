@@ -1,0 +1,26 @@
+# @package _global_
+defaults:
+  - override /paths: jz_regular
+  - override /sources: ssmis
+  - override /lightning_module: flow_matching
+  - override /lr_scheduler: cosine_warmup_100epochs
+  - override /metrics: default_fm
+  - override /model: msvit_12b_d512
+
+lightning_module:
+  patch_size: 8
+  use_det_model_from_run: null
+
+wandb:
+  name: diff_ssmis
+  group: diff_ssmis
+
+dataset:
+  train:
+    dt_max: 6
+    min_available_sources: 2
+    source_types_max_avail:
+      pmw: 3
+  
+trainer:
+  strategy: ddp
