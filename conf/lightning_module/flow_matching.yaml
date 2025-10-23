@@ -1,5 +1,5 @@
 _target_: multi_sources.structure.flow_matching.MultisourceFlowMatchingReconstructor
-patch_size: 16
+patch_size: 4
 values_dim: ${model.values_dim}
 coords_dim: ${model.coords_dim}
 n_sources_to_mask: 1
