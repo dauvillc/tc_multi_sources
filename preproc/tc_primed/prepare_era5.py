@@ -121,15 +121,8 @@ def process_era5_file(file, dest_dir, check_exist=False):
             # Standardize longitude values to [-180, 180]
             ds["longitude"] = (ds["longitude"] + 180) % 360 - 180
 
-            # Select only the central 81 pixels along each axis,
-            # and reverse the latitude axis.
-            lat_size = ds.sizes["lat"]
-            lon_size = ds.sizes["lon"]
-            lat_mid = lat_size // 2
-            lon_mid = lon_size // 2
-            ds = ds.isel(
-                lat=slice(lat_mid + 41, lat_mid - 40, -1), lon=slice(lon_mid - 40, lon_mid + 41)
-            )
+            # Reverse the latitude dimension to have the north at the top
+            ds = ds.reindex(lat=ds["lat"][::-1])
 
             # Compute the land-sea mask
             land_mask = globe.is_land(
