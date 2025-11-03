@@ -88,9 +88,9 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
                 will be normalized across all sources in the batch so that the minimum
                 latitude and longitude in each example is 0 and maximum is 1.
                 If False, the coordinates will be normalized as sinusoïds.
-            mask_only_sources (str or list of str): List of source types to mask. If not None,
-                instead of randomly selecting the sources to mask, the model will always
-                mask the sources of the specified types whenever they are available.
+            mask_only_sources (str or list of str): List of source names to mask. If not None,
+                the masked source will chosen among those only.
+                Mutually exclusive with forecasting_mode.
             forecasting_mode (bool): If True, will always mask all sources that are forecasted.
                 A source is forecasted if its time delta is negative.
                 Mutually exclusive with mask_only_sources.
@@ -148,16 +148,13 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
             coords_corner_and_center_embedding=coords_corner_and_center_embedding,
         )
 
+        if mask_only_sources is not None and forecasting_mode:
+            raise ValueError(
+                "mask_only_sources and forecasting_mode cannot be used " "at the same time."
+            )
         if isinstance(mask_only_sources, str):
             mask_only_sources = [mask_only_sources]
         self.mask_only_sources = mask_only_sources
-        # Convert from source types to the source names
-        if self.mask_only_sources is not None:
-            self.mask_only_sources = [
-                src_name
-                for src_name, src in self.sources.items()
-                if src.type in self.mask_only_sources
-            ]
         self.forecasting_mode = forecasting_mode
 
     def init_embedding_layers(
@@ -288,29 +285,11 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
         batch_size = any_elem.shape[0]
         device = any_elem.device
 
-        if self.mask_only_sources is not None:
-            # Case where there are pre-determined sources to mask. In this case,
-            # we mask those whenever they are available.
-            avail_flags = {}
-            for source_index_pair, data in x.items():
-                source_name = source_index_pair[0]  # Extract source name from tuple
-                avail_flag = data["avail"].clone()
-                if source_name in self.mask_only_sources:
-                    avail_flag[avail_flag == 1] = 0
-                avail_flags[source_index_pair] = avail_flag
-            # We need to check that for each sample, at least one source has been masked.
-            total_avail_flag = sum([flag == 0 for flag in avail_flags.values()])
-            if (total_avail_flag == 0).any():
-                raise ValueError(
-                    "At least one sample has no sources to mask. "
-                    "Please check the mask_only_sources argument."
-                )
         # Case where we mask the sources that are forecasted.
-        elif self.forecasting_mode:
+        if self.forecasting_mode:
             # In this case, we mask all sources that are forecasted (i.e. have a negative dt).
             avail_flags = {}
             for source_index_pair, data in x.items():
-                source_name = source_index_pair[0]
                 avail_flag = data["avail"].clone()
                 # Mask the sources that are forecasted (i.e. have a negative dt).
                 avail_flag[(avail_flag == 1) & (data["dt"] < 0)] = 0
@@ -334,6 +313,12 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
             for i, (source_index_pair, data) in enumerate(x.items()):
                 # Multiply the noise by the availability mask (-1 for missing sources, 1 otherwise)
                 noise[:, i] = noise[:, i] * data["avail"].squeeze(-1)
+            # If only masking among a subset of sources, set the noise of the other sources to -2
+            if self.mask_only_sources is not None:
+                for i, source_index_pair in enumerate(x):
+                    source_name = source_index_pair[0]
+                    if source_name not in self.mask_only_sources:
+                        noise[:, i] = -2.0  # Lower than the minimum possible noise (-1)
             # Gather the indices of the sources to mask for each sample
             _, sources_to_mask = noise.topk(
                 self.n_sources_to_mask, dim=1

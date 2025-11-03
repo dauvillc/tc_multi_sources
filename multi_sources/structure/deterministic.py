@@ -248,9 +248,9 @@ class MultisourceDeterministicReconstructor(MultisourceAbstractReconstructor):
             source_index_pair: masked_batch[source_index_pair]["avail"]
             for source_index_pair in masked_batch
         }
-        if self.validation_dir is not None and batch_idx % 50 == 0:
-            # For every 30 batches, make a prediction and display it.
-            if batch_idx % 50 == 0:
+        if self.validation_dir is not None and batch_idx % 2 == 0:
+            # For every 2 batches, make a prediction and display it.
+            if batch_idx % 2 == 0:
                 display_realizations(
                     pred,
                     input_batch,
