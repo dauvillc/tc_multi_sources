@@ -50,6 +50,7 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
         coords_dim,
         adamw_kwargs,
         lr_scheduler_kwargs,
+        cond_dim=None,
         loss_max_distance_from_center=None,
         ignore_land_pixels_in_loss=False,
         normalize_coords_across_sources=False,
@@ -79,6 +80,8 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
             coords_dim (int): Dimension of the coordinates embeddings.
             adamw_kwargs (dict): Arguments to pass to torch.optim.AdamW (other than params).
             lr_scheduler_kwargs (dict): Arguments to pass to the learning rate scheduler.
+            cond_dim (int or None): Dimension of the conditioning embedding.
+                If None, defaults to values_dim.
             loss_max_distance_from_center (int or None): If specified, only pixels within this
                 distance from the center of the storm (in km) will be considered
                 in the loss computation.
@@ -133,6 +136,7 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
         self.patch_size = patch_size
         self.values_dim = values_dim
         self.coords_dim = coords_dim
+        self.cond_dim = cond_dim if cond_dim is not None else values_dim
 
         # RNG that will be used to select the sources to mask
         self.source_select_gen = torch.Generator().manual_seed(sources_selection_seed)
@@ -195,6 +199,7 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
                         self.patch_size,
                         self.values_dim,
                         self.coords_dim,
+                        self.cond_dim,
                         source.n_charac_variables(),
                         use_diffusion_t=self.use_diffusion_t,
                         pred_mean_channels=pred_mean_channels,
@@ -207,6 +212,7 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
                         self.values_dim,
                         n_output_channels,
                         self.patch_size,
+                        cond_dim=self.cond_dim,
                         use_modulation=use_modulation_in_output_layers,
                         resnet_channels=output_resnet_channels,
                         resnet_blocks=output_resnet_blocks,

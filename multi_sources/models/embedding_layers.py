@@ -9,13 +9,14 @@ class LinearEmbedding(nn.Module):
 
     def __init__(self, input_dim, output_dim, n_layers=1, norm=False):
         super(LinearEmbedding, self).__init__()
-        self.embedding = nn.Linear(input_dim, output_dim)
         if n_layers > 1:
             layers = []
             for _ in range(n_layers - 1):
                 layers.append(nn.Linear(output_dim, output_dim))
                 layers.append(nn.GELU())
             self.embedding = nn.Sequential(self.embedding, *layers)
+        else:
+            self.embedding = nn.Linear(input_dim, output_dim)
         self.act = nn.GELU()
         self.use_norm = norm
         if norm:
@@ -153,6 +154,7 @@ class SourcetypeEmbedding2d(nn.Module):
         patch_size,
         values_dim,
         coords_dim,
+        cond_dim,
         n_charac_vars=0,
         use_diffusion_t=True,
         pred_mean_channels=0,
@@ -168,6 +170,7 @@ class SourcetypeEmbedding2d(nn.Module):
             patch_size (int): Size of the patches to be used for convolution.
             values_dim (int): Dimension of the values embedding space.
             coords_dim (int): Dimension of the coordinate embedding space.
+            cond_dim (int): Dimension of the conditioning embedding space.
             n_charac_vars (int): Number of optional characteristic variables.
             use_diffusion_t (bool): Whether to include a diffusion timestep embedding.
             pred_mean_channels (int): Number of channels for the predicted mean. If zero,
@@ -213,7 +216,7 @@ class SourcetypeEmbedding2d(nn.Module):
         self.spatial_cond_embedding = ConvPatchEmbedding2d(
             ch_spatial_cond,
             patch_size,
-            values_dim,
+            cond_dim,
             norm=False,
             mlp_layers=conditioning_mlp_layers,
         )
@@ -222,10 +225,10 @@ class SourcetypeEmbedding2d(nn.Module):
         ch_cond = 1 + n_charac_vars + int(self.use_diffusion_t)
         ch_cond += int(self.include_coords_in_conditioning)  # time coord if included
         self.cond_embedding = LinearEmbedding(
-            ch_cond, values_dim, n_layers=conditioning_mlp_layers, norm=False
+            ch_cond, cond_dim, n_layers=conditioning_mlp_layers, norm=False
         )
         # final layer normalization for the conditioning
-        self.cond_norm = nn.LayerNorm(values_dim)
+        self.cond_norm = nn.LayerNorm(cond_dim)
 
     def forward(self, data):
         """
@@ -244,7 +247,7 @@ class SourcetypeEmbedding2d(nn.Module):
         Returns:
             embedded_values: (B, h, w, values_dim) tensor of embedded values.
             embedded_coords: (B, h, w, coords_dim) tensor of embedded coordinates.
-            conditioning: (B, h, w, values_dim) tensor containing the conditioning, or
+            conditioning: (B, h, w, cond_dim) tensor containing the conditioning, or
                 None if no conditioning is given.
         """
 

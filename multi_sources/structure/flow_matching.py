@@ -57,6 +57,7 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
         coords_dim,
         adamw_kwargs,
         lr_scheduler_kwargs,
+        cond_dim=None,
         use_det_model_from_run=None,
         n_sampling_diffusion_steps=25,
         noise_scale=1.0,
@@ -92,6 +93,8 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
             coords_dim (int): Dimension of the coordinates embeddings.
             adamw_kwargs (dict): Arguments to pass to torch.optim.AdamW (other than params).
             lr_scheduler_kwargs (dict): Arguments to pass to the learning rate scheduler.
+            cond_dim (int or None): If specified, dimension of the conditioning embeddings.
+                If None, will default to values_dim.
             use_det_model_from_run (str): Path to a checkpoint of a deterministic model
                 to predict the means from.
             n_sampling_diffusion_steps (int): Number of diffusion steps when sampling.

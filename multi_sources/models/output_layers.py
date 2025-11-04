@@ -16,6 +16,7 @@ class SourcetypeProjection2d(nn.Module):
         values_dim,
         out_channels,
         patch_size,
+        cond_dim,
         use_modulation=False,
         resnet_channels=None,
         resnet_blocks=None,
@@ -25,6 +26,7 @@ class SourcetypeProjection2d(nn.Module):
             values_dim (int): Dimension of the values embeddings.
             out_channels (int): Number of channels in the output space.
             patch_size (int): Size of the embedding patches.
+            cond_dim (int or None): Dimension of the conditioning embedding.
             use_modulation (bool): If True, applies modulation to the values embeddings.
             resnet_channels (int): Number of channels in the output ResNet.
             resnet_blocks (int): Number of blocks in the output ResNet.
@@ -34,7 +36,7 @@ class SourcetypeProjection2d(nn.Module):
 
         self.norm = nn.LayerNorm(values_dim)
         if use_modulation:
-            self.modulation = nn.Sequential(nn.SiLU(), nn.Linear(values_dim, 2 * values_dim))
+            self.modulation = nn.Sequential(nn.SiLU(), nn.Linear(values_dim, 2 * cond_dim))
         # Subpixel convolution to project the latent space to the output space
         self.conv = nn.Conv2d(
             in_channels=values_dim,

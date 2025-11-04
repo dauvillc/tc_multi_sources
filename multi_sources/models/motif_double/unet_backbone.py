@@ -36,6 +36,7 @@ class MultisourceGeneralBackboneUNet(nn.Module):
         n_blocks_per_stage,
         coords_dim,
         values_dim,
+        cond_dim,
         att_inner_ratio=1.0,
         cross_att_inner_ratio_v=1.0,
         num_heads=8,
@@ -57,11 +58,12 @@ class MultisourceGeneralBackboneUNet(nn.Module):
                 and 1 block after the second upsampling.
             coords_dim (int): Embedding dimension for the coordinates of each source.
             values_dim (int): Embedding dimension for the values of each source.
+            cond_dim (int): Embedding dimension for the conditioning of each source.
         """
         super().__init__()
         if values_dim % (2 ** (len(n_blocks_per_stage) - 1)) != 0:
             raise ValueError("values_dim must be divisible by 2^(number of downsampling stages).")
-        self.values_dim, self.coords_dim = values_dim, coords_dim
+        self.values_dim, self.coords_dim, self.cond_dim = values_dim, coords_dim, cond_dim
 
         def create_block(block_idx, update_coords=False, modulate_coords=False):
             shifted = bool(block_idx % 2)  # Shifting in both attention modules
@@ -77,6 +79,7 @@ class MultisourceGeneralBackboneUNet(nn.Module):
                         ),
                         values_dim,
                         coords_dim,
+                        cond_dim,
                         modulate_coords=modulate_coords,
                         expect_coords_in_output=update_coords,
                     ),
@@ -93,6 +96,7 @@ class MultisourceGeneralBackboneUNet(nn.Module):
                         ),
                         values_dim,
                         coords_dim,
+                        cond_dim,
                         modulate_coords=modulate_coords,
                         expect_coords_in_output=update_coords,
                     ),
@@ -106,6 +110,7 @@ class MultisourceGeneralBackboneUNet(nn.Module):
                         ),
                         values_dim,
                         coords_dim,
+                        cond_dim,
                         modulate_coords=modulate_coords,
                         expect_coords_in_output=update_coords,
                     ),
@@ -221,12 +226,15 @@ class AdapativeConditionalNormalization(nn.Module):
     the wrapped module's output.
     """
 
-    def __init__(self, module, values_dim, coords_dim, modulate_coords, expect_coords_in_output):
+    def __init__(
+        self, module, values_dim, coords_dim, cond_dim, modulate_coords, expect_coords_in_output
+    ):
         """
         Args:
             module (nn.Module): The module to wrap.
             values_dim (int): Embedding dimension for the values of each source.
             coords_dim (int): Embedding dimension for the coordinates of each source.
+            cond_dim (int): Embedding dimension for the conditioning of each source.
             modulate_coords (bool): Whether to modulate the coordinates with the conditioning.
             expect_coords_in_output (bool): Whether the wrapped module is expected to output
                 coordinates in addition to values. If True, the output will contain both
@@ -242,7 +250,7 @@ class AdapativeConditionalNormalization(nn.Module):
 
         # Normalization and conditioning for values
         self.values_norm = nn.LayerNorm(values_dim)
-        self.values_cond_proj = nn.Sequential(nn.SiLU(), nn.Linear(values_dim, values_dim * 3))
+        self.values_cond_proj = nn.Sequential(nn.SiLU(), nn.Linear(cond_dim, values_dim * 3))
         # Initialize the weights of the conditional normalization to zero (no effect)
         nn.init.zeros_(self.values_cond_proj[1].weight)
         nn.init.zeros_(self.values_cond_proj[1].bias)
@@ -252,7 +260,7 @@ class AdapativeConditionalNormalization(nn.Module):
             # output coordinates, no gate projection is applied for the coordinates.
             cond_proj_dim = coords_dim * 3 if expect_coords_in_output else coords_dim * 2
             self.coords_norm = nn.LayerNorm(coords_dim)
-            self.coords_cond_proj = nn.Sequential(nn.SiLU(), nn.Linear(values_dim, cond_proj_dim))
+            self.coords_cond_proj = nn.Sequential(nn.SiLU(), nn.Linear(cond_dim, cond_proj_dim))
             # Initialize the weights of the conditional normalization to zero (no effect)
             nn.init.zeros_(self.coords_cond_proj[1].weight)
             nn.init.zeros_(self.coords_cond_proj[1].bias)

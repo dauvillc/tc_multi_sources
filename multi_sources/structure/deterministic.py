@@ -45,6 +45,7 @@ class MultisourceDeterministicReconstructor(MultisourceAbstractReconstructor):
         coords_dim,
         adamw_kwargs,
         lr_scheduler_kwargs,
+        cond_dim=None,
         loss_max_distance_from_center=None,
         ignore_land_pixels_in_loss=False,
         normalize_coords_across_sources=False,
@@ -69,6 +70,8 @@ class MultisourceDeterministicReconstructor(MultisourceAbstractReconstructor):
             coords_dim (int): Dimension of the coordinates embeddings.
             adamw_kwargs (dict): Arguments to pass to torch.optim.AdamW (other than params).
             lr_scheduler_kwargs (dict): Arguments to pass to the learning rate scheduler.
+            cond_dim (int or None): If specified, dimension of the conditioning embeddings.
+                If None, defaults to values_dim.
             loss_max_distance_from_center (int or None): If specified, only pixels within this
                 distance from the center of the storm (in km) will be considered
                 in the loss computation.
@@ -106,6 +109,7 @@ class MultisourceDeterministicReconstructor(MultisourceAbstractReconstructor):
             coords_dim,
             adamw_kwargs,
             lr_scheduler_kwargs,
+            cond_dim=cond_dim,
             loss_max_distance_from_center=loss_max_distance_from_center,
             ignore_land_pixels_in_loss=ignore_land_pixels_in_loss,
             normalize_coords_across_sources=normalize_coords_across_sources,

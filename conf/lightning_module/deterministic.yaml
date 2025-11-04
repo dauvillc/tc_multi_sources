@@ -2,6 +2,7 @@ _target_: multi_sources.structure.deterministic.MultisourceDeterministicReconstr
 patch_size: 16
 values_dim: ${model.values_dim}
 coords_dim: ${model.coords_dim}
+cond_dim: ${model.cond_dim}
 n_sources_to_mask: 1
 lr_scheduler_kwargs: ${lr_scheduler}
 loss_max_distance_from_center: null

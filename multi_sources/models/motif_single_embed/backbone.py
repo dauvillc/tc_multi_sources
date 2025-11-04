@@ -29,6 +29,7 @@ class MultisourceGeneralBackbone(nn.Module):
         n_blocks,
         values_dim,
         coords_dim,
+        cond_dim,
         sum_or_concat_coords="sum",
         att_inner_ratio=1.0,
         cross_att_inner_ratio_v=1.0,
@@ -49,8 +50,7 @@ class MultisourceGeneralBackbone(nn.Module):
                 with a linear layer before summing or concatenating.
         """
         super().__init__()
-        self.values_dim = values_dim
-        self.coords_dim = coords_dim
+        self.values_dim, self.coords_dim, self.cond_dim = values_dim, coords_dim, cond_dim
         self.sum_or_concat_coords = sum_or_concat_coords
         if sum_or_concat_coords == "concat":
             self.values_dim += coords_dim
@@ -74,6 +74,7 @@ class MultisourceGeneralBackbone(nn.Module):
                             inner_ratio_v=cross_att_inner_ratio_v,
                         ),
                         values_dim,
+                        cond_dim,
                     ),
                     AdapativeConditionalNormalization(
                         SeparateWindowedValuesCoordinatesAttention(
@@ -85,6 +86,7 @@ class MultisourceGeneralBackbone(nn.Module):
                             shifted=shifted,
                         ),
                         values_dim,
+                        cond_dim,
                     ),
                     AdapativeConditionalNormalization(
                         FeedForward(
@@ -93,6 +95,7 @@ class MultisourceGeneralBackbone(nn.Module):
                             dropout=dropout,
                         ),
                         values_dim,
+                        cond_dim,
                     ),
                 ]
             )
@@ -144,18 +147,19 @@ class AdapativeConditionalNormalization(nn.Module):
     the wrapped module's output.
     """
 
-    def __init__(self, module, values_dim):
+    def __init__(self, module, values_dim, cond_dim):
         """
         Args:
             module (nn.Module): The module to wrap.
             values_dim (int): Embedding dimension for the values of each source.
+            cond_dim (int): Embedding dimension for the conditioning of each source.
         """
         super().__init__()
         self.module = module
 
         # Normalization and conditioning for values
         self.values_norm = nn.LayerNorm(values_dim)
-        self.values_cond_proj = nn.Sequential(nn.SiLU(), nn.Linear(values_dim, values_dim * 3))
+        self.values_cond_proj = nn.Sequential(nn.SiLU(), nn.Linear(cond_dim, values_dim * 3))
         # Initialize the weights of the conditional normalization to zero (no effect)
         nn.init.zeros_(self.values_cond_proj[1].weight)
         nn.init.zeros_(self.values_cond_proj[1].bias)

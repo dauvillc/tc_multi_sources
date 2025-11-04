@@ -1,10 +1,12 @@
 dropout: 0.0
 values_dim: 256
 coords_dim: 256
+cond_dim: 256
 backbone:
   _target_: multi_sources.models.motif_single_embed.backbone.MultisourceGeneralBackbone
   values_dim: ${lightning_module.values_dim}
   coords_dim: ${lightning_module.coords_dim}
+  cond_dim: ${lightning_module.cond_dim}
   sum_or_concat_coords: "sum"
   n_blocks: 8
   dropout: ${model.dropout}

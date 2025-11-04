@@ -2,6 +2,7 @@ _target_: multi_sources.structure.flow_matching.MultisourceFlowMatchingReconstru
 patch_size: 4
 values_dim: ${model.values_dim}
 coords_dim: ${model.coords_dim}
+cond_dim: ${model.cond_dim}
 n_sources_to_mask: 1
 n_sampling_diffusion_steps: 25
 lr_scheduler_kwargs: ${lr_scheduler}
