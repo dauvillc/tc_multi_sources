@@ -119,7 +119,7 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
             display_realizations_every_kp_batches (int): Number of metrics evaluations between
                 two realizations display.
             n_realizations_per_sample (int): Number of realizations to sample for each sample
-                during validation or testing.
+                in the prediction step.
             metrics (dict of str: callable): Metrics to compute during training and validation.
                 A metric should have the signature metric(y_pred, y_true, masks, **kwargs)
                 and return a dict {source: tensor of shape (batch_size,)}.
@@ -644,11 +644,10 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
 
         if self.validation_dir is not None:
             if batch_idx % self.compute_metrics_every_k_batches == 0:
-                # We'll sample a certain number of realizations for each sample.
-                # If we're displaying realizations, we'll sample 5 realizations. If we're
+                # If we're displaying realizations, we'll sample 3 realizations. If we're
                 # simply computing the metrics, we'll sample 1 realization.
                 if batch_idx % self.display_realizations_every_k_batches == 0:
-                    n_real = self.n_realizations_per_sample
+                    n_real = 3
                 else:
                     n_real = 1
                 # Sample with the ODE solver
