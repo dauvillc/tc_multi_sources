@@ -28,7 +28,7 @@ class MultisourceGeneralBackbone(nn.Module):
         n_blocks,
         coords_dim,
         values_dim,
-        cond_dim,
+        cond_dim=None,
         update_coords=False,
         att_inner_ratio=1.0,
         cross_att_inner_ratio_v=1.0,
@@ -44,10 +44,12 @@ class MultisourceGeneralBackbone(nn.Module):
             coords_dim (int): Embedding dimension for the coordinates of each source.
             values_dim (int): Embedding dimension for the values of each source.
             cond_dim (int): Dimension of the conditioning vector for each source.
+                if None, defaults to values_dim.
             update_coords (bool): Whether to update the coordinates in the backbone.
                 If False, the embedded coordinates remain unchanged throughout the backbone.
         """
         super().__init__()
+        cond_dim = cond_dim if cond_dim is not None else values_dim
         self.values_dim, self.coords_dim, self.cond_dim = values_dim, coords_dim, cond_dim
         # Build the successive blocks
         self.blocks = nn.ModuleList()
