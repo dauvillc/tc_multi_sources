@@ -1,5 +1,5 @@
 _target_: multi_sources.structure.deterministic.MultisourceDeterministicReconstructor
-patch_size: 16
+patch_size: 4
 values_dim: ${model.values_dim}
 coords_dim: ${model.coords_dim}
 cond_dim: ${model.cond_dim}
