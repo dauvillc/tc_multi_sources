@@ -1,0 +1,38 @@
+# @package _global_
+defaults:
+  - override /sources: pmw_37_89
+  - override /lightning_module: flow_matching
+  - override /lr_scheduler: cosine_warmup_100epochs
+  - override /metrics: default_fm
+  - override /model: msvit_12b_d512
+
+lightning_module:
+  use_det_model_from_run: null
+
+wandb:
+  name: diff_pmw_gpm
+  group: diff_pmw_gpm
+
+dataset:
+  train:
+    dt_max: 6
+    min_available_sources: 2
+    source_types_max_avail:
+      pmw: 3
+    must_include_groups: # At least one of each group is included in every sample.
+      - # Input sources (all sensors except GMI)
+        - tc_primed_pmw_SSMI_F11
+        - tc_primed_pmw_SSMI_F13
+        - tc_primed_pmw_SSMI_F14
+        - tc_primed_pmw_SSMI_F15
+        - tc_primed_pmw_SSMIS_F16
+        - tc_primed_pmw_SSMIS_F17
+        - tc_primed_pmw_SSMIS_F18
+        - tc_primed_pmw_SSMIS_F19
+        - tc_primed_pmw_TMI_TRMM
+        - tc_primed_pmw_AMSR2_GCOMW1
+      - # Target source (GMI)
+        - tc_primed_pmw_GMI_GPM
+       
+trainer:
+  strategy: ddp
