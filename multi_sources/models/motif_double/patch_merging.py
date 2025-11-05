@@ -82,11 +82,11 @@ class MultiSourcePatchMerging(nn.Module):
     while doubling the feature dimension.
     """
 
-    def __init__(self, values_dim, coords_dim):
+    def __init__(self, values_dim, coords_dim, cond_dim):
         super().__init__()
         self.values_merging = PatchMerging(values_dim)
         self.coords_merging = PatchMerging(coords_dim)
-        self.conditioning_merging = PatchMerging(values_dim)
+        self.conditioning_merging = PatchMerging(cond_dim)
 
     def forward(self, inputs):
         """
@@ -96,8 +96,10 @@ class MultiSourcePatchMerging(nn.Module):
                 and "conditioning",
                 where (source_name, index) is a tuple with the source name and the observation index
                 (0 = most recent).
-                The values and conditioning are expected of shape (B, ..., Dv), and
-                the coordinates of shape (B, ..., Dc), where ... is the spatial dimensions of
+                The values are expected of shape (B, ..., Dv),
+                the coordinates of shape (B, ..., Dc),
+                the conditioning of shape (B, ..., Dcond),
+                where ... is the spatial dimensions of
                 the embedded source, e.g. (h, w) for 2D sources.
 
         Returns:
@@ -131,11 +133,11 @@ class MultiSourcePatchSplitting(nn.Module):
     while halving the feature dimension.
     """
 
-    def __init__(self, values_dim, coords_dim):
+    def __init__(self, values_dim, coords_dim, cond_dim):
         super().__init__()
         self.values_splitting = PatchSplitting(values_dim)
         self.coords_splitting = PatchSplitting(coords_dim)
-        self.conditioning_splitting = PatchSplitting(values_dim)
+        self.conditioning_splitting = PatchSplitting(cond_dim)
 
     def forward(self, inputs):
         """
@@ -145,8 +147,10 @@ class MultiSourcePatchSplitting(nn.Module):
                 and "conditioning",
                 where (source_name, index) is a tuple with the source name and the observation index
                 (0 = most recent).
-                The values and conditioning are expected of shape (B, ..., Dv), and
-                the coordinates of shape (B, ..., Dc), where ... is the spatial dimensions of
+                The values are expected of shape (B, ..., Dv),
+                the coordinates of shape (B, ..., Dc),
+                the conditioning of shape (B, ..., Dcond),
+                where ... is the spatial dimensions of
                 the embedded source, e.g. (h, w) for 2D sources.
 
         Returns:

@@ -127,9 +127,10 @@ class MultisourceGeneralBackboneUNet(nn.Module):
                 stage_blocks.append(create_block(block_idx + block_cnt))
                 block_cnt += 1
             # Add a patch merging layer after each stage except the last one
-            merging = MultiSourcePatchMerging(values_dim, coords_dim)
+            merging = MultiSourcePatchMerging(values_dim, coords_dim, cond_dim)
             values_dim *= 2
             coords_dim *= 2
+            cond_dim *= 2
             self.downsampling_blocks.append(nn.ModuleList([stage_blocks, merging]))
 
         # Create the bottleneck blocks
@@ -143,9 +144,10 @@ class MultisourceGeneralBackboneUNet(nn.Module):
         self.upsampling_blocks = nn.ModuleList()
         for stage_idx, n_blocks in reversed(list(enumerate(n_blocks_per_stage[:-1]))):
             # Add a patch splitting layer before each stage
-            splitting = MultiSourcePatchSplitting(values_dim, coords_dim)
+            splitting = MultiSourcePatchSplitting(values_dim, coords_dim, cond_dim)
             values_dim //= 2
             coords_dim //= 2
+            cond_dim //= 2
             stage_blocks = nn.ModuleList()
             for block_idx in range(n_blocks):
                 stage_blocks.append(create_block(block_idx + block_cnt))
