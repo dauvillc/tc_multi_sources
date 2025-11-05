@@ -111,7 +111,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         select_most_recent=False,
         min_ref_time_delta=0,
         num_workers=0,
-        must_include_groups=None,
+        must_include_groups=[],
         forecasting_lead_time=None,
         forecasting_sources=None,
         min_tc_intensity=None,
@@ -162,7 +162,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
             min_ref_time_delta (int): The minimum time delta between two reference times
                 of the same storm (ie between two samples of the same storm).
             num_workers (int): If > 1, number of workers to use for parallel loading of the data.
-            must_include_groups (list of list of str): If not None, list of groups of sources
+            must_include_groups (list of list of str): List of groups of sources
                 such that at least one source from each group must be available for a sample
                 to be included in the dataset.
             forecasting_lead_time (int): If not None, the lead time to use for forecasting.
@@ -306,12 +306,10 @@ class MultiSourceDataset(torch.utils.data.Dataset):
             # Compute the mask for the samples that have at least required_avail sources
             masks.append(st_avail_count >= required_avail)
             source_types_availability[source_type] = st_avail_count
-        # If must_include_groups is specified, only keep samples where at least one source
-        # of each group is available.
-        if must_include_groups is not None:
-            for group in must_include_groups:
-                group_avail_count = available_sources[group].sum(axis=1)
-                masks.append(group_avail_count >= 1)
+        # Only keep samples where at least one source of each group is available.
+        for group in must_include_groups:
+            group_avail_count = available_sources[group].sum(axis=1)
+            masks.append(group_avail_count >= 1)
         # Combine the masks with a logical AND
         mask = np.logical_and.reduce(masks)
         # We can now build the reference dataframe:

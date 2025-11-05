@@ -25,6 +25,8 @@ train:
   min_ref_time_delta: 0
   # Number of workers for the data loading
   num_workers: ${dataloader.num_workers}
+  # List of source names that must be included in each sample
+  must_include_groups: []
   # By default, don't select the most recent sources
   select_most_recent: false
   # Whether to mask the spatial coordinates of the sources
@@ -52,6 +54,7 @@ val:
   source_types_max_avail: ${dataset.train.source_types_max_avail}
   min_ref_time_delta: ${dataset.train.min_ref_time_delta}
   num_workers: ${dataset.train.num_workers}
+  must_include_groups: ${dataset.train.must_include_groups}
   select_most_recent: ${dataset.train.select_most_recent}
   forecasting_lead_time: ${dataset.train.forecasting_lead_time}
   forecasting_sources: ${dataset.train.forecasting_sources}
@@ -74,6 +77,7 @@ test:
   source_types_max_avail: ${dataset.train.source_types_max_avail}
   min_ref_time_delta: ${dataset.train.min_ref_time_delta}
   num_workers: ${dataset.train.num_workers}
+  must_include_groups: ${dataset.train.must_include_groups}
   select_most_recent: ${dataset.train.select_most_recent}
   forecasting_lead_time: ${dataset.train.forecasting_lead_time}
   forecasting_sources: ${dataset.train.forecasting_sources}
