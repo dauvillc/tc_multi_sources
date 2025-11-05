@@ -1,9 +1,5 @@
 # @package _global_
-pred_name: fm_min4_max2
-
-lightning_module:
-  cfg_scale: null
-  n_realizations_per_sample: 3
+pred_name: min4_max2
 
 dataset:
   val:

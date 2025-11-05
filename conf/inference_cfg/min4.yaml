@@ -1,18 +1,14 @@
 # @package _global_
-pred_name: fm_max1
-
-lightning_module:
-  cfg_scale: null
-  n_realizations_per_sample: 3
+pred_name: min4
 
 dataset:
   val:
     dt_max: 6
     min_ref_time_delta: 6
-    min_available_sources: 2
+    min_available_sources: 4
     source_types_max_avail:
-      pmw: 2  # At most 2 available sources (including the masked source).
-    select_most_recent: false.
+      pmw: 50
+    select_most_recent: true
     forecasting_sources: null
     forecasting_lead_time: null
   test:
