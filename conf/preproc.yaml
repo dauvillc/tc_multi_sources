@@ -3,7 +3,7 @@ defaults:
   - paths: jz
 
 # Whether to use a regular grid for PMW data
-use_regular_grid_pmw: true
+use_regular_grid_pmw: false
 # Target resolution to which the PMW images will be regridded, in degrees.
 # Give a list [longitude_res, latitude_res]
 regridding_resolution: [0.15, 0.15]
