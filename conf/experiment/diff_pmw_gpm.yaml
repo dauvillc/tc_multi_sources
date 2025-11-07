@@ -2,12 +2,14 @@
 defaults:
   - override /sources: pmw_37_89
   - override /lightning_module: flow_matching
-  - override /lr_scheduler: cosine_warmup_100epochs
+  - override /lr_scheduler: cosine_warmup_150epochs
   - override /metrics: default_fm
   - override /model: msvit_12b_d512
 
 lightning_module:
   use_det_model_from_run: null
+  mask_only_sources:  # Only mask these sources when applying random source masking
+    - tc_primed_pmw_GMI_GPM
 
 wandb:
   name: diff_pmw_gpm
