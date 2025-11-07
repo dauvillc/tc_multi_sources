@@ -3,7 +3,7 @@ defaults:
   - override /paths: jz
 
 setup:
-  timeout_min: 120
+  timeout_min: 1200
   cpus_per_task: 10
   slurm_nodes: 8
   slurm_ntasks_per_node: ${trainer.devices}
@@ -26,4 +26,4 @@ trainer:
 dataloader:
   num_workers: 9
 
-checkpoint_time_interval: 10  # in minutes
+checkpoint_time_interval: 30  # in minutes
