@@ -8,7 +8,7 @@ defaults:
   - override /model: msvit_12b_d512
 
 lightning_module:
-  patch_size: 8
+  patch_size: 4
   use_det_model_from_run: null
 
 wandb:
