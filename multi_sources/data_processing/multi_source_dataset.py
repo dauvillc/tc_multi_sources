@@ -242,11 +242,6 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         if forecasting_lead_time is not None:
             if not forecasting_sources:
                 raise ValueError("forecasting_lead_time must be used with forecasting_sources.")
-            if must_include_groups:
-                raise ValueError(
-                    "must_include_groups cannot be used with forecasting_lead_time "
-                    "and forecasting_sources."
-                )
             if not isinstance(forecasting_sources, list):
                 forecasting_sources = [forecasting_sources]
             self.forecasting_lead_time = pd.Timedelta(forecasting_lead_time, unit="h")
