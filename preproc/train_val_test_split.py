@@ -88,30 +88,31 @@ def main(cfg):
         )
         print(f"Number of pre-existing storms in splits: {len(existing_sids)}")
         sids = [sid for sid in sids if sid not in existing_sids]
-        if len(sids) == 0:
-            print("No new storms to split, exiting.")
-            return
         print(f"Number of new storms to split: {len(sids)}")
 
     # Split the sids into training, validation, and test sets
     print("Splitting data")
-    train_frac, val_frac, test_frac = train_val_test_fraction
-    train_val_frac = train_frac + val_frac
-    train_vals_sids, test_sids = train_test_split(sids, test_size=test_frac, random_state=seed)
-    train_sids, val_sids = train_test_split(
-        train_vals_sids, test_size=val_frac / train_val_frac, random_state=seed
-    )
+    if len(sids) == 0:
+        # No new sids to split
+        train_sids, val_sids, test_sids = [], [], []
+    else:
+        train_frac, val_frac, test_frac = train_val_test_fraction
+        train_val_frac = train_frac + val_frac
+        train_vals_sids, test_sids = train_test_split(sids, test_size=test_frac, random_state=seed)
+        train_sids, val_sids = train_test_split(
+            train_vals_sids, test_size=val_frac / train_val_frac, random_state=seed
+        )
+
+    if reuse_existing:
+        # Add the existing sids to the appropriate splits
+        train_sids = list(set(train_sids).union(set(existing_train["sid"].unique())))
+        val_sids = list(set(val_sids).union(set(existing_val["sid"].unique())))
+        test_sids = list(set(test_sids).union(set(existing_test["sid"].unique())))
+
     # Place the samples into the appropriate split based on the storm ID
     train = metadata[metadata["sid"].isin(train_sids)]
     val = metadata[metadata["sid"].isin(val_sids)]
     test = metadata[metadata["sid"].isin(test_sids)]
-
-    # If reusing existing splits, append the new samples to the existing ones
-    if reuse_existing:
-        print("Appending to existing splits")
-        train = pd.concat([existing_train, train], ignore_index=True)
-        val = pd.concat([existing_val, val], ignore_index=True)
-        test = pd.concat([existing_test, test], ignore_index=True)
 
     train = train.sort_values(["sid", "time", "source_name"], ascending=[True, False, True])
     val = val.sort_values(["sid", "time", "source_name"], ascending=[True, False, True])
