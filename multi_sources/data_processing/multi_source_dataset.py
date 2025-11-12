@@ -60,8 +60,8 @@ def precompute_samples(
         # For the forecast sources, we also keep the rows where the time is
         # exactly the forecast time.
         if forecast_sources:
-            forecast_mask = (
-                sample_df["source_name"].isin(forecast_sources) & sample_df["time"] == t0
+            forecast_mask = (sample_df["source_name"].isin(forecast_sources)) & (
+                sample_df["time"] == t0
             )
             time_mask = time_mask | forecast_mask
         sample_df = sample_df[time_mask]
@@ -190,11 +190,6 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         self.constants_dir = self.dataset_dir / "constants"
         self.processed_dir = self.dataset_dir / "prepared"
         self.split = split
-        self.dt_max = pd.Timedelta(dt_max, unit="h")
-        if dt_max_norm is not None:
-            self.dt_max_norm = pd.Timedelta(dt_max_norm, unit="h")
-        else:
-            self.dt_max_norm = self.dt_max
         self.source_types_max_avail = source_types_max_avail
         self.min_ref_time_delta = min_ref_time_delta
         self.select_most_recent = select_most_recent
@@ -245,9 +240,9 @@ class MultiSourceDataset(torch.utils.data.Dataset):
             raise ValueError("No samples found for the given sources.")
 
         if forecasting_lead_time is not None:
-            if forecasting_sources is None:
+            if not forecasting_sources:
                 raise ValueError("forecasting_lead_time must be used with forecasting_sources.")
-            if must_include_groups is not None:
+            if must_include_groups:
                 raise ValueError(
                     "must_include_groups cannot be used with forecasting_lead_time "
                     "and forecasting_sources."
@@ -256,11 +251,20 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                 forecasting_sources = [forecasting_sources]
             self.forecasting_lead_time = pd.Timedelta(forecasting_lead_time, unit="h")
             self.forecasting_sources = [s for s in forecasting_sources if s in source_names]
+            if len(self.forecasting_sources) == 0:
+                raise ValueError("None of the forecasting_sources are in the dataset sources.")
             print("Forecasting sources: ", self.forecasting_sources)
             print("Forecasting lead time: ", self.forecasting_lead_time)
         else:
             self.forecasting_lead_time = pd.Timedelta(0, unit="h")
             self.forecasting_sources = None
+
+        # Time delta settings
+        self.dt_max = pd.Timedelta(dt_max, unit="h")
+        if dt_max_norm is not None:
+            self.dt_max_norm = pd.Timedelta(dt_max_norm, unit="h")
+        else:
+            self.dt_max_norm = self.dt_max + self.forecasting_lead_time
 
         # ========================================================================================
         # BUILDING THE REFERENCE DATAFRAME

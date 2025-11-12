@@ -83,8 +83,8 @@ def read_variables_dict(variables_dict):
 
 def _is_source_available(ref_obs, sid_mask, source_mask, time_arr, source_name, dt_max, lead_time):
     """Given a row in the metadata df which defines a sample (reference
-    observation) and a source, returns 1 if the source is present in the
-    sample and 0 otherwise."""
+    observation) and a source, returns the number of observations from that source
+    that are available for that sample."""
     t0 = ref_obs["time"]
     sid = ref_obs["sid"]
     # Compute the allowed time window
@@ -93,7 +93,7 @@ def _is_source_available(ref_obs, sid_mask, source_mask, time_arr, source_name, 
     # Isolate the times of observations corresponding to the correct sid and source
     times = time_arr[sid_mask[sid] & source_mask]
     # Check for times that respect the time delta constraint
-    return int(((times > min_t) & (times <= max_t)).any())
+    return ((times > min_t) & (times <= max_t)).sum().item()
 
 
 def _source_availability(df, sid_mask, source_mask, time_arr, source_name, dt_max, lead_time):
@@ -120,8 +120,8 @@ def compute_sources_availability(df, dt_max, lead_time, num_workers=0):
         num_workers (int, optional): Number of workers to use for parallelization.
 
     Returns:
-        pd.DataFrame: DataFrame D with one column per source, where D.loc[i, s] = 1
-            if source s is available for the sample i and 0 otherwise.
+        pd.DataFrame: DataFrame D with one column per source, where D.loc[i, s] is
+            the number of available observations from source s for sample i.
     """
     # Isolate the time, sid and source columns
     df = df[["time", "sid", "source_name"]]
