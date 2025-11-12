@@ -16,6 +16,16 @@ def main(cfg):
     preprocessed_dir = Path(cfg["paths"]["preprocessed_dataset"])
     # Path to the preprocessed dataset
     regridded_dir = preprocessed_dir / "prepared"
+    train_file = preprocessed_dir / "train.csv"
+    val_file = preprocessed_dir / "val.csv"
+    test_file = preprocessed_dir / "test.csv"
+    # Cfg option to reuse existing splits if they exist:
+    # if an SID is alreay in one of the splits, we won't change it
+    # (allows to add new data without changing existing splits).
+    reuse_existing = cfg["reuse_existing_splits"]
+    reuse_existing = reuse_existing and (
+        train_file.exists() and val_file.exists() and test_file.exists()
+    )
 
     # Each subdirectory in the regridded directory corresponds to a source, and contains
     # a file "samples_metadata.csv". We'll load all of these files and assemble them
@@ -64,6 +74,25 @@ def main(cfg):
     # the 'sid' column is the storm ID. We'll use this to split the data: samples
     # from the same storm should be in the same split, to avoid data leakage.
     sids = metadata["sid"].unique()
+
+    # Remove sids that are already in one of the splits if reuse_existing is True
+    if reuse_existing:
+        print("Reusing existing splits")
+        existing_train = pd.read_csv(train_file)
+        existing_val = pd.read_csv(val_file)
+        existing_test = pd.read_csv(test_file)
+        existing_sids = (
+            set(existing_train["sid"].unique())
+            .union(set(existing_val["sid"].unique()))
+            .union(set(existing_test["sid"].unique()))
+        )
+        print(f"Number of pre-existing storms in splits: {len(existing_sids)}")
+        sids = [sid for sid in sids if sid not in existing_sids]
+        if len(sids) == 0:
+            print("No new storms to split, exiting.")
+            return
+        print(f"Number of new storms to split: {len(sids)}")
+
     # Split the sids into training, validation, and test sets
     print("Splitting data")
     train_frac, val_frac, test_frac = train_val_test_fraction
@@ -77,11 +106,22 @@ def main(cfg):
     val = metadata[metadata["sid"].isin(val_sids)]
     test = metadata[metadata["sid"].isin(test_sids)]
 
+    # If reusing existing splits, append the new samples to the existing ones
+    if reuse_existing:
+        print("Appending to existing splits")
+        train = pd.concat([existing_train, train], ignore_index=True)
+        val = pd.concat([existing_val, val], ignore_index=True)
+        test = pd.concat([existing_test, test], ignore_index=True)
+
+    train = train.sort_values(["sid", "time", "source_name"], ascending=[True, False, True])
+    val = val.sort_values(["sid", "time", "source_name"], ascending=[True, False, True])
+    test = test.sort_values(["sid", "time", "source_name"], ascending=[True, False, True])
+    train = train.reset_index(drop=True)
+    val = val.reset_index(drop=True)
+    test = test.reset_index(drop=True)
+
     # Save the split metadata to disk as preprocessed_dir/train.json, ...
     print("Saving split metadata")
-    train_file = preprocessed_dir / "train.csv"
-    val_file = preprocessed_dir / "val.csv"
-    test_file = preprocessed_dir / "test.csv"
     train.to_csv(train_file, index=False)
     val.to_csv(val_file, index=False)
     test.to_csv(test_file, index=False)
