@@ -65,7 +65,7 @@ class TrainJob(submitit.helpers.Checkpointable):
         pl.seed_everything(cfg["seed"], workers=True)
 
         # Create the training dataset and dataloader
-        train_dataset = hydra.utils.instantiate(cfg["dataset"]["train"])
+        train_dataset = hydra.utils.instantiate(cfg["dataset"]["train"], _convert_="partial")
         train_dataloader = DataLoader(
             train_dataset,
             **cfg["dataloader"],
@@ -74,7 +74,7 @@ class TrainJob(submitit.helpers.Checkpointable):
             drop_last=True,
         )
         # Create the validation dataset and dataloader
-        val_dataset = hydra.utils.instantiate(cfg["dataset"]["val"])
+        val_dataset = hydra.utils.instantiate(cfg["dataset"]["val"], _convert_="partial")
         val_dataloader = DataLoader(
             val_dataset,
             **cfg["dataloader"],
