@@ -303,7 +303,8 @@ def display_realizations(
                     true = true.item()
                     ax.bar([0], [true], color="orange")
 
-                ax.set_title(f"{source_name} Ground Truth")
+                dt = batch[source_index_pair]["dt"][sample_idx].item()
+                ax.set_title(f"{source_name} dt={dt:.3f} GT")
 
             plt.tight_layout()
             # Save figure
