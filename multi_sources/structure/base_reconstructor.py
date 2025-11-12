@@ -141,6 +141,11 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
         # RNG that will be used to select the sources to mask
         self.source_select_gen = torch.Generator().manual_seed(sources_selection_seed)
 
+        if isinstance(mask_only_sources, str):
+            mask_only_sources = [mask_only_sources]
+        self.mask_only_sources = mask_only_sources
+        self.forecasting_mode = forecasting_mode
+
         # Initialize the embedding layers
         self.init_embedding_layers(
             use_modulation_in_output_layers,
@@ -151,15 +156,6 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
             conditioning_mlp_layers=conditioning_mlp_layers,
             coords_corner_and_center_embedding=coords_corner_and_center_embedding,
         )
-
-        if mask_only_sources is not None and forecasting_mode:
-            raise ValueError(
-                "mask_only_sources and forecasting_mode cannot be used " "at the same time."
-            )
-        if isinstance(mask_only_sources, str):
-            mask_only_sources = [mask_only_sources]
-        self.mask_only_sources = mask_only_sources
-        self.forecasting_mode = forecasting_mode
 
     def init_embedding_layers(
         self,
@@ -191,7 +187,7 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
                 n_output_channels = source.n_output_variables()
                 # Whether to include a predicted mean in the embedding layer
                 pred_mean_channels = n_output_channels if self.use_det_model else 0
-                # Create the layers for that source type depending on
+                # Create the embedding layers for that source type depending on
                 # its dimensionality
                 if source.dim == 2:
                     self.sourcetype_embeddings[source.type] = SourcetypeEmbedding2d(
@@ -296,6 +292,12 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
             # In this case, we mask all sources that are forecasted (i.e. have a negative dt).
             avail_flags = {}
             for source_index_pair, data in x.items():
+                if self.mask_only_sources is not None:
+                    source_name = source_index_pair[0]
+                    if source_name not in self.mask_only_sources:
+                        # Do not mask this source
+                        avail_flags[source_index_pair] = data["avail"].clone()
+                        continue
                 avail_flag = data["avail"].clone()
                 # Mask the sources that are forecasted (i.e. have a negative dt).
                 avail_flag[(avail_flag == 1) & (data["dt"] < 0)] = 0
