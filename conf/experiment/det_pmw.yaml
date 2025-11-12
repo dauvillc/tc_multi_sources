@@ -2,9 +2,12 @@
 defaults:
   - override /sources: pmw_37_89
   - override /lightning_module: deterministic
-  - override /lr_scheduler: cosine_warmup_100epochs
+  - override /lr_scheduler: cosine_warmup_150epochs
   - override /metrics: default_fm
-  - override /model: msvit_10b_d256
+  - override /model: msvit_12b_d512
+
+lightning_module:
+  patch_size: 4
 
 wandb:
   name: det_pmw
@@ -16,9 +19,6 @@ dataset:
     min_available_sources: 2
     source_types_max_avail:
       pmw: 3
-
-model:
-  dropout: 0.1
 
 trainer:
   strategy: ddp
