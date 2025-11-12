@@ -23,6 +23,7 @@ max_mem_per_worker: "3.8GB"
 
 # Seed for the train-val-test splitting
 splitting_seed: 42
+reuse_existing_splits: true
 train_val_test_fraction: [0.7, 0.15, 0.15]
 # Minimum time between two images from the same source over the same storm
 # This is to avoid having very similar images in the dataset
