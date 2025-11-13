@@ -53,11 +53,12 @@ def initialize_metadata(dest_dir):
     return True
 
 
-def process_era5_file(file, dest_dir, check_exist=False):
+def process_era5_file(file, dest_dir, patch_size, check_exist=False):
     """Processes a single ERA5 file.
     Args:
         file (str): Path to the input file.
         dest_dir (Path): Destination directory.
+        patch_size (float): Size of the ERA5 patches in degrees.
         check_exist (bool): Flag to check if the file already exists.
     Returns:
         dict or None: Sample metadata, or None if the sample is discarded.
@@ -111,18 +112,42 @@ def process_era5_file(file, dest_dir, check_exist=False):
             ds = ds[DATA_VARS + ["latitude", "longitude"]]
             # Rename the "ny" and "nx" dimensions to "lat" and "lon"
             ds = ds.rename({"ny": "lat", "nx": "lon"})
+
+            # Padding:
+            # - Create a new lat/lon grid with the same center but that cover patch_size degrees
+            res, old_lat, old_lon = 0.25, ds["latitude"].values, ds["longitude"].values
+            new_size = np.ceil(patch_size / res).astype(int)
+            lat_center, lon_center = old_lat[60], old_lon[60]  # patches are 121x121 in TC PRIMED
+            new_lat = np.arange(
+                max(lat_center - (new_size // 2) * res, -90),
+                min(lat_center + (new_size // 2 + 1) * res, 90),
+                res,
+            ).round(2)
+            new_lon = np.arange(
+                lon_center - (new_size // 2) * res,
+                lon_center + (new_size // 2 + 1) * res,
+                res,
+            ).round(2)
+            # Standardize longitude values to [-180, 180]
+            new_lon = (new_lon + 180) % 360 - 180
+            # We'll pad the dataset with NaNs and then set the new latitude and longitude values
+            ds = ds.pad(
+                lat=np.ceil((new_lat.size - ds.dims["lat"]) / 2).astype(int),
+                lon=np.ceil((new_lon.size - ds.dims["lon"]) / 2).astype(int),
+                method="constant",
+                constant_values=np.nan,  # by default but for clarity
+            )
+            ds = ds.assign_coords(latitude=("lat", new_lat), longitude=("lon", new_lon))
+
+            # Reverse the latitude dimension to have higher latitudes at the top
+            # after the next step.
+            ds = ds.isel(lat=slice(None, None, -1))
             # At this point the lat and lon variables are 1D arrays, but
             # we need to make them 2D arrays which give the lat/lon at each
             # grid point.
             lat, lon = ds["latitude"].values, ds["longitude"].values
             ds["latitude"] = ds["latitude"].expand_dims(dim={"lon": lon.shape[0]}, axis=1)
             ds["longitude"] = ds["longitude"].expand_dims(dim={"lat": lat.shape[0]}, axis=0)
-
-            # Standardize longitude values to [-180, 180]
-            ds["longitude"] = (ds["longitude"] + 180) % 360 - 180
-
-            # Reverse the latitude dimension to have the north at the top
-            ds = ds.reindex(lat=ds["lat"][::-1])
 
             # Compute the land-sea mask
             land_mask = globe.is_land(
@@ -142,6 +167,7 @@ def process_era5_file(file, dest_dir, check_exist=False):
 
             # Save processed data in the netCDF format
             ds = ds[DATA_VARS + ["latitude", "longitude", "land_mask", "dist_to_center"]]
+            ds = ds.drop_encoding()  # Drop the "unlimited_dims" encoding on the "time" dim.
             ds.to_netcdf(dest_file)
 
             samples_metadata.append(sample_metadata)
@@ -149,13 +175,13 @@ def process_era5_file(file, dest_dir, check_exist=False):
 
 
 # Helper function to process a chunk of files in parallel.
-def process_chunk(file_list, source_dest_dir, check_exist, verbose=False):
+def process_chunk(file_list, source_dest_dir, patch_size, check_exist, verbose=False):
     local_metadata = []
     discarded = 0
 
     iterator = tqdm(file_list, desc="Processing chunk") if verbose else file_list
     for file in iterator:
-        meta = process_era5_file(file, source_dest_dir, check_exist)
+        meta = process_era5_file(file, source_dest_dir, patch_size, check_exist)
         if meta is None:
             discarded += 1
         else:
@@ -167,13 +193,14 @@ def process_chunk(file_list, source_dest_dir, check_exist, verbose=False):
 def main(cfg):
     """Main function to process IR data."""
     cfg = OmegaConf.to_container(cfg, resolve=True)
+    patch_size_degrees = cfg.get("era5_patch_size", 50.0)
 
     # Setup paths
     tc_primed_path = Path(cfg["paths"]["raw_datasets"]) / "tc_primed"
     dest_path = Path(cfg["paths"]["preprocessed_dataset"]) / "prepared"
     check_exist = cfg.get("check_exist", False)
 
-    # Get PMW sources only
+    # Get environmental files only
     sources, source_files, source_groups = list_tc_primed_sources(
         tc_primed_path,
         source_type="environmental",
@@ -203,6 +230,7 @@ def main(cfg):
                         process_chunk,
                         list(chunk),
                         source_dest_dir,
+                        patch_size_degrees,
                         check_exist,
                         verbose=(i == 0),
                     )
@@ -213,7 +241,9 @@ def main(cfg):
                 discarded += discarded_chunk
     else:
         for file in tqdm(era5_files, desc="Processing files"):
-            file_times_metadata = process_era5_file(file, source_dest_dir, check_exist)
+            file_times_metadata = process_era5_file(
+                file, source_dest_dir, patch_size_degrees, check_exist
+            )
             if file_times_metadata is None:
                 discarded += 1
             else:
