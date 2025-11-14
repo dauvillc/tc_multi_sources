@@ -58,7 +58,7 @@ def process_era5_file(file, dest_dir, patch_size, check_exist=False):
     Args:
         file (str): Path to the input file.
         dest_dir (Path): Destination directory.
-        patch_size (float): Size of the ERA5 patches in degrees.
+        patch_size (float): Size of the ERA5 patches in pixels.
         check_exist (bool): Flag to check if the file already exists.
     Returns:
         dict or None: Sample metadata, or None if the sample is discarded.
@@ -115,29 +115,47 @@ def process_era5_file(file, dest_dir, patch_size, check_exist=False):
 
             # Padding:
             # - Create a new lat/lon grid with the same center but that cover patch_size degrees
-            res, old_lat, old_lon = 0.25, ds["latitude"].values, ds["longitude"].values
-            new_size = np.ceil(patch_size / res).astype(int)
-            lat_center, lon_center = old_lat[60], old_lon[60]  # patches are 121x121 in TC PRIMED
-            new_lat = np.arange(
-                max(lat_center - (new_size // 2) * res, -90),
-                min(lat_center + (new_size // 2 + 1) * res, 90),
-                res,
-            ).round(2)
-            new_lon = np.arange(
-                lon_center - (new_size // 2) * res,
-                lon_center + (new_size // 2 + 1) * res,
-                res,
-            ).round(2)
-            # Standardize longitude values to [-180, 180]
-            new_lon = (new_lon + 180) % 360 - 180
-            # We'll pad the dataset with NaNs and then set the new latitude and longitude values
-            ds = ds.pad(
-                lat=np.ceil((new_lat.size - ds.dims["lat"]) / 2).astype(int),
-                lon=np.ceil((new_lon.size - ds.dims["lon"]) / 2).astype(int),
-                method="constant",
-                constant_values=np.nan,  # by default but for clarity
-            )
-            ds = ds.assign_coords(latitude=("lat", new_lat), longitude=("lon", new_lon))
+            try:
+                res, old_lat, old_lon = 0.25, ds["latitude"].values, ds["longitude"].values
+                old_lat, old_lon = old_lat.round(2), old_lon.round(2)
+                center_idx = old_lat.size // 2
+                lat_center, lon_center = (
+                    old_lat[center_idx],
+                    old_lon[center_idx],
+                )
+                new_lat = np.arange(
+                    max(lat_center - (patch_size // 2) * res, -90),
+                    min(lat_center + (patch_size // 2 + 1) * res, 90),
+                    res,
+                ).round(2)
+                new_lon = np.arange(
+                    lon_center - (patch_size // 2) * res,
+                    lon_center + (patch_size // 2 + 1) * res,
+                    res,
+                ).round(2)
+                # Standardize longitude values to [-180, 180]
+                new_lon = (new_lon + 180) % 360 - 180
+                # We'll pad the dataset with NaNs and then set the new latitude and longitude values
+                # For the latitude, we must recompute the padding because the latitudes may have
+                # been clipped at the poles.
+                patch_lat_before = int((old_lat[0] - new_lat[0]) / res)
+                patch_lat_after = int((new_lat[-1] - old_lat[-1]) / res)
+                ds = ds.pad(
+                    lat=(patch_lat_before, patch_lat_after),
+                    lon=(new_lon.size - old_lon.size) // 2,
+                    method="constant",
+                    constant_values=np.nan,  # by default but for clarity
+                )
+                ds = ds.assign_coords(latitude=("lat", new_lat), longitude=("lon", new_lon))
+            except Exception as e:
+                print("Old latitudes:", old_lat, old_lat.shape)
+                print("Old longitudes:", old_lon, old_lon.shape)
+                print("New latitudes:", new_lat, new_lat.shape)
+                print("New longitudes:", new_lon, new_lon.shape)
+                print(ds)
+                print(ds["pressure_msl"])
+                print("New size:", new_lat.size, new_lon.size)
+                raise e
 
             # Reverse the latitude dimension to have higher latitudes at the top
             # after the next step.
@@ -193,7 +211,7 @@ def process_chunk(file_list, source_dest_dir, patch_size, check_exist, verbose=F
 def main(cfg):
     """Main function to process IR data."""
     cfg = OmegaConf.to_container(cfg, resolve=True)
-    patch_size_degrees = cfg.get("era5_patch_size", 50.0)
+    patch_size = cfg.get("era5_patch_size", 201)  # Default 50 degrees at 0.25° resolution
 
     # Setup paths
     tc_primed_path = Path(cfg["paths"]["raw_datasets"]) / "tc_primed"
@@ -230,7 +248,7 @@ def main(cfg):
                         process_chunk,
                         list(chunk),
                         source_dest_dir,
-                        patch_size_degrees,
+                        patch_size,
                         check_exist,
                         verbose=(i == 0),
                     )
@@ -241,9 +259,7 @@ def main(cfg):
                 discarded += discarded_chunk
     else:
         for file in tqdm(era5_files, desc="Processing files"):
-            file_times_metadata = process_era5_file(
-                file, source_dest_dir, patch_size_degrees, check_exist
-            )
+            file_times_metadata = process_era5_file(file, source_dest_dir, patch_size, check_exist)
             if file_times_metadata is None:
                 discarded += 1
             else:

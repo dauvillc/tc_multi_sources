@@ -14,8 +14,8 @@ regridding_resolution_radar: [0.05, 0.05]
 # will be kept. Including multiple pairs will act as a logical OR.
 radar_rain_rate_criteria: [[100, 10], [10, 100]]  # Values taken from Viltard et. al. 2024
 
-# For ERA5 0.25° patches, size of the square patches in degrees
-era5_patch_size: 50
+# For ERA5 0.25° patches, size of the square patches in pixels
+era5_patch_size: 201
 
 # Fraction of the data to use when computing the normalization statistics
 norm_constants_fraction: 1.0

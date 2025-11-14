@@ -1,4 +1,6 @@
 # Data augmentation config file.
 # This cfg leads to the instantiation of a MultisourceDataAugmentation object.
 _target_: multi_sources.data_processing.data_aug.data_aug.MultisourceDataAugmentation
-augmentation_functions: []
+augmentation_functions:
+  # List of data augmentation classes
+  - _target_: multi_sources.data_processing.data_aug.era5_recentering.ERA5GridRecentering

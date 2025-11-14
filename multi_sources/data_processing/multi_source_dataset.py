@@ -80,8 +80,6 @@ class MultiSourceDataset(torch.utils.data.Dataset):
     source_name is the name of the source and index is an integer representing
     the observation index (0 = most recent, 1 = second most recent, etc.).
     Each data dict contains the following key-value pairs:
-    - "avail" is a scalar tensor of shape (1,) containing 1 if the element is available
-        and -1 otherwise.
     - "dt" is a scalar tensor of shape (1,) containing the time delta between the reference time
         and the element's time, normalized by dt_max.
     - "characs" is a tensor of shape (n_charac_vars,) containing the source characteristics.
@@ -460,6 +458,9 @@ class MultiSourceDataset(torch.utils.data.Dataset):
             lambda g: g.head(self.source_types_max_avail.get(g.name, len(g)))
         )
 
+        # Sort the sample dataframe by time, most recent first
+        sample_df = sample_df.sort_values("time", ascending=False)
+
         # For each source, try to load the element at the given time
         output = {}
         sources_cnt = defaultdict(int)  # {source_name: number of obs from that source added}
@@ -519,10 +520,6 @@ class MultiSourceDataset(torch.utils.data.Dataset):
                 if CA is not None:
                     output_source["characs"] = CA
 
-                # (Optional) Data augmentation
-                if self.data_augmentation:
-                    output_source = self.data_augmentation(output_source, source.type)
-
                 if source.dim == 2:
                     # For images only.
                     # The values can contain borders that are fully NaN (due to the sources
@@ -546,6 +543,10 @@ class MultiSourceDataset(torch.utils.data.Dataset):
             raise ValueError(
                 f"Sample {sid} at time {t0} has only {len(output)} sources available."
             )
+
+        # Apply data augmentation if required
+        if self.data_augmentation is not None:
+            output = self.data_augmentation(output)
         return output
 
     def normalize(
