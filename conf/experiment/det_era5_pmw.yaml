@@ -1,0 +1,34 @@
+# @package _global_
+defaults:
+  - override /sources: era5_pmw
+  - override /lightning_module: deterministic
+  - override /lr_scheduler: cosine_warmup_100epochs_higher_min
+  - override /metrics: default_fm
+  - override /model: msvit_12b_d512
+  - override /data_augmentation: era5_recentering
+
+lightning_module:
+  patch_size: 4
+  forecasting_mode: true
+  mask_only_sources:  # Only mask these sources when applying random source masking
+    - tc_primed_era5
+
+wandb:
+  name: det_era5
+  group: det_era5
+
+dataset:
+  train:
+    dt_max: 6
+    forecasting_lead_time: 21
+    forecasting_sources: ['tc_primed_era5']
+    min_available_sources: 1
+    source_types_max_avail:
+      era5: 2
+      pmw: 3
+    must_include_groups:
+      - # Input ERA5 state (forecasting target isn't counted here)
+        - tc_primed_era5
+
+trainer:
+  strategy: ddp_find_unused_parameters_true
