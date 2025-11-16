@@ -51,20 +51,25 @@ class ERA5GridRecentering:
 
         input_coords = data[input_era5_key]["coords"]  # Shape (2, H_in, W_in)
         _, H_in, W_in = input_coords.shape
+        input_lat, input_lon = input_coords[0, :, 0], input_coords[1, 0]
+        # Get the extent of the input patch's coordinates
+        min_lat, max_lat = input_lat[-1], input_lat[0]
+        min_lon = input_lon[0]
+        # We'll compute the max_lon based on the width of the patch as it
+        # generalizes to longitudes crossing the dateline.
+        max_lon = min_lon + (W_in - 1) * 0.25
 
         # For all forecast ERA5 patches, regrid them to the input patch's grid.
         for frc_key in forecast_keys:
             forecast = data[frc_key]
-            # Find the extent of the forecast patch's coordinates
             forecast_coords = forecast["coords"]  # Shape (2, H_frc, W_frc)
-            frc_lat, frc_lon = forecast_coords[0, :, 0], forecast_coords[1, 0]
-            frc_min_lat, frc_max_lat = frc_lat[-1], frc_lat[0]
-            frc_min_lon, frc_max_lon = frc_lon[0], frc_lon[-1]
             _, H_frc, W_frc = forecast_coords.shape
-            # Get the extent of the input patch's coordinates
-            input_lat, input_lon = input_coords[0, :, 0], input_coords[1, 0]
-            min_lat, max_lat = input_lat[-1], input_lat[0]
-            min_lon, max_lon = input_lon[0], input_lon[-1]
+            frc_lat, frc_lon = forecast_coords[0, :, 0], forecast_coords[1, 0]
+            # Find the extent of the forecast patch's coordinates
+            frc_min_lat, frc_max_lat = frc_lat[-1], frc_lat[0]
+            frc_min_lon = frc_lon[0]
+            # Similarly, compute the max_lon based on the width of the patch.
+            frc_max_lon = frc_min_lon + (W_frc - 1) * 0.25
             # We can now compute where the forecast patch's grid falls
             # on the input patch's grid, given that both are on regular 0.25 deg grids.
             res = 0.25
