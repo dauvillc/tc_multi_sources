@@ -16,9 +16,11 @@ def maximum_of_shapes(shape_A, shape_B):
 
 
 def multi_source_collate_fn(samples):
-    """Collates multiple samples from a MultiSourceDataset. A sample is a dictionary D
-    whose keys are (source_name, index) tuples, and values are dictionaries such that
-    D[(S, I)][k] is the tensor for the key k of source S with observation index I.
+    """Collates multiple samples from a MultiSourceDataset, which returns pairs
+    (sample_index, sample).
+    A sample is a dictionary D whose keys are (source_name, index) tuples,
+    and values are dictionaries such that D[(S, I)][k] is the tensor for the key k
+    of source S with observation index I.
 
     The samples may contain different sources or multiple observations of the same source
     with different indices. If a source-index pair is present in at least one sample but missing
@@ -28,11 +30,16 @@ def multi_source_collate_fn(samples):
     so that they can be stacked in a batch.
 
     Args:
-        samples (list): a list of samples, where each sample is a dictionary D as described above.
+        samples (list): list of pairs (sample_index, sample).
     Returns:
-        A dictionary D such that D[(source_name, index)] contains the information for all samples
-            for the source source_name with observation index index, with the entries described above.
+        indices: A list of the sample indices.
+        samples: A dictionary D such that D[(source_name, index)] contains the information
+            for all samples for the source source_name with observation index index,
+            with the entries described above.
     """
+    # Separate indices and samples
+    indices, samples = zip(*samples)
+    indices, samples = list(indices), list(samples)
     # Browse the samples. For each source-index pair in the sample, find the keys that
     # can be found in that source.
     source_keys = defaultdict(set)
@@ -82,4 +89,4 @@ def multi_source_collate_fn(samples):
         batch[source_index_pair]["avail"] = torch.tensor(
             [1 if source_index_pair in sample else -1 for sample in samples]
         )
-    return batch
+    return indices, batch

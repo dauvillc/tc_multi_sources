@@ -596,6 +596,7 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
         return masked_x
 
     def training_step(self, batch, batch_idx):
+        sample_indices, batch = batch
         batch_size = batch[list(batch.keys())[0]]["values"].shape[0]
         batch = self.preproc_input(batch)
         masked_x, path_samples = self.mask(batch)
@@ -625,6 +626,7 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
         return loss
 
     def validation_step(self, input_batch, batch_idx):
+        sample_indices, input_batch = input_batch
         batch = self.preproc_input(input_batch)
         # Mask the sources
         masked_x, path_samples = self.mask(batch)
@@ -709,6 +711,8 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
                 - embeddings (dict, optional): If return_embeddings is True, the embeddings
                     of each source, as a dict of (src, index) tuples to dicts.
         """
+
+        sample_indices, batch = batch
         batch = self.preproc_input(batch)
 
         # Sample with the ODE solver

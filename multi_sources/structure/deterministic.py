@@ -211,6 +211,7 @@ class MultisourceDeterministicReconstructor(MultisourceAbstractReconstructor):
         return loss
 
     def training_step(self, input_batch, batch_idx):
+        sample_indices, input_batch = input_batch
         batch_size = input_batch[list(input_batch.keys())[0]]["values"].shape[0]
         batch = self.preproc_input(input_batch)
         # Mask the sources
@@ -232,6 +233,7 @@ class MultisourceDeterministicReconstructor(MultisourceAbstractReconstructor):
         return loss
 
     def validation_step(self, input_batch, batch_idx):
+        sample_indices, input_batch = input_batch
         batch = self.preproc_input(input_batch)
         # Mask the sources
         masked_batch = self.mask(batch)
@@ -284,6 +286,7 @@ class MultisourceDeterministicReconstructor(MultisourceAbstractReconstructor):
         return loss
 
     def predict_step(self, input_batch, batch_idx):
+        sample_indices, input_batch = input_batch
         batch = self.preproc_input(input_batch)
         # Mask the sources
         masked_batch = self.mask(batch)

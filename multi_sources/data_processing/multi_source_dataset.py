@@ -441,6 +441,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
             idx (int): The index of the element to retrieve.
 
         Returns:
+            idx (int): The index of the element.
             sample (dict): A dictionary of the form {(source_name, index): data}
                 where index is an integer representing the observation index
                 (0 = most recent, 1 = second most recent, etc.)
@@ -547,7 +548,7 @@ class MultiSourceDataset(torch.utils.data.Dataset):
         # Apply data augmentation if required
         if self.data_augmentation is not None:
             output = self.data_augmentation(output)
-        return output
+        return idx, output
 
     def normalize(
         self,
