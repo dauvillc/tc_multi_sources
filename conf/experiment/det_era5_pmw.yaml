@@ -25,7 +25,8 @@ dataset:
     min_available_sources: 1
     source_types_max_avail:
       era5: 2
-      pmw: 3
+      pmw: 2
+    select_most_recent: true
     must_include_groups:
       - # Input ERA5 state (forecasting target isn't counted here)
         - tc_primed_era5
