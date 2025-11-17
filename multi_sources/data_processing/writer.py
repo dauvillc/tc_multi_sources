@@ -85,6 +85,8 @@ class MultiSourceWriter(BasePredictionWriter):
     def write_on_batch_end(
         self, trainer, pl_module, prediction, batch_indices, batch, batch_idx, dataloader_idx
     ):
+        # Retrieve sample indexes and batch data
+        sample_indexes, batch = batch
         # Extract the components from the prediction dictionary
         if "sol" in prediction:
             # Flow matching model output format
@@ -118,7 +120,6 @@ class MultiSourceWriter(BasePredictionWriter):
             raise ValueError(
                 "Unexpected prediction format. Expected dictionary with 'sol'/'predictions' and 'avail_flags' keys."
             )
-        sample_indexes = batch_indices
 
         # We'll write to the info file in append mode
         for source_index_pair, data in batch.items():
