@@ -262,7 +262,7 @@ class QuantitativeEvaluation(AbstractMultisourceEvaluationMetric):
         plt.ylabel("Mean Absolute Error (MAE)")
         plt.xticks(rotation=45)
         plt.tight_layout()
-        overall_mae_plot_file = self.overall_metrics_dir / "mae_all_models.png"
+        overall_mae_plot_file = self.overall_metrics_dir / "mae_all_models.svg"
         plt.savefig(overall_mae_plot_file)
         plt.close()
         print(f"Overall MAE plot saved to: {overall_mae_plot_file}")
@@ -281,7 +281,7 @@ class QuantitativeEvaluation(AbstractMultisourceEvaluationMetric):
         plt.ylabel("Root Mean Squared Error (RMSE)")
         plt.xticks(rotation=45)
         plt.tight_layout()
-        overall_rmse_plot_file = self.overall_metrics_dir / "rmse_all_models.png"
+        overall_rmse_plot_file = self.overall_metrics_dir / "rmse_all_models.svg"
         plt.savefig(overall_rmse_plot_file)
         plt.close()
         print(f"Overall RMSE plot saved to: {overall_rmse_plot_file}")
@@ -299,7 +299,7 @@ class QuantitativeEvaluation(AbstractMultisourceEvaluationMetric):
         plt.ylabel("Continuous Ranked Probability Score (CRPS)")
         plt.xticks(rotation=45)
         plt.tight_layout()
-        overall_crps_plot_file = self.overall_metrics_dir / "crps_all_models.png"
+        overall_crps_plot_file = self.overall_metrics_dir / "crps_all_models.svg"
         plt.savefig(overall_crps_plot_file)
         plt.close()
         print(f"Overall CRPS plot saved to: {overall_crps_plot_file}")
@@ -318,7 +318,7 @@ class QuantitativeEvaluation(AbstractMultisourceEvaluationMetric):
             plt.ylabel("Skill-Spread Ratio (SSR)")
             plt.xticks(rotation=45)
             plt.tight_layout()
-            overall_ssr_plot_file = self.overall_metrics_dir / "ssr_all_models.png"
+            overall_ssr_plot_file = self.overall_metrics_dir / "ssr_all_models.svg"
             plt.savefig(overall_ssr_plot_file)
             plt.close()
             print(f"Overall SSR plot saved to: {overall_ssr_plot_file}")
@@ -340,7 +340,7 @@ class QuantitativeEvaluation(AbstractMultisourceEvaluationMetric):
             plt.ylabel("Mean Absolute Error (MAE)")
             plt.xticks(rotation=45)
             plt.tight_layout()
-            mae_plot_file = self.mae_dir / f"mae_{source_name}_{channel}.png"
+            mae_plot_file = self.mae_dir / f"mae_{source_name}_{channel}.svg"
             plt.savefig(mae_plot_file)
             plt.close()
             print(f"MAE plot saved to: {mae_plot_file}")
@@ -359,7 +359,7 @@ class QuantitativeEvaluation(AbstractMultisourceEvaluationMetric):
             plt.ylabel("Root Mean Squared Error (RMSE)")
             plt.xticks(rotation=45)
             plt.tight_layout()
-            rmse_plot_file = self.rmse_dir / f"rmse_{source_name}_{channel}.png"
+            rmse_plot_file = self.rmse_dir / f"rmse_{source_name}_{channel}.svg"
             plt.savefig(rmse_plot_file)
             plt.close()
             print(f"RMSE plot saved to: {rmse_plot_file}")

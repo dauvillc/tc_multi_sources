@@ -297,8 +297,8 @@ class VisualEvaluationComparison(AbstractMultisourceEvaluationMetric):
         plt.suptitle(channel, fontsize=16)
         plt.tight_layout()
         # Save the figure
-        fig_path = self.metric_results_dir / f"sample_{sample_index}_{channel}.png"
-        fig.savefig(fig_path)
+        fig_path = self.metric_results_dir / f"sample_{sample_index}_{channel}.svg"
+        fig.savefig(fig_path, format="svg")
 
         plt.close(fig)
 
