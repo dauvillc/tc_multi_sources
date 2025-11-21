@@ -140,6 +140,11 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
 
         # RNG that will be used to select the sources to mask
         self.source_select_gen = torch.Generator().manual_seed(sources_selection_seed)
+        # We'll pre-generate a tensor of seeds for each sample in the predict_step. This will
+        # ensure reproducibility when predicting with different batch sizes.
+        self.predict_step_seeds = torch.randint(
+            0, 2**32 - 1, (1_000_000,), generator=self.source_select_gen
+        )
 
         if isinstance(mask_only_sources, str):
             mask_only_sources = [mask_only_sources]
@@ -270,11 +275,14 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
 
         return output
 
-    def select_sources_to_mask(self, x):
+    def select_sources_to_mask(self, x, sample_indices=None):
         """Given a multi-sources batch, randomly selects a source to mask in each sample.
         Does not actually perform the masking.
         Args:
             x (dict of (source_name, index) to dict of str to tensor): The input sources.
+            sample_indices (tensor of shape (B, ), optional): Indices of the samples in the batch.
+                If provided, will use these indices to seed the random number generator
+                for reproducibility.
         Returns:
             avail_flags (dict of (source_name, index) to tensor): The availability flags for each source,
                 as tensors of shape (B,), such that:
@@ -315,9 +323,23 @@ class MultisourceAbstractReconstructor(MultisourceAbstractModule, ABC):
             # Missing sources cannot be masked.
             # Strategy: we'll generate a random noise tensor of shape (B, n_sources)
             # and for each row, mask the sources with the highest noise.
-            noise = torch.rand((batch_size, n_sources), generator=self.source_select_gen).to(
-                device
-            )
+            if sample_indices is None:
+                noise = torch.rand((batch_size, n_sources), generator=self.source_select_gen).to(
+                    device
+                )
+            else:
+                # Generate a noise tensor using a seed that depends on the sample index
+                seeds = self.predict_step_seeds[sample_indices].to(device)
+                noise = torch.stack(
+                    [
+                        torch.rand(
+                            (n_sources,),
+                            generator=torch.Generator().manual_seed(seed.item()),
+                        )
+                        for seed in seeds
+                    ],
+                    dim=0,
+                ).to(device)
             for i, (source_index_pair, data) in enumerate(x.items()):
                 # Multiply the noise by the availability mask (-1 for missing sources, 1 otherwise)
                 noise[:, i] = noise[:, i] * data["avail"].squeeze(-1)

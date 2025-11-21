@@ -221,7 +221,7 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
 
         return y
 
-    def mask(self, x, pure_noise=False, avail_flags=None):
+    def mask(self, x, pure_noise=False, avail_flags=None, sample_indices=None):
         """Masks a portion of the sources. A missing source cannot be chosen to be masked.
         Supposes that there are at least as many non-missing sources as the number of sources
         to mask. The number of sources to mask is determined by self.masking ratio.
@@ -239,6 +239,9 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
             avail_flags (dict or None): If specified, the availability flags
                 in this dict will be used instead of sampling new ones to choose
                 which sources to mask.
+            sample_indices (torch.Tensor or None): If specified, a tensor of shape (B,)
+                containing the indices of the samples in the dataset. Used to seed the RNG
+                for reproducible sampling.
         Returns:
             masked_x (dict): The input sources with a portion
                 of the sources masked. An entry "diffusion_t" is added
@@ -250,7 +253,7 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
         """
 
         if avail_flags is None:
-            avail_flags = super().select_sources_to_mask(x)
+            avail_flags = super().select_sources_to_mask(x, sample_indices=sample_indices)
         # avail_flags[s][i] == 0 if the source s should be masked.
         device = next(self.parameters()).device
 
@@ -408,6 +411,7 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
         n_realizations_per_sample,
         return_intermediate_steps=False,
         return_embeddings=False,
+        sample_indices=None,
     ):
         """Samples the model using multiple steps of the ODE solver. All sources
         that have an availability flag set to 0 or -1 are solved.
@@ -419,6 +423,9 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
                 each time step of the ODE solver.
             return_embeddings (bool): If True, also returns the embeddings of each source,
                 before being passed to the backbone.
+            sample_indices (torch.Tensor or None): If specified, a tensor of shape (B,)
+                containing the indices of the samples in the dataset. Used to seed the RNG
+                for reproducible sampling.
         Returns:
             dict: A dictionary containing the following keys:
                 - avail_flags (dict): The availability flags for each source,
@@ -452,7 +459,9 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
                 # We pass in the previously used availability flags to ensure that the same
                 # sources are masked for each realization of the same sample. For the first
                 # realization, avail_flags is None, so new masking flags are sampled.
-                masked_batch, _ = self.mask(batch, pure_noise=True, avail_flags=avail_flags)
+                masked_batch, _ = self.mask(
+                    batch, pure_noise=True, avail_flags=avail_flags, sample_indices=sample_indices
+                )
                 avail_flags = {src: data["avail"] for src, data in masked_batch.items()}
 
                 x_0 = {
@@ -721,6 +730,7 @@ class MultisourceFlowMatchingReconstructor(MultisourceAbstractReconstructor):
             n_realizations_per_sample=self.n_realizations_per_sample,
             return_intermediate_steps=self.return_intermediate_steps,
             return_embeddings=self.return_embeddings,
+            sample_indices=sample_indices,
         )
 
         sol, avail_flags = sampling_dict["sol"], sampling_dict["avail_flags"]

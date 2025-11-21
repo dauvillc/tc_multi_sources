@@ -145,7 +145,7 @@ class MultisourceDeterministicReconstructor(MultisourceAbstractReconstructor):
 
         return y
 
-    def mask(self, x):
+    def mask(self, x, sample_indices=None):
         """Masks a portion of the sources. A missing source cannot be chosen to be masked.
         Supposes that there are at least as many non-missing sources as the number of sources
         to mask. The number of sources to mask is determined by self.masking ratio.
@@ -155,12 +155,15 @@ class MultisourceDeterministicReconstructor(MultisourceAbstractReconstructor):
             x (dict of (source_name, index) to dict of str to tensor): The input sources.
             target_source (optional, str): If specified, the source to mask. If None, the source
                 to mask is chosen randomly for each sample in the batch.
+            sample_indices (torch.Tensor or None): If specified, a tensor of shape (B,)
+                containing the indices of the samples in the dataset. Used to seed the RNG
+                for reproducible masking.
         Returns:
             masked_x (dict of (source_name, index) to dict of str to tensor):
                 The input sources with a portion of the sources masked.
         """
         # Choose the sources to mask.
-        avail_flags = super().select_sources_to_mask(x)
+        avail_flags = super().select_sources_to_mask(x, sample_indices=sample_indices)
         # avail_flags[s][i] == 0 if the source s should be masked.
 
         # We just need to update the avail flag of each source. Where the flag is set to 0,
@@ -289,7 +292,7 @@ class MultisourceDeterministicReconstructor(MultisourceAbstractReconstructor):
         sample_indices, input_batch = input_batch
         batch = self.preproc_input(input_batch)
         # Mask the sources
-        masked_batch = self.mask(batch)
+        masked_batch = self.mask(batch, sample_indices=sample_indices)
         # Make predictions
         pred = self.forward(masked_batch, return_embeddings=self.return_embeddings_in_predict)
         if self.return_embeddings_in_predict:
