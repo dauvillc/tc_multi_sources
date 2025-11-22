@@ -366,14 +366,20 @@ class QuantitativeEvaluation(AbstractMultisourceEvaluationMetric):
 
     @staticmethod
     def _compute_mae(pred_data, target_data):
-        """Computes the Mean Absolute Error (MAE) between predictions and targets."""
+        """Computes the Mean Absolute Error (MAE) between the predicted ensemble mean
+        and targets."""
         pred_flat, target_flat = flatten_and_ignore_nans(pred_data, target_data)
+        # Average over realizations
+        pred_flat = pred_flat.mean(axis=0)
         return np.abs((pred_flat - target_flat)).mean().item()
 
     @staticmethod
     def _compute_mse(pred_data, target_data):
-        """Computes the Mean Squared Error (MSE) between predictions and targets."""
+        """Computes the Mean Squared Error (MSE) between predicted ensemble mean
+        and targets."""
         pred_flat, target_flat = flatten_and_ignore_nans(pred_data, target_data)
+        # Average over realizations
+        pred_flat = pred_flat.mean(axis=0)
         return ((pred_flat - target_flat) ** 2).mean().item()
 
     @staticmethod
