@@ -74,10 +74,10 @@ class QuantitativeEvaluation(AbstractMultisourceEvaluationMetric):
         print(f"Full results saved to: {results_file}")
 
         # Compute and save the aggregated results
-        self._save_aggregated_results(results)
+        agg_results = self._save_aggregated_results(results)
 
         # Generate and save plots comparing the models
-        self._plot_results(results)
+        self._plot_results(results, agg_results)
         return
 
     def _evaluate_models(self):
@@ -187,14 +187,16 @@ class QuantitativeEvaluation(AbstractMultisourceEvaluationMetric):
             results.groupby("model_id")
             .agg(
                 mae_mean=("mae", "mean"),
-                mae_std=("mae", "std"),
                 mse_mean=("mse", "mean"),
-                mse_std=("mse", "std"),
                 crps_mean=("crps", "mean"),
-                crps_std=("crps", "std"),
             )
             .reset_index()
         )
+
+        # Sort the aggregated results so that the models are in the same order
+        # as in results
+        unique_model_ids = results["model_id"].unique()
+        agg_results = agg_results.set_index("model_id").loc[unique_model_ids].reset_index()
 
         # Compute bootstrap 95% confidence intervals for the mean metrics
         for model_id in agg_results["model_id"]:
@@ -215,7 +217,6 @@ class QuantitativeEvaluation(AbstractMultisourceEvaluationMetric):
 
         # Compute RMSE from MSE
         agg_results["rmse_mean"] = np.sqrt(agg_results["mse_mean"])
-        agg_results["rmse_std"] = 0.5 * agg_results["mse_std"] / np.sqrt(agg_results["mse_mean"])
 
         # Bootstrap CI for RMSE
         for model_id in agg_results["model_id"]:
@@ -239,60 +240,124 @@ class QuantitativeEvaluation(AbstractMultisourceEvaluationMetric):
         agg_results_file = self.metric_results_dir / "aggregated_results.json"
         agg_results.to_json(agg_results_file, orient="records", lines=True)
         print(f"Aggregated results saved to: {agg_results_file}")
-        return
+        return agg_results
 
-    def _plot_results(self, results):
+    def _plot_results(self, results, agg_results):
         """Generates and saves plots comparing the models based on the evaluation results.
         Args:
             results (pd.DataFrame): DataFrame containing the evaluation results.
+            agg_results (pd.DataFrame): DataFrame containing the aggregated evaluation results.
         """
-        sns.set_theme(style="whitegrid")
+        # Configure plotting style for publication quality
+        sns.set_theme(style="whitegrid", context="poster")  # Use poster context for larger fonts
+        plt.rcParams.update(
+            {
+                "font.size": 14,
+                "axes.labelsize": 16,
+                "axes.titlesize": 18,
+                "xtick.labelsize": 14,
+                "ytick.labelsize": 14,
+                "legend.fontsize": 14,
+                "figure.dpi": 300,  # High resolution
+                "savefig.dpi": 300,
+                "savefig.bbox": "tight",
+                "font.family": "sans-serif",
+                "font.sans-serif": ["Arial", "DejaVu Sans"],
+            }
+        )
+
+        # Define a consistent color palette for all models
+        n_models = len(results["model_id"].unique())
+        palette = sns.color_palette("colorblind", n_models)
+
         # First, we'll show plots of the metrics for each model, over all sources and channels.
         # This gives a general overview of the models' performance.
-        # MAE: we'll make a boxplot.
+        # MAE: we'll make a boxplot to show the distribution of MAE values for each model.
         plt.figure(figsize=(10, 6))
         sns.boxplot(
             x="model_id",
+            hue="model_id",
             y="mae",
             data=results,
             showfliers=False,
+            palette=palette,
+            legend=False,
         )
-        plt.title("MAE for all models, sources and channels")
+        plt.title("MAE distribution, all sources and channels")
         plt.xlabel("Model ID")
         plt.ylabel("Mean Absolute Error (MAE)")
         plt.xticks(rotation=45)
         plt.tight_layout()
-        overall_mae_plot_file = self.overall_metrics_dir / "mae_all_models.svg"
+        overall_mae_plot_file = self.overall_metrics_dir / "mae_boxplot_all_models.svg"
         plt.savefig(overall_mae_plot_file)
         plt.close()
         print(f"Overall MAE plot saved to: {overall_mae_plot_file}")
 
-        # RMSE: we'll make a barplot, since the RMSE is a single value per model.
-        rmse_per_model = results.groupby("model_id")["mse"].mean().reset_index()
-        rmse_per_model["rmse"] = np.sqrt(rmse_per_model["mse"])
+        # We'll also make a barplot showing the mean MAE with 95% CI error bars.
         plt.figure(figsize=(10, 6))
         sns.barplot(
             x="model_id",
-            y="rmse",
-            data=rmse_per_model,
+            hue="model_id",
+            y="mae",
+            data=results,
+            errorbar=("ci", 95),
+            palette=palette,
+            legend=False,
         )
-        plt.title("RMSE for all models, sources and channels")
+        plt.title("Mean MAE, all sources and all channels")
+        plt.xlabel("Model ID")
+        plt.ylabel("Mean Absolute Error (MAE)")
+        plt.xticks(rotation=45)
+        plt.tight_layout()
+        overall_mae_barplot_file = self.overall_metrics_dir / "mae_barplot_all_models.svg"
+        plt.savefig(overall_mae_barplot_file)
+        plt.close()
+        print(f"Overall MAE bar plot saved to: {overall_mae_barplot_file}")
+
+        # RMSE: we'll make a barplot, since the RMSE is a single value per model.
+        fig, ax = plt.subplots(figsize=(10, 6))
+        sns.barplot(
+            x="model_id",
+            hue="model_id",
+            y="rmse_mean",
+            data=agg_results,
+            errorbar=None,
+            palette=palette,
+            legend=False,
+            ax=ax,
+        )
+        # Draw error bars manually for RMSE
+        ax.errorbar(
+            np.arange(len(agg_results)),
+            agg_results["rmse_mean"],
+            yerr=[
+                agg_results["rmse_mean"] - agg_results["rmse_ci_lower"],
+                agg_results["rmse_ci_upper"] - agg_results["rmse_mean"],
+            ],
+            fmt="none",
+            c="black",
+            capsize=5,
+        )
+        plt.title("RMSE, all sources and all channels")
         plt.xlabel("Model ID")
         plt.ylabel("Root Mean Squared Error (RMSE)")
         plt.xticks(rotation=45)
         plt.tight_layout()
-        overall_rmse_plot_file = self.overall_metrics_dir / "rmse_all_models.svg"
-        plt.savefig(overall_rmse_plot_file)
+        overall_rmse_barplot_file = self.overall_metrics_dir / "rmse_barplot_all_models.svg"
+        plt.savefig(overall_rmse_barplot_file)
         plt.close()
-        print(f"Overall RMSE plot saved to: {overall_rmse_plot_file}")
+        print(f"Overall RMSE bar plot saved to: {overall_rmse_barplot_file}")
 
         # CRPS: boxplot
         plt.figure(figsize=(10, 6))
         sns.boxplot(
             x="model_id",
+            hue="model_id",
             y="crps",
             data=results,
             showfliers=False,
+            palette=palette,
+            legend=False,
         )
         plt.title("CRPS for all models, sources and channels")
         plt.xlabel("Model ID")
@@ -304,16 +369,41 @@ class QuantitativeEvaluation(AbstractMultisourceEvaluationMetric):
         plt.close()
         print(f"Overall CRPS plot saved to: {overall_crps_plot_file}")
 
-        # SSR: boxplot, only for models that have multiple realizations
+        # CRPS: barplot
+        plt.figure(figsize=(10, 6))
+        sns.barplot(
+            x="model_id",
+            hue="model_id",
+            y="crps",
+            data=results,
+            errorbar=("ci", 95),
+            palette=palette,
+            legend=False,
+        )
+        plt.title("Mean CRPS, all sources and all channels")
+        plt.xlabel("Model ID")
+        plt.ylabel("Continuous Ranked Probability Score (CRPS)")
+        plt.xticks(rotation=45)
+        plt.tight_layout()
+        overall_crps_barplot_file = self.overall_metrics_dir / "crps_barplot_all_models.svg"
+        plt.savefig(overall_crps_barplot_file)
+        plt.close()
+        print(f"Overall CRPS bar plot saved to: {overall_crps_barplot_file}")
+
+        # SSR: Only for models that have multiple realizations
         if "ssr" in results.columns:
+            # Boxplot
             plt.figure(figsize=(10, 6))
             sns.boxplot(
                 x="model_id",
+                hue="model_id",
                 y="ssr",
                 data=results,
                 showfliers=False,
+                palette=palette,
+                legend=False,
             )
-            plt.title("Skill-Spread Ratio for all models, sources and channels")
+            plt.title("Skill-Spread Ratio distribution, all sources and channels")
             plt.xlabel("Model ID")
             plt.ylabel("Skill-Spread Ratio (SSR)")
             plt.xticks(rotation=45)
@@ -323,6 +413,27 @@ class QuantitativeEvaluation(AbstractMultisourceEvaluationMetric):
             plt.close()
             print(f"Overall SSR plot saved to: {overall_ssr_plot_file}")
 
+            # Barplot
+            plt.figure(figsize=(10, 6))
+            sns.barplot(
+                x="model_id",
+                hue="model_id",
+                y="ssr",
+                data=results,
+                errorbar=("ci", 95),
+                palette=palette,
+                legend=False,
+            )
+            plt.title("Mean Skill-Spread Ratio, all sources and channels")
+            plt.xlabel("Model ID")
+            plt.ylabel("Skill-Spread Ratio (SSR)")
+            plt.xticks(rotation=45)
+            plt.tight_layout()
+            overall_ssr_barplot_file = self.overall_metrics_dir / "ssr_barplot_all_models.svg"
+            plt.savefig(overall_ssr_barplot_file)
+            plt.close()
+            print(f"Overall SSR bar plot saved to: {overall_ssr_barplot_file}")
+
         # Now, we'll separate the plots by pair (source_name, channel). In each plot,
         # the x-axis will be the model_id and the y-axis will be the metric.
         grouped_results = results.groupby(["source_name", "channel"])
@@ -331,9 +442,12 @@ class QuantitativeEvaluation(AbstractMultisourceEvaluationMetric):
             plt.figure(figsize=(10, 6))
             sns.boxplot(
                 x="model_id",
+                hue="model_id",
                 y="mae",
                 data=group,
                 showfliers=False,
+                palette=palette,
+                legend=False,
             )
             plt.title(f"MAE for {source_name} - {channel}")
             plt.xlabel("Model ID")
@@ -351,8 +465,11 @@ class QuantitativeEvaluation(AbstractMultisourceEvaluationMetric):
             plt.figure(figsize=(10, 6))
             sns.barplot(
                 x="model_id",
+                hue="model_id",
                 y="rmse",
                 data=rmse_per_model,
+                palette=palette,
+                legend=False,
             )
             plt.title(f"RMSE for {source_name} - {channel}")
             plt.xlabel("Model ID")
